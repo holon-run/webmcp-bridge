@@ -7,6 +7,10 @@
 3. `adapter-*`: site-specific fallback logic used only when native WebMCP is unavailable.
 4. `core`: shim/runtime contracts shared by fallback implementations.
 
+Current adapter roles:
+- `adapter-x`: real X/Twitter fallback adapter.
+- `adapter-fixture`: deterministic integration-test adapter.
+
 ## Runtime flow
 
 1. A local MCP client starts `local-mcp` as a stdio server for one site.

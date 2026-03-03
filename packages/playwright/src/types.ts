@@ -17,7 +17,7 @@ export type WebMcpToolDefinition = {
 
 export type SiteAdapter = {
   name: string;
-  listTools: (context: { page: Page }) => Promise<Array<{ name: string; description?: string }>>;
+  listTools: (context: { page: Page }) => Promise<Array<WebMcpToolDefinition>>;
   callTool: (request: { name: string; input: JsonValue }, context: { page: Page }) => Promise<JsonValue>;
   start?: (context: { page: Page }) => Promise<void>;
   stop?: (context: { page: Page }) => Promise<void>;

@@ -8,7 +8,8 @@ with native-first behavior and shim fallback.
 
 - `@webmcp-bridge/core`: shared modelContext shim/runtime contracts used by fallback paths.
 - `@webmcp-bridge/playwright`: browser WebMCP page gateway (native-first, shim fallback).
-- `@webmcp-bridge/adapter-x`: shim fallback adapter example for X/Twitter style workflows.
+- `@webmcp-bridge/adapter-x`: production fallback adapter for X/Twitter workflows.
+- `@webmcp-bridge/adapter-fixture`: deterministic fallback adapter for integration/contract tests.
 - `@webmcp-bridge/local-mcp`: one-site stdio MCP server that boots Playwright and proxies `tools/list` / `tools/call` into a browser page gateway.
 - `@webmcp-bridge/testkit`: shared contract test helpers.
 
@@ -26,6 +27,8 @@ with native-first behavior and shim fallback.
 ```bash
 pnpm --filter @webmcp-bridge/local-mcp build
 node packages/local-mcp/dist/cli.js --site x --headless
+# deterministic test site
+node packages/local-mcp/dist/cli.js --site fixture --headless
 ```
 
 ## Development

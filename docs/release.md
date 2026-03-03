@@ -15,6 +15,7 @@ pnpm changeset publish
 Published:
 - `@webmcp-bridge/core`
 - `@webmcp-bridge/playwright`
+- `@webmcp-bridge/adapter-fixture`
 - `@webmcp-bridge/adapter-x`
 
 Architecture-critical but currently private:

@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "@webmcp-bridge/adapter-fixture": "workspace:*",
     "@webmcp-bridge/adapter-x": "workspace:*",
     "@webmcp-bridge/core": "workspace:*",
     "@webmcp-bridge/playwright": "workspace:*",

@@ -1,6 +1,6 @@
 /**
  * This module demonstrates running the native-first WebMCP page gateway on a Playwright-driven X session.
- * It depends on the playwright gateway API and adapter-x as a shim fallback example.
+ * It depends on the playwright gateway API and adapter-x as a real shim fallback implementation.
  */
 
 import { chromium } from "playwright";

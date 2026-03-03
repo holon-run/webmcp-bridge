@@ -3,10 +3,11 @@
  * It depends on adapter packages and is used by runtime startup to resolve site-specific defaults.
  */
 
+import { createFixtureAdapter } from "@webmcp-bridge/adapter-fixture";
 import { createXAdapter } from "@webmcp-bridge/adapter-x";
 import type { SiteAdapter } from "@webmcp-bridge/playwright";
 
-export type SupportedSite = "x";
+export type SupportedSite = "x" | "fixture";
 
 export type SiteDefinition = {
   id: SupportedSite;
@@ -19,6 +20,11 @@ const SITE_DEFINITIONS: Record<SupportedSite, SiteDefinition> = {
     id: "x",
     defaultUrl: "https://x.com/home",
     createFallbackAdapter: () => createXAdapter(),
+  },
+  fixture: {
+    id: "fixture",
+    defaultUrl: "about:blank",
+    createFallbackAdapter: () => createFixtureAdapter(),
   },
 };
 

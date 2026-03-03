@@ -1,0 +1,18 @@
+{
+  "name": "@webmcp-bridge/adapter-fixture",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "src/index.ts",
+  "types": "src/index.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@webmcp-bridge/core": "workspace:*",
+    "@webmcp-bridge/playwright": "workspace:*",
+    "playwright": "^1.58.2"
+  }
+}

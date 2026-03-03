@@ -13,7 +13,7 @@ const USAGE = `Usage:
   webmcp-local-mcp --site <site> [options]
 
 Required:
-  --site <site>                Supported site id (currently: x)
+  --site <site>                Supported site id (currently: x, fixture)
 
 Optional:
   --url <url>                  Override default site URL

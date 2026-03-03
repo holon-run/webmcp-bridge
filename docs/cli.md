@@ -6,12 +6,12 @@ Each process binds one website session and proxies that page's WebMCP tools.
 ## Usage
 
 ```bash
-node packages/local-mcp/dist/cli.js --site x [options]
+node packages/local-mcp/dist/cli.js --site <site> [options]
 ```
 
 ## Options
 
-- `--site <site>`: required site id (`x` in MVP).
+- `--site <site>`: required site id (`x` or `fixture`).
 - `--url <url>`: override the default URL for the site.
 - `--browser <name>`: `chromium` | `firefox` | `webkit`.
 - `--headless`: launch browser in headless mode.

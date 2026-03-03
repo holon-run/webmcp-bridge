@@ -34,6 +34,11 @@ describe("parseCliArgs", () => {
     expect(() => parseCliArgs([])).toThrow("missing required --site");
   });
 
+  it("parses fixture site id", () => {
+    const parsed = parseCliArgs(["--site", "fixture"]);
+    expect(parsed.site).toBe("fixture");
+  });
+
   it("throws on unsupported browser", () => {
     expect(() => parseCliArgs(["--site", "x", "--browser", "edge"])).toThrow(
       "unsupported browser: edge",
@@ -45,6 +50,11 @@ describe("resolveSiteDefinition", () => {
   it("resolves x site preset", () => {
     const site = resolveSiteDefinition("x");
     expect(site.defaultUrl).toContain("x.com");
+  });
+
+  it("resolves fixture site preset", () => {
+    const site = resolveSiteDefinition("fixture");
+    expect(site.defaultUrl).toBe("about:blank");
   });
 
   it("throws on unsupported site", () => {

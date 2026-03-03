@@ -190,16 +190,10 @@ export async function createWebMcpPageGateway(
       if (mode === "shim" && fallbackAdapter) {
         await ensureFallbackStarted();
         const adapterTools = await fallbackAdapter.listTools({ page });
-        return adapterTools.map((tool) => {
-          const definition: WebMcpToolDefinition = {
-            name: tool.name,
-            inputSchema: { type: "object" },
-          };
-          if (tool.description !== undefined) {
-            definition.description = tool.description;
-          }
-          return definition;
-        });
+        return adapterTools.map((tool) => ({
+          ...tool,
+          inputSchema: tool.inputSchema ?? { type: "object" },
+        }));
       }
       return await page.evaluate(async () => {
         const globalAny = window as unknown as {

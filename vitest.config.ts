@@ -5,6 +5,7 @@ export default defineConfig({
     projects: [
       "packages/core/vitest.config.ts",
       "packages/playwright/vitest.config.ts",
+      "packages/adapter-fixture/vitest.config.ts",
       "packages/adapter-x/vitest.config.ts",
       "packages/local-mcp/vitest.config.ts",
       "packages/testkit/vitest.config.ts"

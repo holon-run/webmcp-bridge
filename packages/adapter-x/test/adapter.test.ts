@@ -1,38 +1,188 @@
 /**
- * This module tests the adapter-x tool dispatch and auth validation behavior.
- * It depends on adapter factory and page-like mocks for deterministic unit assertions.
+ * This module tests adapter-x auth gating, compose confirmation, and schema-level behavior.
+ * It depends on adapter factory APIs and page-like mocks to keep unit assertions deterministic.
  */
 
 import { describe, expect, it, vi } from "vitest";
 import { createXAdapter } from "../src/index.js";
 
-function makePage(authenticated: boolean) {
-  return {
-    evaluate: vi.fn(async (fn: (...args: unknown[]) => unknown) => {
-      const fnText = fn.toString();
-      if (fnText.includes("hasComposer") || fnText.includes("hasNav")) {
-        return authenticated;
+type Behavior = {
+  authState: "authenticated" | "auth_required" | "challenge_required";
+  authSignals: string[];
+  timelineItems: Array<{ id: string; text: string }>;
+  composeResult: { ok: boolean; dryRun?: boolean; reason?: string; submitVisible?: boolean };
+  confirmCompose: boolean;
+  statusUrl?: string;
+};
+
+function createMockPage(partial: Partial<Behavior> = {}) {
+  const behavior: Behavior = {
+    authState: "authenticated",
+    authSignals: ["authenticated_ui"],
+    timelineItems: [{ id: "timeline-1", text: "hello" }],
+    composeResult: { ok: true },
+    confirmCompose: true,
+    statusUrl: "https://x.com/example/status/123",
+    ...partial,
+  };
+
+  const page = {
+    evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
+        return undefined;
       }
-      if (fnText.includes("nodes.slice")) {
-        return [{ id: "timeline-1", text: "hello" }];
+
+      const command = arg as Record<string, unknown>;
+      if (command.op === "detect_auth") {
+        return {
+          state: behavior.authState,
+          signals: behavior.authSignals,
+        };
       }
-      return { ok: true };
+
+      if (typeof command.maxItems === "number") {
+        return behavior.timelineItems.slice(0, command.maxItems);
+      }
+
+      if (typeof command.content === "string" && typeof command.dryRunMode === "boolean") {
+        return behavior.composeResult;
+      }
+
+      if (typeof command.needle === "string") {
+        return behavior.statusUrl;
+      }
+
+      return undefined;
     }),
+    waitForFunction: vi.fn(async () => {
+      if (!behavior.confirmCompose) {
+        throw new Error("timeout");
+      }
+      return true;
+    }),
+  };
+
+  return {
+    page,
+    behavior,
   };
 }
 
 describe("createXAdapter", () => {
-  it("returns auth required when not logged in", async () => {
+  it("publishes tool schemas", async () => {
     const adapter = createXAdapter();
-    const page = makePage(false);
-    const result = await adapter.callTool({ name: "x.timeline.read", input: {} }, { page: page as never });
-    expect(result).toEqual({ error: { code: "AUTH_REQUIRED", message: "login required" } });
+    const tools = await adapter.listTools({ page: {} as never });
+    const compose = tools.find((tool) => tool.name === "x.compose.send");
+
+    expect(compose?.inputSchema).toEqual(
+      expect.objectContaining({
+        type: "object",
+        required: ["text"],
+      }),
+    );
   });
 
-  it("reads timeline when logged in", async () => {
+  it("returns auth required for timeline reads when logged out", async () => {
     const adapter = createXAdapter();
-    const page = makePage(true);
-    const result = await adapter.callTool({ name: "x.timeline.read", input: { limit: 1 } }, { page: page as never });
-    expect(result).toEqual({ items: [{ id: "timeline-1", text: "hello" }] });
+    const { page } = createMockPage({
+      authState: "auth_required",
+      authSignals: ["login_ui"],
+    });
+
+    const result = await adapter.callTool({ name: "x.timeline.read", input: {} }, { page: page as never });
+
+    expect(result).toEqual({
+      error: {
+        code: "AUTH_REQUIRED",
+        message: "login required",
+        details: {
+          state: "auth_required",
+          signals: ["login_ui"],
+        },
+      },
+    });
+  });
+
+  it("returns challenge required for compose when x challenge blocks actions", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      authState: "challenge_required",
+      authSignals: ["challenge_ui"],
+    });
+
+    const result = await adapter.callTool(
+      { name: "x.compose.send", input: { text: "hello" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "CHALLENGE_REQUIRED",
+        message: "x.com challenge is blocking actions",
+        details: {
+          state: "challenge_required",
+          signals: ["challenge_ui"],
+        },
+      },
+    });
+  });
+
+  it("supports dry-run compose without waiting confirmation", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      composeResult: { ok: true, dryRun: true, submitVisible: true },
+    });
+
+    const result = await adapter.callTool(
+      { name: "x.compose.send", input: { text: "hello", dryRun: true } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      dryRun: true,
+      submitVisible: true,
+    });
+    expect(page.waitForFunction).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when compose submit cannot be confirmed", async () => {
+    const adapter = createXAdapter({ composeConfirmTimeoutMs: 100 });
+    const { page } = createMockPage({
+      composeResult: { ok: true },
+      confirmCompose: false,
+    });
+
+    const result = await adapter.callTool(
+      { name: "x.compose.send", input: { text: "hello" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "ACTION_UNCONFIRMED",
+        message: "post submit was not confirmed in timeline",
+      },
+    });
+  });
+
+  it("returns confirmed compose result when timeline confirms post", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      composeResult: { ok: true },
+      confirmCompose: true,
+      statusUrl: "https://x.com/example/status/999",
+    });
+
+    const result = await adapter.callTool(
+      { name: "x.compose.send", input: { text: "hello" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      confirmed: true,
+      statusUrl: "https://x.com/example/status/999",
+    });
   });
 });
