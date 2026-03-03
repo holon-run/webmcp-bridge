@@ -7,7 +7,7 @@
 - `@webmcp-bridge/core`: in-page model context shim/runtime.
 - `@webmcp-bridge/playwright`: Playwright bridge lifecycle and page<->Node transport.
 - `@webmcp-bridge/adapter-x`: starter adapter for X/Twitter style workflows.
-- `@webmcp-bridge/local-mcp`: local MCP host skeleton (not published in `0.1.x`).
+- `@webmcp-bridge/local-mcp`: local MCP host/client over Unix socket with JSON-RPC + SSE replay.
 - `@webmcp-bridge/testkit`: shared contract test helpers.
 
 ## Development

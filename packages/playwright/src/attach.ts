@@ -28,12 +28,35 @@ const INJECT_SCRIPT = String.raw`
     return;
   }
 
+  const tools = new Map();
+  const contexts = [];
+
   const modelContext = {
-    provideContext: async () => {},
-    clearContext: async () => {},
-    registerTool: async () => {},
-    unregisterTool: async () => {},
+    provideContext: async (context) => {
+      contexts.push(context || {});
+    },
+    clearContext: async () => {
+      contexts.splice(0, contexts.length);
+      tools.clear();
+    },
+    registerTool: async (tool) => {
+      const name = tool && typeof tool.name === "string" ? tool.name : "";
+      if (!name) {
+        throw new Error("tool.name is required");
+      }
+      if (tools.has(name)) {
+        throw new Error("tool already registered");
+      }
+      tools.set(name, tool);
+    },
+    unregisterTool: async (name) => {
+      tools.delete(String(name || ""));
+    },
     callTool: async (name, input) => {
+      const local = tools.get(String(name || ""));
+      if (local && typeof local.execute === "function") {
+        return await local.execute(input || {});
+      }
       if (typeof globalAny.__WEBMCP_BRIDGE_CALL__ !== "function") {
         throw new Error("bridge call handler missing");
       }
@@ -51,6 +74,18 @@ const INJECT_SCRIPT = String.raw`
   } catch {
     navAny.modelContext = modelContext;
   }
+  globalAny.__webmcpBridge = {
+    list: () =>
+      Array.from(tools.values()).map((tool) => ({
+        name: tool.name,
+        description: tool.description || "",
+        inputSchema: tool.inputSchema || { type: "object" },
+        annotations: tool.annotations || {},
+      })),
+    invoke: async (name, input) => {
+      return await modelContext.callTool(String(name || ""), input || {});
+    },
+  };
   globalAny.__WEBMCP_BRIDGE_MODE__ = "shim";
 })();
 `;

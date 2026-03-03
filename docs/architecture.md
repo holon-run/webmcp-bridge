@@ -5,7 +5,7 @@
 1. `core`: modelContext shim and runtime contracts.
 2. `playwright`: page injection, callback bridge, and lifecycle management.
 3. `adapter-*`: site-specific tool mapping (`x.*` in v0.1).
-4. `local-mcp`: local host process skeleton for future MCP transport.
+4. `local-mcp`: local host process with Unix socket MCP transport (JSON-RPC + SSE).
 
 ## Runtime flow
 
