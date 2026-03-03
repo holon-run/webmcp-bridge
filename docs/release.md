@@ -17,5 +17,5 @@ Published:
 - `@webmcp-bridge/playwright`
 - `@webmcp-bridge/adapter-x`
 
-Not published:
-- `@webmcp-bridge/local-mcp` (private skeleton)
+Architecture-critical but currently private:
+- `@webmcp-bridge/local-mcp` (stdio MCP site session host and page-gateway proxy entrypoint)

@@ -1,10 +1,19 @@
 /**
- * This module defines Playwright integration contracts for WebMCP bridge sessions.
- * It is depended on by attach/detach lifecycle implementation and adapter packages.
+ * This module defines Playwright WebMCP gateway and fallback adapter contracts.
+ * It is depended on by gateway lifecycle implementation and adapter packages.
  */
 
 import type { JsonValue } from "@webmcp-bridge/core";
 import type { Page } from "playwright";
+
+export type WebMcpToolDefinition = {
+  name: string;
+  description?: string;
+  inputSchema?: JsonValue;
+  annotations?: {
+    readOnlyHint?: boolean;
+  };
+};
 
 export type SiteAdapter = {
   name: string;
@@ -14,15 +23,17 @@ export type SiteAdapter = {
   stop?: (context: { page: Page }) => Promise<void>;
 };
 
-export type PlaywrightBridgeOptions = {
-  adapter: SiteAdapter;
+export type CreateWebMcpPageGatewayOptions = {
+  fallbackAdapter?: SiteAdapter;
   preferNative?: boolean;
   reinjectOnNavigate?: boolean;
 };
 
-export type PlaywrightBridgeSession = {
+export type WebMcpPageGateway = {
   id: string;
   mode: "native" | "shim";
   page: Page;
-  adapter: SiteAdapter;
+  listTools: () => Promise<WebMcpToolDefinition[]>;
+  callTool: (name: string, input: JsonValue) => Promise<JsonValue>;
+  close: () => Promise<void>;
 };

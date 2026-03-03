@@ -1,9 +1,11 @@
 /**
- * This module defines MCP JSON-RPC and SSE payload contracts used by the local MCP host/client.
- * It is depended on by server and client modules to keep transport parsing and framing behavior aligned.
+ * This module defines MCP JSON-RPC types for stdio transport and WebMCP proxy methods.
+ * It is depended on by local server tests and shared exports so JSON-RPC and tool payload typings remain consistent.
  */
 
 import type { JsonValue } from "@webmcp-bridge/core";
+
+export type McpJsonRpcId = string | number | null;
 
 export type McpToolDefinition = {
   name: string;
@@ -16,25 +18,20 @@ export type McpToolDefinition = {
 
 export type McpJsonRpcRequest = {
   jsonrpc: "2.0";
-  id?: string | number | null;
-  method: "tools/list" | "tools/call";
+  id?: McpJsonRpcId;
+  method: string;
   params?: Record<string, unknown>;
-};
-
-export type McpToolCallParams = {
-  name: string;
-  arguments?: Record<string, unknown>;
 };
 
 export type McpJsonRpcSuccess = {
   jsonrpc: "2.0";
-  id: string | number | null;
+  id: McpJsonRpcId;
   result: Record<string, unknown>;
 };
 
 export type McpJsonRpcError = {
   jsonrpc: "2.0";
-  id: string | number | null;
+  id: McpJsonRpcId;
   error: {
     code: number;
     message: string;
@@ -44,31 +41,31 @@ export type McpJsonRpcError = {
 
 export type McpJsonRpcResponse = McpJsonRpcSuccess | McpJsonRpcError;
 
+export type McpToolCallParams = {
+  name: string;
+  arguments?: Record<string, unknown>;
+};
+
+export type McpInitializeResult = {
+  protocolVersion: string;
+  capabilities: {
+    tools: Record<string, never>;
+  };
+  serverInfo: {
+    name: string;
+    version: string;
+  };
+};
+
 export type McpToolListResult = {
   tools: McpToolDefinition[];
 };
 
 export type McpToolCallResult = {
-  content: Array<{
-    type: "json";
-    json: JsonValue;
+  content?: Array<{
+    type: "text";
+    text: string;
   }>;
-};
-
-export type McpSseMessagePayload = {
-  seq: number;
-  event: JsonValue;
-};
-
-export type McpSseErrorPayload = {
-  code: "REPLAY_OVERFLOW" | "INTERNAL";
-  message: string;
-  retryable: boolean;
-  needResync?: boolean;
-};
-
-export type McpSseEvent = {
-  id?: string;
-  event: string;
-  data: string;
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
 };

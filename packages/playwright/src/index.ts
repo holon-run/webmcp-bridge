@@ -1,7 +1,7 @@
 /**
- * This module exposes the Playwright package public API.
- * It depends on attach lifecycle and type contracts to provide bridge integration entrypoints.
+ * This module exposes Playwright gateway public APIs.
+ * It depends on type and gateway modules to provide browser WebMCP integration entrypoints.
  */
 
 export * from "./types.js";
-export * from "./attach.js";
+export * from "./gateway.js";

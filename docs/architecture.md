@@ -2,19 +2,21 @@
 
 `webmcp-bridge` has four layers:
 
-1. `core`: modelContext shim and runtime contracts.
-2. `playwright`: page injection, callback bridge, and lifecycle management.
-3. `adapter-*`: site-specific tool mapping (`x.*` in v0.1).
-4. `local-mcp`: local host process with Unix socket MCP transport (JSON-RPC + SSE).
+1. `local-mcp`: stdio MCP entrypoint (`tools/list`, `tools/call`) for one site session per process.
+2. `playwright`: browser WebMCP page gateway and lifecycle management.
+3. `adapter-*`: site-specific fallback logic used only when native WebMCP is unavailable.
+4. `core`: shim/runtime contracts shared by fallback implementations.
 
 ## Runtime flow
 
-1. Playwright opens a user-authenticated web session.
-2. `attachBridge` injects a shim when native `navigator.modelContext` is unavailable.
-3. Tool calls from the page are forwarded to Node via exposed callback.
-4. Adapter executes site logic and returns JSON-serializable results.
+1. A local MCP client starts `local-mcp` as a stdio server for one site.
+2. `local-mcp` launches a Playwright browser/page and opens the target site URL.
+3. `local-mcp` forwards `tools/list` / `tools/call` requests to a Playwright-managed page gateway.
+4. The page gateway calls native `navigator.modelContext` when available.
+5. If native WebMCP is not present, a shim path is installed and fallback adapter logic handles tool execution.
+6. Responses are returned to the local MCP client as JSON-serializable MCP payloads.
 
 ## Boundaries
 
 - The project does not store credentials or bypass auth controls.
-- Adapter behavior is best-effort and may require selector updates when websites change.
+- Fallback adapter behavior is best-effort and may require selector updates when websites change.

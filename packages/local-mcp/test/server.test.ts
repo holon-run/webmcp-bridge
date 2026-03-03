@@ -1,180 +1,190 @@
 /**
- * This module tests local MCP server JSON-RPC tools and SSE stream semantics over Unix socket.
- * It depends on the server implementation and Node HTTP client to validate lock-safe replay behavior.
+ * This module tests local-mcp stdio server MCP method handling with a gateway stub.
+ * It depends on newline-delimited JSON-RPC framing and server APIs to validate MCP SDK stdio request/response behavior.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { request } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createLocalMcpServer, type LocalMcpServer } from "../src/index.js";
+import { PassThrough } from "node:stream";
+import type { JsonValue } from "@webmcp-bridge/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { McpJsonRpcResponse } from "../src/mcp-types.js";
+import { createLocalMcpStdioServer, type LocalMcpStdioServer } from "../src/server.js";
 
-type RequestResult = {
-  status: number;
-  body: unknown;
-};
-
-async function sendMcp(socketPath: string, method: string, params?: unknown): Promise<RequestResult> {
-  return await new Promise<RequestResult>((resolve, reject) => {
-    const req = request(
-      {
-        socketPath,
-        method: "POST",
-        path: "/mcp",
-        headers: {
-          "content-type": "application/json",
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        res.on("end", () => {
-          const raw = Buffer.concat(chunks).toString("utf8");
-          resolve({
-            status: res.statusCode ?? 0,
-            body: raw ? (JSON.parse(raw) as unknown) : undefined,
-          });
-        });
-      },
-    );
-    req.on("error", reject);
-    req.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: "1",
-        method,
-        params,
-      }),
-    );
-    req.end();
-  });
+async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void> {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start >= timeoutMs) {
+      throw new Error("timeout waiting for condition");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
-async function readSseFirstBlock(socketPath: string): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const req = request(
-      {
-        socketPath,
-        method: "GET",
-        path: "/mcp/events",
-        headers: {
-          accept: "text/event-stream",
-        },
-      },
-      (res) => {
-        let raw = "";
-        res.on("data", (chunk) => {
-          raw += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-          if (raw.includes("\n\n")) {
-            req.destroy();
-            resolve(raw);
-          }
-        });
-      },
-    );
-    req.on("error", reject);
-    req.end();
-  });
-}
+describe("createLocalMcpStdioServer", () => {
+  let input: PassThrough;
+  let output: PassThrough;
+  let server: LocalMcpStdioServer;
+  const responses: McpJsonRpcResponse[] = [];
+  let outputBuffer = "";
 
-describe("local-mcp server", () => {
-  let workspaceDir: string;
-  let socketPath: string;
-  let server: LocalMcpServer;
+  const gateway = {
+    listTools: vi.fn(async () => [
+      {
+        name: "x.health",
+        description: "health",
+      },
+    ]),
+    callTool: vi.fn(async (name: string): Promise<JsonValue> => ({ ok: true, name })),
+  };
 
   beforeEach(async () => {
-    workspaceDir = await mkdtemp(join(tmpdir(), "local-mcp-"));
-    socketPath = join(workspaceDir, "local-mcp.sock");
-    server = createLocalMcpServer({
-      socketPath,
+    input = new PassThrough();
+    output = new PassThrough();
+    responses.length = 0;
+    outputBuffer = "";
+    gateway.listTools.mockClear();
+    gateway.callTool.mockClear();
+
+    output.on("data", (chunk: Buffer | string) => {
+      outputBuffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+      const lines = outputBuffer.split("\n");
+      outputBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          continue;
+        }
+        responses.push(JSON.parse(trimmed) as McpJsonRpcResponse);
+      }
+    });
+
+    server = createLocalMcpStdioServer({
+      gateway,
       serviceVersion: "0.1.0-test",
-      tools: [
-        {
-          name: "x.health",
-          description: "health",
-          execute: async () => ({ ok: true }),
-        },
-      ],
-      pingIntervalMs: 200,
+      input,
+      output,
     });
     await server.start();
   });
 
   afterEach(async () => {
-    await server.stop();
-    await rm(workspaceDir, { recursive: true, force: true });
+    await server.close();
+    output.removeAllListeners();
+    input.end();
+    output.end();
   });
 
-  it("responds with tools/list", async () => {
-    const result = await sendMcp(socketPath, "tools/list");
-    expect(result.status).toBe(200);
-    const payload = result.body as { result?: { tools?: Array<{ name?: string }> } };
-    expect(payload.result?.tools?.map((tool) => tool.name)).toContain("x.health");
-  });
+  async function request(payload: Record<string, unknown>): Promise<McpJsonRpcResponse> {
+    const beforeCount = responses.length;
+    input.write(`${JSON.stringify(payload)}\n`);
+    await waitFor(() => responses.length > beforeCount);
+    return responses[beforeCount] as McpJsonRpcResponse;
+  }
 
-  it("calls registered tool via tools/call", async () => {
-    const result = await sendMcp(socketPath, "tools/call", {
-      name: "x.health",
-      arguments: {},
+  it("responds to initialize", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "1",
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: {
+          name: "test-client",
+          version: "0.1.0-test",
+        },
+      },
     });
-    expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({
-      result: {
-        content: [{ type: "json", json: { ok: true } }],
+
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      protocolVersion: "2024-11-05",
+      serverInfo: {
+        name: "webmcp-bridge-local-mcp",
+      },
+      capabilities: {
+        tools: {},
       },
     });
   });
 
-  it("streams published events via sse", async () => {
-    server.publishEvent({ kind: "message", id: "m_1" });
-    const chunk = await readSseFirstBlock(socketPath);
-    expect(chunk).toContain("event: message");
-    expect(chunk).toContain('"id":"m_1"');
+  it("proxies tools/list to gateway", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2",
+      method: "tools/list",
+      params: {},
+    });
+
+    expect(gateway.listTools).toHaveBeenCalledOnce();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      tools: [{ name: "x.health" }],
+    });
   });
 
-  it("returns replay overflow error when last-event-id is out of window", async () => {
-    await server.stop();
-    server = createLocalMcpServer({
-      socketPath,
-      serviceVersion: "0.1.0-test",
-      eventBufferCapacity: 1,
-      tools: [{ name: "x.health", execute: async () => ({ ok: true }) }],
-    });
-    await server.start();
-
-    server.publishEvent({ i: 1 });
-    server.publishEvent({ i: 2 });
-    server.publishEvent({ i: 3 });
-
-    const raw = await new Promise<string>((resolve, reject) => {
-      const req = request(
-        {
-          socketPath,
-          method: "GET",
-          path: "/mcp/events",
-          headers: {
-            accept: "text/event-stream",
-            "last-event-id": "1",
-          },
+  it("proxies tools/call to gateway", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "3",
+      method: "tools/call",
+      params: {
+        name: "x.health",
+        arguments: {
+          ping: true,
         },
-        (res) => {
-          let body = "";
-          res.on("data", (chunk) => {
-            body += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-          });
-          res.on("end", () => {
-            resolve(body);
-          });
-        },
-      );
-      req.on("error", reject);
-      req.end();
+      },
     });
 
-    expect(raw).toContain("event: error");
-    expect(raw).toContain("REPLAY_OVERFLOW");
+    expect(gateway.callTool).toHaveBeenCalledWith("x.health", { ping: true });
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      content: [],
+      structuredContent: { ok: true, name: "x.health" },
+    });
+  });
+
+  it("passes through MCP CallToolResult payload without remapping", async () => {
+    gateway.callTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: "ok" }],
+      structuredContent: { ok: true },
+      isError: false,
+    });
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "3b",
+      method: "tools/call",
+      params: {
+        name: "x.health",
+        arguments: {},
+      },
+    });
+
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      content: [{ type: "text", text: "ok" }],
+      structuredContent: { ok: true },
+      isError: false,
+    });
+  });
+
+  it("returns method-not-found on unknown method", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "4",
+      method: "unknown.method",
+    });
+
+    expect("error" in response ? response.error.code : undefined).toBe(-32601);
+  });
+
+  it("does not respond to notifications", async () => {
+    const beforeCount = responses.length;
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      })}\n`,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(responses.length).toBe(beforeCount);
   });
 });

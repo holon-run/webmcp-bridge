@@ -1,10 +1,10 @@
 /**
- * This module demonstrates running the bridge on a Playwright-driven X session.
- * It depends on the playwright bridge package and adapter-x to provide a minimal manual smoke example.
+ * This module demonstrates running the native-first WebMCP page gateway on a Playwright-driven X session.
+ * It depends on the playwright gateway API and adapter-x as a shim fallback example.
  */
 
 import { chromium } from "playwright";
-import { attachBridge, detachBridge } from "@webmcp-bridge/playwright";
+import { createWebMcpPageGateway } from "@webmcp-bridge/playwright";
 import { createXAdapter } from "@webmcp-bridge/adapter-x";
 
 async function main(): Promise<void> {
@@ -14,14 +14,14 @@ async function main(): Promise<void> {
 
   await page.goto("https://x.com/home", { waitUntil: "domcontentloaded" });
 
-  const session = await attachBridge(page, {
-    adapter: createXAdapter(),
+  const gateway = await createWebMcpPageGateway(page, {
+    fallbackAdapter: createXAdapter(),
   });
 
-  const health = await session.adapter.callTool({ name: "x.health", input: {} }, { page });
-  process.stdout.write(`bridge mode=${session.mode} health=${JSON.stringify(health)}\n`);
+  const health = await gateway.callTool("x.health", {});
+  process.stdout.write(`gateway mode=${gateway.mode} health=${JSON.stringify(health)}\n`);
 
-  await detachBridge(page);
+  await gateway.close();
   await context.close();
   await browser.close();
 }
