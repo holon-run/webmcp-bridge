@@ -1,0 +1,16 @@
+{
+  "name": "@webmcp-bridge/playwright",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@webmcp-bridge/core": "workspace:*",
+    "playwright": "^1.58.2"
+  }
+}
