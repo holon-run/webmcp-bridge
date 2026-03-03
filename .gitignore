@@ -4,3 +4,4 @@ dist
 coverage
 .vscode
 .DS_Store
+.tmp

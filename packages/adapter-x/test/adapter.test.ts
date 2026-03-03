@@ -9,7 +9,7 @@ import { createXAdapter } from "../src/index.js";
 type Behavior = {
   authState: "authenticated" | "auth_required" | "challenge_required";
   authSignals: string[];
-  timelineItems: Array<{ id: string; text: string }>;
+  timelineItems: Array<{ id: string; text: string; url?: string }>;
   composeResult: { ok: boolean; dryRun?: boolean; reason?: string; submitVisible?: boolean };
   confirmCompose: boolean;
   statusUrl?: string;
@@ -19,7 +19,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   const behavior: Behavior = {
     authState: "authenticated",
     authSignals: ["authenticated_ui"],
-    timelineItems: [{ id: "timeline-1", text: "hello" }],
+    timelineItems: [{ id: "timeline-1", text: "hello", url: "https://x.com/a/status/1" }],
     composeResult: { ok: true },
     confirmCompose: true,
     statusUrl: "https://x.com/example/status/123",
@@ -54,12 +54,25 @@ function createMockPage(partial: Partial<Behavior> = {}) {
 
       return undefined;
     }),
+    waitForSelector: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
+    waitForTimeout: vi.fn(async () => {}),
+    waitForLoadState: vi.fn(async () => {}),
     waitForFunction: vi.fn(async () => {
       if (!behavior.confirmCompose) {
         throw new Error("timeout");
       }
       return true;
     }),
+    goto: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    context: vi.fn(() => ({
+      newPage: vi.fn(async () => ({
+        evaluate: page.evaluate,
+        goto: vi.fn(async () => {}),
+        waitForTimeout: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      })),
+    })),
   };
 
   return {
@@ -79,6 +92,9 @@ describe("createXAdapter", () => {
         type: "object",
         required: ["text"],
       }),
+    );
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["x.timeline.read", "x.tweet.read", "x.favorites.read", "x.profile.read"]),
     );
   });
 
@@ -183,6 +199,18 @@ describe("createXAdapter", () => {
       ok: true,
       confirmed: true,
       statusUrl: "https://x.com/example/status/999",
+    });
+  });
+
+  it("returns validation error for tweet.read without id/url", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+    const result = await adapter.callTool({ name: "x.tweet.read", input: {} }, { page: page as never });
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "url or id is required",
+      },
     });
   });
 });

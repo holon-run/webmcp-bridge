@@ -30,6 +30,9 @@ const DEFAULT_TIMELINE_LIMIT = 10;
 const MAX_TIMELINE_LIMIT = 20;
 const DEFAULT_COMPOSE_CONFIRM_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_POST_LENGTH = 280;
+const AUTH_STABILIZE_ATTEMPTS = 6;
+const AUTH_STABILIZE_DELAY_MS = 750;
+const AUTH_WARMUP_TIMEOUT_MS = 12_000;
 
 const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
   {
@@ -56,7 +59,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
   },
   {
     name: "x.timeline.read",
-    description: "Read timeline text snippets",
+    description: "Read timeline tweet cards",
     inputSchema: {
       type: "object",
       properties: {
@@ -66,6 +69,54 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
           maximum: MAX_TIMELINE_LIMIT,
         },
       },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "x.tweet.read",
+    description: "Read one tweet by url or id",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string" },
+        id: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "x.favorites.read",
+    description: "Read bookmarks/favorites feed cards",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "x.profile.read",
+    description: "Read a user profile summary by handle",
+    inputSchema: {
+      type: "object",
+      properties: {
+        handle: { type: "string", minLength: 1 },
+      },
+      required: ["handle"],
       additionalProperties: false,
     },
     annotations: {
@@ -176,39 +227,205 @@ async function detectAuth(page: Page): Promise<AuthProbeResult> {
   }, { op: "detect_auth" });
 }
 
-async function readTimeline(page: Page, limit: number): Promise<Array<{ id: string; text: string }>> {
-  return await page.evaluate(({ maxItems }: { maxItems: number }) => {
-    const selectors = [
-      "article [data-testid='tweetText']",
-      "article div[lang]",
-      "main article div[dir='auto']",
-    ];
-    const normalizedTexts: string[] = [];
+async function detectAuthStable(page: Page): Promise<AuthProbeResult> {
+  let auth = await detectAuth(page);
+  for (let attempt = 1; attempt < AUTH_STABILIZE_ATTEMPTS; attempt += 1) {
+    const shouldRetry = auth.state === "auth_required" && auth.signals.includes("auth_unknown");
+    if (!shouldRetry) {
+      return auth;
+    }
+    await page.waitForTimeout(AUTH_STABILIZE_DELAY_MS);
+    auth = await detectAuth(page);
+  }
+  return auth;
+}
 
+async function warmupAuthProbe(page: Page): Promise<void> {
+  const deadline = Date.now() + AUTH_WARMUP_TIMEOUT_MS;
+  for (;;) {
+    const auth = await detectAuth(page);
+    const stable = !(auth.state === "auth_required" && auth.signals.includes("auth_unknown"));
+    if (stable || Date.now() >= deadline) {
+      return;
+    }
+    await page.waitForTimeout(AUTH_STABILIZE_DELAY_MS);
+  }
+}
+
+async function extractTweetCards(
+  page: Page,
+  limit: number,
+): Promise<Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string }>> {
+  const cards = await page.evaluate(({ maxItems }: { maxItems: number }) => {
     const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
-
-    for (const selector of selectors) {
-      const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
-      for (const node of nodes) {
-        const text = normalize(node.innerText || node.textContent || "");
-        if (!text || normalizedTexts.includes(text)) {
-          continue;
-        }
-        normalizedTexts.push(text);
-        if (normalizedTexts.length >= maxItems) {
-          break;
-        }
+    const dedupe = new Set<string>();
+    const items: Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string }> = [];
+    const pushItem = (item: { id: string; text: string; url?: string; author?: string; createdAt?: string }): void => {
+      const dedupeKey = `${item.id}:${item.text}`;
+      if (!item.text || dedupe.has(dedupeKey)) {
+        return;
       }
-      if (normalizedTexts.length >= maxItems) {
+      dedupe.add(dedupeKey);
+      items.push(item);
+    };
+
+    const articles = Array.from(document.querySelectorAll<HTMLElement>("article"));
+    for (const article of articles) {
+      const statusAnchor = article.querySelector<HTMLAnchorElement>("a[href*='/status/']");
+      const url = statusAnchor?.href;
+      const id = url?.match(/status\/(\d+)/)?.[1] ?? `article-${items.length + 1}`;
+
+      const textNodes = Array.from(article.querySelectorAll<HTMLElement>("[data-testid='tweetText'], div[lang], div[dir='auto']"));
+      const mergedText = normalize(textNodes.map((n) => n.textContent || "").join(" "));
+      const fallbackText = normalize(article.textContent || "");
+      const text = mergedText || fallbackText;
+      if (!text) {
+        continue;
+      }
+
+      const authorRaw = article.querySelector<HTMLElement>("[data-testid='User-Name']")?.textContent ?? "";
+      const createdAtRaw = article.querySelector<HTMLTimeElement>("time")?.dateTime ?? "";
+      const item: { id: string; text: string; url?: string; author?: string; createdAt?: string } = { id, text };
+      if (url) {
+        item.url = url;
+      }
+      const author = normalize(authorRaw);
+      if (author) {
+        item.author = author;
+      }
+      if (createdAtRaw) {
+        item.createdAt = createdAtRaw;
+      }
+      pushItem(item);
+      if (items.length >= maxItems) {
         break;
       }
     }
 
-    return normalizedTexts.slice(0, maxItems).map((text, index) => ({
-      id: `timeline-${index + 1}`,
-      text,
-    }));
+    if (items.length < maxItems) {
+      const cells = Array.from(document.querySelectorAll<HTMLElement>("[data-testid='cellInnerDiv']"));
+      for (const cell of cells) {
+        if (items.length >= maxItems) {
+          break;
+        }
+        const text = normalize(cell.innerText || cell.textContent || "");
+        if (!text || text.length < 16) {
+          continue;
+        }
+        const statusAnchor = cell.querySelector<HTMLAnchorElement>("a[href*='/status/']");
+        const url = statusAnchor?.href;
+        const id = url?.match(/status\/(\d+)/)?.[1] ?? `cell-${items.length + 1}`;
+        const item: { id: string; text: string; url?: string } = { id, text };
+        if (url) {
+          item.url = url;
+        }
+        pushItem(item);
+      }
+    }
+
+    if (items.length === 0) {
+      const bodyText = normalize(document.body?.innerText || "");
+      if (bodyText) {
+        const snippet = bodyText.slice(0, 280);
+        pushItem({
+          id: "fallback-body-1",
+          text: snippet,
+        });
+      }
+    }
+    return items;
   }, { maxItems: limit });
+  return cards;
+}
+
+async function withReadOnlyPage<T>(page: Page, url: string, run: (readPage: Page) => Promise<T>): Promise<T> {
+  const context = page.context();
+  const readPage = await context.newPage();
+  try {
+    await readPage.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await waitForTweetSurface(readPage);
+    return await run(readPage);
+  } finally {
+    await readPage.close().catch(() => {});
+  }
+}
+
+async function waitForTweetSurface(page: Page): Promise<void> {
+  await page
+    .waitForFunction(() => {
+      const articleCount = document.querySelectorAll("article").length;
+      const cellCount = document.querySelectorAll("[data-testid='cellInnerDiv']").length;
+      const hasTweetText = document.querySelectorAll("[data-testid='tweetText'], div[lang], div[dir='auto']").length > 0;
+      return articleCount > 0 || cellCount > 0 || hasTweetText;
+    }, undefined, { timeout: 8_000 })
+    .catch(() => {});
+  await page.waitForTimeout(1_000);
+}
+
+async function readTimeline(page: Page, limit: number): Promise<Array<{ id: string; text: string; url?: string }>> {
+  await waitForTweetSurface(page);
+  const cards = await extractTweetCards(page, limit);
+  return cards.map((card) => {
+    const item: { id: string; text: string; url?: string } = {
+      id: card.id,
+      text: card.text,
+    };
+    if (card.url) {
+      item.url = card.url;
+    }
+    return item;
+  });
+}
+
+async function readTweetByUrl(page: Page, url: string): Promise<JsonValue> {
+  return await withReadOnlyPage(page, url, async (readPage) => {
+    const cards = await extractTweetCards(readPage, 1);
+    const tweet = cards[0];
+    if (!tweet) {
+      return errorResult("UPSTREAM_CHANGED", "tweet content not found");
+    }
+    return { tweet };
+  });
+}
+
+async function readProfile(page: Page, handle: string): Promise<JsonValue> {
+  const normalizedHandle = handle.replace(/^@+/, "").trim();
+  const profileUrl = `https://x.com/${normalizedHandle}`;
+  return await withReadOnlyPage(page, profileUrl, async (readPage) => {
+    const profile = await readPage.evaluate(() => {
+      const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+      const name = document.querySelector<HTMLElement>("[data-testid='UserName'] span")?.textContent ?? "";
+      const bio = document.querySelector<HTMLElement>("[data-testid='UserDescription']")?.textContent ?? "";
+      const location = document.querySelector<HTMLElement>("[data-testid='UserLocation']")?.textContent ?? "";
+      const website = document.querySelector<HTMLAnchorElement>("[data-testid='UserUrl'] a")?.href ?? "";
+      const followingText = document.querySelector<HTMLAnchorElement>("a[href$='/following'] span")?.textContent ?? "";
+      const followersText = document.querySelector<HTMLAnchorElement>("a[href$='/verified_followers'], a[href$='/followers'] span")
+        ?.textContent ?? "";
+      const output: {
+        name: string;
+        bio: string;
+        location: string;
+        website?: string;
+        following: string;
+        followers: string;
+      } = {
+        name: normalize(name),
+        bio: normalize(bio),
+        location: normalize(location),
+        following: normalize(followingText),
+        followers: normalize(followersText),
+      };
+      if (website) {
+        output.website = website;
+      }
+      return output;
+    });
+    return {
+      handle: `@${normalizedHandle}`,
+      url: profileUrl,
+      profile,
+    };
+  });
 }
 
 async function composePost(page: Page, text: string, dryRun: boolean): Promise<ComposeDomResult> {
@@ -313,6 +530,49 @@ async function composePost(page: Page, text: string, dryRun: boolean): Promise<C
   );
 }
 
+async function ensureComposerReady(page: Page): Promise<void> {
+  const composerSelectors = [
+    "div[data-testid='tweetTextarea_0']",
+    "div[role='textbox'][data-testid='tweetTextarea_0']",
+    "div[role='textbox'][aria-label*='Post text']",
+    "div[role='textbox'][aria-label*='What is happening']",
+  ];
+  const openComposerSelectors = [
+    "[data-testid='SideNav_NewTweet_Button']",
+    "[data-testid='tweetButton']",
+    "a[href='/compose/post']",
+    "a[href='/compose/tweet']",
+  ];
+
+  for (const selector of composerSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 800 }).catch(() => null);
+    if (handle) {
+      await handle.dispose();
+      return;
+    }
+  }
+
+  await page
+    .evaluate((selectors) => {
+      for (const selector of selectors) {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (element) {
+          element.click();
+          return;
+        }
+      }
+    }, openComposerSelectors)
+    .catch(() => {});
+
+  for (const selector of composerSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 2000 }).catch(() => null);
+    if (handle) {
+      await handle.dispose();
+      return;
+    }
+  }
+}
+
 async function waitForComposeConfirmation(
   page: Page,
   text: string,
@@ -378,7 +638,7 @@ async function requireAuthenticated(page: Page): Promise<
       result: JsonValue;
     }
 > {
-  const auth = await detectAuth(page);
+  const auth = await detectAuthStable(page);
   if (auth.state === "authenticated") {
     return { ok: true, auth };
   }
@@ -406,6 +666,12 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
 
   return {
     name: "adapter-x",
+    start: async ({ page }) => {
+      await page.waitForLoadState("domcontentloaded").catch(() => {
+        // Keep startup best-effort; auth probing will still run.
+      });
+      await warmupAuthProbe(page);
+    },
     listTools: async () => TOOL_DEFINITIONS,
     callTool: async ({ name, input }, { page }) => {
       const args = toRecord(input);
@@ -419,7 +685,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
       }
 
       if (name === "x.auth_state") {
-        const auth = await detectAuth(page);
+        const auth = await detectAuthStable(page);
         return {
           state: auth.state,
           signals: auth.signals,
@@ -437,6 +703,44 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         return { items };
       }
 
+      if (name === "x.tweet.read") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const targetUrl = url || (id ? `https://x.com/i/web/status/${id}` : "");
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        return await readTweetByUrl(page, targetUrl);
+      }
+
+      if (name === "x.favorites.read") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const limit = normalizeTimelineLimit(args);
+        return await withReadOnlyPage(page, "https://x.com/i/bookmarks", async (readPage) => {
+          const items = await readTimeline(readPage, limit);
+          return { items };
+        });
+      }
+
+      if (name === "x.profile.read") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const handle = typeof args.handle === "string" ? args.handle.trim() : "";
+        if (!handle) {
+          return errorResult("VALIDATION_ERROR", "handle is required");
+        }
+        return await readProfile(page, handle);
+      }
+
       if (name === "x.compose.send") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
@@ -452,6 +756,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         }
 
         const dryRun = args.dryRun === true;
+        await ensureComposerReady(page);
         const composeResult = await composePost(page, text, dryRun);
         if (!composeResult.ok) {
           return errorResult("UPSTREAM_CHANGED", "compose controls not found", {
