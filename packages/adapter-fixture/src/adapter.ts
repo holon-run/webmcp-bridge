@@ -16,7 +16,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
   {
     name: "auth.get",
     description: "Get current fixture auth state",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: { type: "object", description: "No parameters.", additionalProperties: false },
     annotations: { readOnlyHint: true },
   },
   {
@@ -24,9 +24,11 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Set fixture auth state",
     inputSchema: {
       type: "object",
+      description: "Set whether fixture requests are authenticated.",
       properties: {
         state: {
           type: "string",
+          description: "Target auth state.",
           enum: ["authenticated", "auth_required"],
         },
       },
@@ -39,8 +41,9 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Return the input payload for deterministic roundtrip assertions",
     inputSchema: {
       type: "object",
+      description: "Echo one value for deterministic transport tests.",
       properties: {
-        value: {},
+        value: { description: "Any JSON value to be echoed back." },
       },
       required: ["value"],
       additionalProperties: false,
@@ -51,9 +54,10 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Add two numbers",
     inputSchema: {
       type: "object",
+      description: "Add two finite numbers.",
       properties: {
-        a: { type: "number" },
-        b: { type: "number" },
+        a: { type: "number", description: "First number." },
+        b: { type: "number", description: "Second number." },
       },
       required: ["a", "b"],
       additionalProperties: false,
@@ -64,9 +68,10 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Return a deterministic error payload",
     inputSchema: {
       type: "object",
+      description: "Request fixture to return an error with optional custom code/message.",
       properties: {
-        code: { type: "string" },
-        message: { type: "string" },
+        code: { type: "string", description: "Optional custom error code." },
+        message: { type: "string", description: "Optional custom error message." },
       },
       additionalProperties: false,
     },

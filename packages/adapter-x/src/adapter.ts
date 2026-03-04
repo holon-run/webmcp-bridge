@@ -208,6 +208,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Detect login/challenge state",
     inputSchema: {
       type: "object",
+      description: "No parameters.",
       additionalProperties: false,
     },
     annotations: {
@@ -219,13 +220,18 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Read home timeline tweet cards",
     inputSchema: {
       type: "object",
+      description: "List tweets from your home timeline. Supports cursor pagination.",
       properties: {
         limit: {
           type: "integer",
+          description: `Maximum number of tweets to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
           minimum: 1,
           maximum: MAX_TIMELINE_LIMIT,
         },
-        cursor: { type: "string" },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by previous call as nextCursor.",
+        },
       },
       additionalProperties: false,
     },
@@ -238,9 +244,10 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Read one tweet by url or id",
     inputSchema: {
       type: "object",
+      description: "Fetch a single tweet using full URL or tweet id.",
       properties: {
-        url: { type: "string" },
-        id: { type: "string" },
+        url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
+        id: { type: "string", description: "Tweet id. Used when url is not provided." },
       },
       additionalProperties: false,
     },
@@ -253,13 +260,18 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Read bookmarks/favorites feed cards",
     inputSchema: {
       type: "object",
+      description: "List tweets from bookmarks/favorites. Supports cursor pagination.",
       properties: {
         limit: {
           type: "integer",
+          description: `Maximum number of tweets to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
           minimum: 1,
           maximum: MAX_TIMELINE_LIMIT,
         },
-        cursor: { type: "string" },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by previous call as nextCursor.",
+        },
       },
       additionalProperties: false,
     },
@@ -272,14 +284,23 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Read one user's timeline tweet cards",
     inputSchema: {
       type: "object",
+      description: "List tweets from a target user's profile timeline. Supports cursor pagination.",
       properties: {
-        username: { type: "string", minLength: 1 },
+        username: {
+          type: "string",
+          minLength: 1,
+          description: "X username, with or without leading @.",
+        },
         limit: {
           type: "integer",
+          description: `Maximum number of tweets to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
           minimum: 1,
           maximum: MAX_TIMELINE_LIMIT,
         },
-        cursor: { type: "string" },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by previous call as nextCursor.",
+        },
       },
       required: ["username"],
       additionalProperties: false,
@@ -293,18 +314,24 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Read search tweets list",
     inputSchema: {
       type: "object",
+      description: "Search tweets by query. Supports cursor pagination.",
       properties: {
-        query: { type: "string", minLength: 1 },
+        query: { type: "string", minLength: 1, description: "Search query text." },
         mode: {
           type: "string",
+          description: "Search ranking mode. Use latest for reverse-chronological results.",
           enum: ["top", "latest"],
         },
         limit: {
           type: "integer",
+          description: `Maximum number of tweets to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
           minimum: 1,
           maximum: MAX_TIMELINE_LIMIT,
         },
-        cursor: { type: "string" },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by previous call as nextCursor.",
+        },
       },
       required: ["query"],
       additionalProperties: false,
@@ -318,8 +345,13 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Read a user profile summary by handle",
     inputSchema: {
       type: "object",
+      description: "Read public profile information for one user.",
       properties: {
-        handle: { type: "string", minLength: 1 },
+        handle: {
+          type: "string",
+          minLength: 1,
+          description: "User handle, with or without leading @.",
+        },
       },
       required: ["handle"],
       additionalProperties: false,
@@ -333,14 +365,17 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Publish a short text post",
     inputSchema: {
       type: "object",
+      description: "Create a new post from the currently logged-in account.",
       properties: {
         text: {
           type: "string",
+          description: `Post text content. Max length ${DEFAULT_MAX_POST_LENGTH}.`,
           minLength: 1,
           maxLength: DEFAULT_MAX_POST_LENGTH,
         },
         dryRun: {
           type: "boolean",
+          description: "When true, validate compose path without submitting.",
         },
       },
       required: ["text"],

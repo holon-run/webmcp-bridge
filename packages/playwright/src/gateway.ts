@@ -92,12 +92,17 @@ const INJECT_SCRIPT = String.raw`
 
   globalAny.__webmcpBridge = {
     list: async () =>
-      Array.from(tools.values()).map((tool) => ({
-        name: tool.name,
-        description: tool.description || "",
-        inputSchema: tool.inputSchema || { type: "object" },
-        annotations: tool.annotations || {},
-      })),
+      Array.from(tools.values()).map((tool) => {
+        const output = {
+          name: tool.name,
+          inputSchema: tool.inputSchema || { type: "object" },
+          annotations: tool.annotations || {},
+        };
+        if (typeof tool.description === "string" && tool.description.trim()) {
+          return { ...output, description: tool.description };
+        }
+        return output;
+      }),
     invoke: async (name, input) => {
       return await modelContext.callTool(String(name || ""), input || {});
     },
