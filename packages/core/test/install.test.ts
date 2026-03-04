@@ -14,10 +14,10 @@ describe("installModelContextBridge", () => {
     expect(handle.mode).toBe("shim");
 
     await target.navigator.modelContext?.registerTool(
-      defineLocalTool("x.health", async () => ({ ok: true })),
+      defineLocalTool("ping", async () => ({ ok: true })),
     );
 
-    const result = await handle.invokeTool("x.health", {});
+    const result = await handle.invokeTool("ping", {});
     expect(result).toEqual({ ok: true });
 
     handle.uninstall();

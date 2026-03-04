@@ -29,8 +29,8 @@ describe("createLocalMcpStdioServer", () => {
   const gateway = {
     listTools: vi.fn(async () => [
       {
-        name: "x.health",
-        description: "health",
+        name: "ping",
+        description: "ping",
       },
     ]),
     callTool: vi.fn(async (name: string): Promise<JsonValue> => ({ ok: true, name })),
@@ -116,7 +116,7 @@ describe("createLocalMcpStdioServer", () => {
 
     expect(gateway.listTools).toHaveBeenCalledOnce();
     expect("result" in response ? response.result : undefined).toMatchObject({
-      tools: [{ name: "x.health" }],
+      tools: [{ name: "ping" }],
     });
   });
 
@@ -126,17 +126,17 @@ describe("createLocalMcpStdioServer", () => {
       id: "3",
       method: "tools/call",
       params: {
-        name: "x.health",
+        name: "ping",
         arguments: {
           ping: true,
         },
       },
     });
 
-    expect(gateway.callTool).toHaveBeenCalledWith("x.health", { ping: true });
+    expect(gateway.callTool).toHaveBeenCalledWith("ping", { ping: true });
     expect("result" in response ? response.result : undefined).toMatchObject({
-      content: [{ type: "text", text: JSON.stringify({ ok: true, name: "x.health" }) }],
-      structuredContent: { ok: true, name: "x.health" },
+      content: [{ type: "text", text: JSON.stringify({ ok: true, name: "ping" }) }],
+      structuredContent: { ok: true, name: "ping" },
     });
   });
 
@@ -152,7 +152,7 @@ describe("createLocalMcpStdioServer", () => {
       id: "3b",
       method: "tools/call",
       params: {
-        name: "x.health",
+        name: "ping",
         arguments: {},
       },
     });

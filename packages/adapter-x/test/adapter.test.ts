@@ -90,7 +90,7 @@ describe("createXAdapter", () => {
   it("publishes tool schemas", async () => {
     const adapter = createXAdapter();
     const tools = await adapter.listTools({ page: {} as never });
-    const compose = tools.find((tool) => tool.name === "x.compose.send");
+    const compose = tools.find((tool) => tool.name === "tweet.create");
 
     expect(compose?.inputSchema).toEqual(
       expect.objectContaining({
@@ -99,7 +99,7 @@ describe("createXAdapter", () => {
       }),
     );
     expect(tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["x.timeline.read", "x.tweet.read", "x.favorites.read", "x.profile.read"]),
+      expect.arrayContaining(["timeline.list", "tweet.get", "favorites.list", "user.get"]),
     );
   });
 
@@ -110,7 +110,7 @@ describe("createXAdapter", () => {
       authSignals: ["login_ui"],
     });
 
-    const result = await adapter.callTool({ name: "x.timeline.read", input: {} }, { page: page as never });
+    const result = await adapter.callTool({ name: "timeline.list", input: {} }, { page: page as never });
 
     expect(result).toEqual({
       error: {
@@ -132,7 +132,7 @@ describe("createXAdapter", () => {
     });
 
     const result = await adapter.callTool(
-      { name: "x.compose.send", input: { text: "hello" } },
+      { name: "tweet.create", input: { text: "hello" } },
       { page: page as never },
     );
 
@@ -155,7 +155,7 @@ describe("createXAdapter", () => {
     });
 
     const result = await adapter.callTool(
-      { name: "x.compose.send", input: { text: "hello", dryRun: true } },
+      { name: "tweet.create", input: { text: "hello", dryRun: true } },
       { page: page as never },
     );
 
@@ -175,7 +175,7 @@ describe("createXAdapter", () => {
     });
 
     const result = await adapter.callTool(
-      { name: "x.compose.send", input: { text: "hello" } },
+      { name: "tweet.create", input: { text: "hello" } },
       { page: page as never },
     );
 
@@ -196,7 +196,7 @@ describe("createXAdapter", () => {
     });
 
     const result = await adapter.callTool(
-      { name: "x.compose.send", input: { text: "hello" } },
+      { name: "tweet.create", input: { text: "hello" } },
       { page: page as never },
     );
 
@@ -207,10 +207,10 @@ describe("createXAdapter", () => {
     });
   });
 
-  it("returns validation error for tweet.read without id/url", async () => {
+  it("returns validation error for tweet.get without id/url", async () => {
     const adapter = createXAdapter();
     const { page } = createMockPage();
-    const result = await adapter.callTool({ name: "x.tweet.read", input: {} }, { page: page as never });
+    const result = await adapter.callTool({ name: "tweet.get", input: {} }, { page: page as never });
     expect(result).toEqual({
       error: {
         code: "VALIDATION_ERROR",

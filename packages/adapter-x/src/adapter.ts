@@ -131,18 +131,7 @@ const CAPTURE_INJECT_SCRIPT = String.raw`
 
 const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
   {
-    name: "x.health",
-    description: "Get adapter health",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-    },
-    annotations: {
-      readOnlyHint: true,
-    },
-  },
-  {
-    name: "x.auth_state",
+    name: "auth.get",
     description: "Detect login/challenge state",
     inputSchema: {
       type: "object",
@@ -153,7 +142,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
-    name: "x.timeline.read",
+    name: "timeline.list",
     description: "Read timeline tweet cards",
     inputSchema: {
       type: "object",
@@ -176,7 +165,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
-    name: "x.tweet.read",
+    name: "tweet.get",
     description: "Read one tweet by url or id",
     inputSchema: {
       type: "object",
@@ -191,7 +180,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
-    name: "x.favorites.read",
+    name: "favorites.list",
     description: "Read bookmarks/favorites feed cards",
     inputSchema: {
       type: "object",
@@ -214,7 +203,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
-    name: "x.profile.read",
+    name: "user.get",
     description: "Read a user profile summary by handle",
     inputSchema: {
       type: "object",
@@ -229,7 +218,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
-    name: "x.compose.send",
+    name: "tweet.create",
     description: "Publish a short text post",
     inputSchema: {
       type: "object",
@@ -1154,15 +1143,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
     callTool: async ({ name, input }, { page }) => {
       const args = toRecord(input);
 
-      if (name === "x.health") {
-        return {
-          ok: true,
-          adapter: "x",
-          version: "0.1",
-        };
-      }
-
-      if (name === "x.auth_state") {
+      if (name === "auth.get") {
         const auth = await detectAuthStable(page);
         return {
           state: auth.state,
@@ -1170,7 +1151,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         };
       }
 
-      if (name === "x.timeline.read") {
+      if (name === "timeline.list") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
           return authCheck.result;
@@ -1182,7 +1163,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         return { items };
       }
 
-      if (name === "x.tweet.read") {
+      if (name === "tweet.get") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
           return authCheck.result;
@@ -1196,7 +1177,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         return await readTweetByUrl(page, targetUrl);
       }
 
-      if (name === "x.favorites.read") {
+      if (name === "favorites.list") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
           return authCheck.result;
@@ -1227,7 +1208,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         });
       }
 
-      if (name === "x.profile.read") {
+      if (name === "user.get") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
           return authCheck.result;
@@ -1239,7 +1220,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         return await readProfile(page, handle);
       }
 
-      if (name === "x.compose.send") {
+      if (name === "tweet.create") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
           return authCheck.result;

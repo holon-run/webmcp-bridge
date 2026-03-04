@@ -14,19 +14,13 @@ export type CreateFixtureAdapterOptions = {
 
 const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
   {
-    name: "fixture.health",
-    description: "Get fixture adapter health and call counters",
-    inputSchema: { type: "object", additionalProperties: false },
-    annotations: { readOnlyHint: true },
-  },
-  {
-    name: "fixture.auth_state",
+    name: "auth.get",
     description: "Get current fixture auth state",
     inputSchema: { type: "object", additionalProperties: false },
     annotations: { readOnlyHint: true },
   },
   {
-    name: "fixture.set_auth_state",
+    name: "auth.set",
     description: "Set fixture auth state",
     inputSchema: {
       type: "object",
@@ -41,7 +35,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
-    name: "fixture.echo",
+    name: "echo.execute",
     description: "Return the input payload for deterministic roundtrip assertions",
     inputSchema: {
       type: "object",
@@ -53,7 +47,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
-    name: "fixture.math.add",
+    name: "math.add",
     description: "Add two numbers",
     inputSchema: {
       type: "object",
@@ -66,7 +60,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
-    name: "fixture.fail",
+    name: "fail.execute",
     description: "Return a deterministic error payload",
     inputSchema: {
       type: "object",
@@ -101,37 +95,21 @@ function readNumber(input: Record<string, unknown>, key: string): number | undef
 }
 
 export function createFixtureAdapter(options?: CreateFixtureAdapterOptions): SiteAdapter {
-  let started = false;
-  let callCount = 0;
   let authState: FixtureAuthState = options?.initialAuthState ?? "authenticated";
 
   return {
     name: "adapter-fixture",
-    start: async () => {
-      started = true;
-    },
-    stop: async () => {
-      started = false;
-    },
+    start: async () => {},
+    stop: async () => {},
     listTools: async () => TOOL_DEFINITIONS,
     callTool: async ({ name, input }) => {
-      callCount += 1;
       const args = toRecord(input);
 
-      if (name === "fixture.health") {
-        return {
-          ok: true,
-          adapter: "fixture",
-          started,
-          callCount,
-        };
-      }
-
-      if (name === "fixture.auth_state") {
+      if (name === "auth.get") {
         return { state: authState };
       }
 
-      if (name === "fixture.set_auth_state") {
+      if (name === "auth.set") {
         const state = args.state;
         if (state !== "authenticated" && state !== "auth_required") {
           return errorResult("VALIDATION_ERROR", "state must be authenticated or auth_required");
@@ -140,14 +118,14 @@ export function createFixtureAdapter(options?: CreateFixtureAdapterOptions): Sit
         return { ok: true, state: authState };
       }
 
-      if (name === "fixture.echo") {
+      if (name === "echo.execute") {
         if (!("value" in args)) {
           return errorResult("VALIDATION_ERROR", "value is required");
         }
         return { value: (args.value as JsonValue) ?? null };
       }
 
-      if (name === "fixture.math.add") {
+      if (name === "math.add") {
         const a = readNumber(args, "a");
         const b = readNumber(args, "b");
         if (a === undefined || b === undefined) {
@@ -156,7 +134,7 @@ export function createFixtureAdapter(options?: CreateFixtureAdapterOptions): Sit
         return { value: a + b };
       }
 
-      if (name === "fixture.fail") {
+      if (name === "fail.execute") {
         const code = typeof args.code === "string" && args.code.trim() ? args.code : "FIXTURE_ERROR";
         const message =
           typeof args.message === "string" && args.message.trim() ? args.message : "fixture requested failure";

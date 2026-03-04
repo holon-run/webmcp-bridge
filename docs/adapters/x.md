@@ -4,10 +4,12 @@
 
 ## Tools
 
-- `x.health`: adapter availability check.
-- `x.auth_state`: detect `authenticated`, `auth_required`, or `challenge_required`.
-- `x.timeline.read`: read timeline text snippets (read-only).
-- `x.compose.send`: submit a text post with optional `dryRun`.
+- `auth.get`: detect `authenticated`, `auth_required`, or `challenge_required`.
+- `timeline.list`: read timeline tweet cards.
+- `tweet.get`: read one tweet by URL or ID.
+- `favorites.list`: read bookmarks/favorites tweet cards.
+- `user.get`: read a user profile summary by handle.
+- `tweet.create`: submit a text post with optional `dryRun`.
 
 ## Behavior
 

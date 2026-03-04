@@ -51,7 +51,7 @@ describe("createWebMcpPageGateway", () => {
     const { page } = createMockPage("shim", [{ name: "native.tool" }]);
     const adapter = {
       name: "x",
-      listTools: vi.fn(async () => [{ name: "x.health", description: "health" }]),
+      listTools: vi.fn(async () => [{ name: "ping", description: "ping" }]),
       callTool: vi.fn(async () => ({ ok: true })),
       start: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
@@ -60,7 +60,7 @@ describe("createWebMcpPageGateway", () => {
     const gateway = await createWebMcpPageGateway(page as never, { fallbackAdapter: adapter });
     expect(gateway.mode).toBe("shim");
     expect(adapter.start).toHaveBeenCalledOnce();
-    expect((await gateway.listTools()).map((tool) => tool.name)).toEqual(["x.health"]);
+    expect((await gateway.listTools()).map((tool) => tool.name)).toEqual(["ping"]);
     expect(adapter.listTools).toHaveBeenCalledOnce();
 
     await gateway.close();
@@ -68,14 +68,14 @@ describe("createWebMcpPageGateway", () => {
   });
 
   it("uses native list when native mode is available", async () => {
-    const { page } = createMockPage("native", [{ name: "native.health" }]);
+    const { page } = createMockPage("native", [{ name: "native.ping" }]);
 
     const gateway = await createWebMcpPageGateway(page as never);
     expect(gateway.mode).toBe("native");
-    expect((await gateway.listTools()).map((tool) => tool.name)).toEqual(["native.health"]);
-    await expect(gateway.callTool("native.health", {})).resolves.toEqual({
+    expect((await gateway.listTools()).map((tool) => tool.name)).toEqual(["native.ping"]);
+    await expect(gateway.callTool("native.ping", {})).resolves.toEqual({
       ok: true,
-      name: "native.health",
+      name: "native.ping",
     });
   });
 });

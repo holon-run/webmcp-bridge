@@ -53,7 +53,7 @@ async function resolveRuntime(options: StartLocalMcpBridgeOptions): Promise<Loca
   }
 
   try {
-    const authResult = await primary.gateway.callTool("x.auth_state", {});
+    const authResult = await primary.gateway.callTool("auth.get", {});
     const state = readXAuthState(authResult);
     if (state !== "auth_required" && state !== "challenge_required") {
       return primary;

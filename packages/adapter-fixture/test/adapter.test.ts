@@ -7,15 +7,12 @@ import { describe, expect, it } from "vitest";
 import { createFixtureAdapter } from "../src/index.js";
 
 describe("createFixtureAdapter", () => {
-  it("returns deterministic health and call counters", async () => {
+  it("returns deterministic auth state", async () => {
     const adapter = createFixtureAdapter();
 
     await adapter.start?.({ page: {} as never });
-    const first = await adapter.callTool({ name: "fixture.health", input: {} }, { page: {} as never });
-    const second = await adapter.callTool({ name: "fixture.health", input: {} }, { page: {} as never });
-
-    expect(first).toEqual({ ok: true, adapter: "fixture", started: true, callCount: 1 });
-    expect(second).toEqual({ ok: true, adapter: "fixture", started: true, callCount: 2 });
+    const state = await adapter.callTool({ name: "auth.get", input: {} }, { page: {} as never });
+    expect(state).toEqual({ state: "authenticated" });
   });
 
   it("supports auth state toggling", async () => {
@@ -23,13 +20,13 @@ describe("createFixtureAdapter", () => {
     await adapter.start?.({ page: {} as never });
 
     await expect(
-      adapter.callTool({ name: "fixture.auth_state", input: {} }, { page: {} as never }),
+      adapter.callTool({ name: "auth.get", input: {} }, { page: {} as never }),
     ).resolves.toEqual({ state: "auth_required" });
 
     await expect(
       adapter.callTool(
         {
-          name: "fixture.set_auth_state",
+          name: "auth.set",
           input: { state: "authenticated" },
         },
         { page: {} as never },
@@ -37,20 +34,20 @@ describe("createFixtureAdapter", () => {
     ).resolves.toEqual({ ok: true, state: "authenticated" });
 
     await expect(
-      adapter.callTool({ name: "fixture.auth_state", input: {} }, { page: {} as never }),
+      adapter.callTool({ name: "auth.get", input: {} }, { page: {} as never }),
     ).resolves.toEqual({ state: "authenticated" });
   });
 
-  it("validates numeric input for fixture.math.add", async () => {
+  it("validates numeric input for math.add", async () => {
     const adapter = createFixtureAdapter();
     await adapter.start?.({ page: {} as never });
 
     await expect(
-      adapter.callTool({ name: "fixture.math.add", input: { a: 2, b: 3 } }, { page: {} as never }),
+      adapter.callTool({ name: "math.add", input: { a: 2, b: 3 } }, { page: {} as never }),
     ).resolves.toEqual({ value: 5 });
 
     await expect(
-      adapter.callTool({ name: "fixture.math.add", input: { a: 2, b: "3" } }, { page: {} as never }),
+      adapter.callTool({ name: "math.add", input: { a: 2, b: "3" } }, { page: {} as never }),
     ).resolves.toEqual({
       error: {
         code: "VALIDATION_ERROR",

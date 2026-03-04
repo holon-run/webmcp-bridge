@@ -4,12 +4,11 @@
 
 ## Tools
 
-- `fixture.health`: returns adapter status and call counters.
-- `fixture.auth_state`: returns current fixture auth state.
-- `fixture.set_auth_state`: switches fixture auth state.
-- `fixture.echo`: deterministic roundtrip payload tool.
-- `fixture.math.add`: deterministic numeric tool.
-- `fixture.fail`: deterministic error payload tool.
+- `auth.get`: returns current fixture auth state.
+- `auth.set`: switches fixture auth state.
+- `echo.execute`: deterministic roundtrip payload tool.
+- `math.add`: deterministic numeric tool.
+- `fail.execute`: deterministic error payload tool.
 
 ## Usage
 

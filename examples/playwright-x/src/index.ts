@@ -18,8 +18,8 @@ async function main(): Promise<void> {
     fallbackAdapter: createXAdapter(),
   });
 
-  const health = await gateway.callTool("x.health", {});
-  process.stdout.write(`gateway mode=${gateway.mode} health=${JSON.stringify(health)}\n`);
+  const auth = await gateway.callTool("auth.get", {});
+  process.stdout.write(`gateway mode=${gateway.mode} auth=${JSON.stringify(auth)}\n`);
 
   await gateway.close();
   await context.close();
