@@ -11,6 +11,11 @@
 - `user.get`: read a user profile summary by handle.
 - `tweet.create`: submit a text post with optional `dryRun`.
 
+`timeline.list` and `favorites.list` support incremental pagination with:
+- input: `limit`, optional `cursor`
+- output: `items`, `source` (`network` or `dom`), `hasMore`, optional `nextCursor`
+- when `source=dom`, `debug.reason` explains fallback cause (for example `no_template`, `http_error_403`, `empty_result`)
+
 ## Behavior
 
 - Auth gating is fail-closed:
@@ -20,6 +25,9 @@
   - submit is not treated as success until timeline confirmation succeeds;
   - returns `ACTION_UNCONFIRMED` if confirmation times out.
 - Error payloads are stable JSON with `error.code` and `error.message`.
+- Read-only timeline/bookmark pages are reused across calls to improve template capture stability.
+- Network template capture hooks both `fetch` and `XMLHttpRequest`, with a lightweight warmup (scroll/reload) before fallback.
+- Template metadata is cached at process scope (`home` / `bookmarks` / `tweet`) and reused when current-page capture is temporarily unavailable.
 
 ## Known limits
 
