@@ -26,6 +26,7 @@ describe("parseCliArgs", () => {
       url: "https://example.com",
       browser: "firefox",
       headless: true,
+      autoLoginFallback: true,
       serviceVersion: "0.2.0",
     });
   });
@@ -37,6 +38,13 @@ describe("parseCliArgs", () => {
   it("parses fixture site id", () => {
     const parsed = parseCliArgs(["--site", "fixture"]);
     expect(parsed.site).toBe("fixture");
+    expect(parsed.autoLoginFallback).toBe(true);
+  });
+
+  it("allows disabling auto login fallback", () => {
+    const parsed = parseCliArgs(["--site", "x", "--headless", "--no-auto-login-fallback"]);
+    expect(parsed.headless).toBe(true);
+    expect(parsed.autoLoginFallback).toBe(false);
   });
 
   it("throws on unsupported browser", () => {

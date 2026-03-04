@@ -17,6 +17,7 @@ import {
 
 export type StartLocalMcpBridgeOptions = LocalMcpRuntimeOptions & {
   serviceVersion: string;
+  autoLoginFallback?: boolean;
   input?: Readable;
   output?: Writable;
   onError?: (error: unknown) => void;
@@ -26,11 +27,51 @@ export type LocalMcpBridgeHandle = {
   site: LocalMcpRuntime["site"];
   targetUrl: string;
   mode: "native" | "shim";
+  headless: boolean;
   close: () => Promise<void>;
 };
 
+type XAuthState = "authenticated" | "auth_required" | "challenge_required";
+
+function readXAuthState(value: unknown): XAuthState | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const state = (value as { state?: unknown }).state;
+  if (state === "authenticated" || state === "auth_required" || state === "challenge_required") {
+    return state;
+  }
+  return undefined;
+}
+
+async function resolveRuntime(options: StartLocalMcpBridgeOptions): Promise<LocalMcpRuntime> {
+  const primary = await startLocalMcpRuntime(options);
+  const autoLoginFallback = options.autoLoginFallback ?? true;
+  const requestedHeadless = options.headless ?? false;
+  if (!autoLoginFallback || options.site !== "x" || !requestedHeadless) {
+    return primary;
+  }
+
+  try {
+    const authResult = await primary.gateway.callTool("x.auth_state", {});
+    const state = readXAuthState(authResult);
+    if (state !== "auth_required" && state !== "challenge_required") {
+      return primary;
+    }
+  } catch {
+    // Ignore auth probing failures and keep current runtime.
+    return primary;
+  }
+
+  await primary.close();
+  return await startLocalMcpRuntime({
+    ...options,
+    headless: false,
+  });
+}
+
 export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): Promise<LocalMcpBridgeHandle> {
-  const runtime = await startLocalMcpRuntime(options);
+  const runtime = await resolveRuntime(options);
 
   let server: LocalMcpStdioServer | undefined;
   try {
@@ -60,6 +101,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     site: runtime.site,
     targetUrl: runtime.targetUrl,
     mode: runtime.mode,
+    headless: runtime.headless,
     close: async (): Promise<void> => {
       if (closed) {
         return;

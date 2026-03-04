@@ -135,7 +135,7 @@ describe("createLocalMcpStdioServer", () => {
 
     expect(gateway.callTool).toHaveBeenCalledWith("x.health", { ping: true });
     expect("result" in response ? response.result : undefined).toMatchObject({
-      content: [],
+      content: [{ type: "text", text: JSON.stringify({ ok: true, name: "x.health" }) }],
       structuredContent: { ok: true, name: "x.health" },
     });
   });

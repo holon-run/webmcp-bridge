@@ -39,6 +39,7 @@ export type LocalMcpRuntime = {
   site: SupportedSite;
   targetUrl: string;
   mode: "native" | "shim";
+  headless: boolean;
   page: Page;
   gateway: LocalMcpGateway;
   close: () => Promise<void>;
@@ -57,6 +58,7 @@ function resolveBrowserType(browser: BrowserEngine): BrowserType {
 export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Promise<LocalMcpRuntime> {
   const site = resolveSiteDefinition(options.site);
   const browserEngine = options.browser ?? "chromium";
+  const headless = options.headless ?? false;
   const browserType = resolveBrowserType(browserEngine);
   const targetUrl = options.url ?? site.defaultUrl;
 
@@ -85,7 +87,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
 
   try {
     context = await browserType.launchPersistentContext(userDataDir, {
-      headless: options.headless ?? false,
+      headless,
     });
 
     const page = context.pages()[0] ?? (await context.newPage());
@@ -120,6 +122,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       site: options.site,
       targetUrl,
       mode: gatewaySession.mode,
+      headless,
       page,
       gateway,
       close,

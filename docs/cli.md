@@ -16,6 +16,8 @@ node packages/local-mcp/dist/cli.js --site <site> [options]
 - `--browser <name>`: `chromium` | `firefox` | `webkit`.
 - `--headless`: launch browser in headless mode.
 - `--no-headless`: force headed mode.
+- `--auto-login-fallback`: auto-switch to headed mode when auth is required in headless mode (default: true).
+- `--no-auto-login-fallback`: disable the auto login fallback.
 - `--user-data-dir <path>`: Playwright persistent profile directory.
 - `--service-version <value>`: MCP server version string.
 - `--help`: print usage.

@@ -20,6 +20,8 @@ Optional:
   --browser <name>             chromium | firefox | webkit (default: chromium)
   --headless                   Run browser in headless mode (default: false)
   --no-headless                Force headed mode
+  --auto-login-fallback        Auto-switch to headed mode when auth is required in headless mode (default: true)
+  --no-auto-login-fallback     Disable auto-switch login fallback
   --user-data-dir <path>       Playwright persistent profile directory
   --service-version <value>    MCP server version string (default: 0.1.0)
   --help                       Show this help message
@@ -30,6 +32,7 @@ export type LocalMcpCliOptions = {
   url?: string;
   browser: BrowserEngine;
   headless: boolean;
+  autoLoginFallback: boolean;
   userDataDir?: string;
   serviceVersion: string;
 };
@@ -47,6 +50,7 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
   let url: string | undefined;
   let browser: BrowserEngine = "chromium";
   let headless = false;
+  let autoLoginFallback = true;
   let userDataDir: string | undefined;
   let serviceVersion = "0.1.0";
 
@@ -91,6 +95,16 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
       continue;
     }
 
+    if (arg === "--auto-login-fallback") {
+      autoLoginFallback = true;
+      continue;
+    }
+
+    if (arg === "--no-auto-login-fallback") {
+      autoLoginFallback = false;
+      continue;
+    }
+
     if (arg === "--service-version") {
       serviceVersion = parseFlagValue(args, i, "--service-version");
       i += 1;
@@ -110,6 +124,7 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
     site: siteDefinition.id,
     browser,
     headless,
+    autoLoginFallback,
     serviceVersion,
   };
 
@@ -155,7 +170,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
   });
 
   process.stderr.write(
-    `[local-mcp] site=${handle.site} mode=${handle.mode} url=${handle.targetUrl} transport=stdio\n`,
+    `[local-mcp] site=${handle.site} mode=${handle.mode} headless=${String(handle.headless)} url=${handle.targetUrl} transport=stdio\n`,
   );
 
   let closing = false;
