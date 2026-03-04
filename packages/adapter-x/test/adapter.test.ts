@@ -45,7 +45,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (typeof command.mode === "string" && typeof command.limit === "number") {
-        if (behavior.requireFallbackTemplate && !("cachedTemplate" in command)) {
+        if (behavior.requireFallbackTemplate && command.cachedTemplate === undefined) {
           return {
             items: [],
             source: "dom",
@@ -108,7 +108,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (typeof command.mode === "string" && typeof command.limit === "number") {
-        if (behavior.requireFallbackTemplate && !("cachedTemplate" in command)) {
+        if (behavior.requireFallbackTemplate && command.cachedTemplate === undefined) {
           return {
             items: [],
             source: "dom",
@@ -165,6 +165,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
 
   return {
     page,
+    readPage,
     newPage,
     behavior,
   };
@@ -183,7 +184,14 @@ describe("createXAdapter", () => {
       }),
     );
     expect(tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["timeline.list", "tweet.get", "favorites.list", "user.get"]),
+      expect.arrayContaining([
+        "timeline.home.list",
+        "timeline.user.list",
+        "search.tweets.list",
+        "tweet.get",
+        "favorites.list",
+        "user.get",
+      ]),
     );
   });
 
@@ -194,7 +202,7 @@ describe("createXAdapter", () => {
       authSignals: ["login_ui"],
     });
 
-    const result = await adapter.callTool({ name: "timeline.list", input: {} }, { page: page as never });
+    const result = await adapter.callTool({ name: "timeline.home.list", input: {} }, { page: page as never });
 
     expect(result).toEqual({
       error: {
@@ -332,5 +340,85 @@ describe("createXAdapter", () => {
     expect(second).toMatchObject({
       source: "network",
     });
+  });
+
+  it("returns validation error for timeline.user.list without username", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+    const result = await adapter.callTool({ name: "timeline.user.list", input: {} }, { page: page as never });
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "username is required",
+      },
+    });
+  });
+
+  it("reads user timeline with cursor pagination", async () => {
+    const adapter = createXAdapter();
+    const { page, readPage } = createMockPage({
+      timelineItems: [{ id: "u-1", text: "user timeline card", url: "https://x.com/a/status/1" }],
+      networkNextCursor: "user-next",
+    });
+
+    const result = await adapter.callTool(
+      { name: "timeline.user.list", input: { username: "jack", limit: 1, cursor: "prev-user" } },
+      { page: page as never },
+    );
+
+    expect(readPage.goto).toHaveBeenCalledWith("https://x.com/jack", expect.anything());
+    expect(result).toMatchObject({
+      source: "network",
+      hasMore: true,
+      nextCursor: "user-next",
+      items: [{ id: "u-1", text: "user timeline card" }],
+    });
+  });
+
+  it("reads search timeline with latest mode by default", async () => {
+    const adapter = createXAdapter();
+    const { page, readPage } = createMockPage({
+      timelineItems: [{ id: "s-1", text: "search result", url: "https://x.com/a/status/2" }],
+      networkNextCursor: "search-next",
+    });
+
+    const result = await adapter.callTool(
+      { name: "search.tweets.list", input: { query: "playwright", limit: 1 } },
+      { page: page as never },
+    );
+
+    expect(readPage.goto).toHaveBeenCalledWith(
+      expect.stringContaining("https://x.com/search?q=playwright"),
+      expect.anything(),
+    );
+    expect(readPage.goto).toHaveBeenCalledWith(
+      expect.stringContaining("f=live"),
+      expect.anything(),
+    );
+    expect(result).toMatchObject({
+      source: "network",
+      hasMore: true,
+      nextCursor: "search-next",
+      items: [{ id: "s-1", text: "search result" }],
+    });
+  });
+
+  it("reads search timeline with top mode", async () => {
+    const adapter = createXAdapter();
+    const { page, readPage } = createMockPage();
+
+    await adapter.callTool(
+      { name: "search.tweets.list", input: { query: "typescript", mode: "top", limit: 1 } },
+      { page: page as never },
+    );
+
+    expect(readPage.goto).toHaveBeenCalledWith(
+      expect.stringContaining("https://x.com/search?q=typescript"),
+      expect.anything(),
+    );
+    expect(readPage.goto).toHaveBeenCalledWith(
+      expect.stringContaining("f=top"),
+      expect.anything(),
+    );
   });
 });

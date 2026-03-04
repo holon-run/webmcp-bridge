@@ -28,6 +28,7 @@ export type CreateXAdapterOptions = {
 
 const DEFAULT_TIMELINE_LIMIT = 10;
 const MAX_TIMELINE_LIMIT = 20;
+const MAX_READ_PAGE_CACHE_SIZE = 8;
 const DEFAULT_COMPOSE_CONFIRM_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_POST_LENGTH = 280;
 const AUTH_STABILIZE_ATTEMPTS = 6;
@@ -51,7 +52,16 @@ const CAPTURE_INJECT_SCRIPT = String.raw`
     if (typeof url !== "string") return false;
     return (
       url.includes("/i/api/graphql/") &&
-      (url.includes("/HomeTimeline") || url.includes("/Bookmarks") || url.includes("/BookmarksAll") || url.includes("/TweetDetail"))
+      (
+        url.includes("/HomeTimeline") ||
+        url.includes("/Bookmarks") ||
+        url.includes("/BookmarksAll") ||
+        url.includes("/TweetDetail") ||
+        url.includes("/UserTweets") ||
+        url.includes("/UserMedia") ||
+        url.includes("/UserTweetsAndReplies") ||
+        url.includes("/SearchTimeline")
+      )
     );
   };
 
@@ -60,6 +70,10 @@ const CAPTURE_INJECT_SCRIPT = String.raw`
     if (url.includes("/BookmarksAll")) return "BookmarksAll";
     if (url.includes("/Bookmarks")) return "Bookmarks";
     if (url.includes("/TweetDetail")) return "TweetDetail";
+    if (url.includes("/UserTweetsAndReplies")) return "UserTweetsAndReplies";
+    if (url.includes("/UserMedia")) return "UserMedia";
+    if (url.includes("/UserTweets")) return "UserTweets";
+    if (url.includes("/SearchTimeline")) return "SearchTimeline";
     return "Unknown";
   };
 
@@ -201,8 +215,8 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
-    name: "timeline.list",
-    description: "Read timeline tweet cards",
+    name: "timeline.home.list",
+    description: "Read home timeline tweet cards",
     inputSchema: {
       type: "object",
       properties: {
@@ -247,6 +261,52 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
         cursor: { type: "string" },
       },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "timeline.user.list",
+    description: "Read one user's timeline tweet cards",
+    inputSchema: {
+      type: "object",
+      properties: {
+        username: { type: "string", minLength: 1 },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
+        },
+        cursor: { type: "string" },
+      },
+      required: ["username"],
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "search.tweets.list",
+    description: "Read search tweets list",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1 },
+        mode: {
+          type: "string",
+          enum: ["top", "latest"],
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
+        },
+        cursor: { type: "string" },
+      },
+      required: ["query"],
       additionalProperties: false,
     },
     annotations: {
@@ -320,7 +380,9 @@ async function ensureNetworkCaptureInstalled(page: Page): Promise<void> {
   await page.evaluate(CAPTURE_INJECT_SCRIPT);
 }
 
-async function hasCapturedTemplate(page: Page, mode: "home" | "bookmarks" | "tweet"): Promise<boolean> {
+type TimelineMode = "home" | "bookmarks" | "tweet" | "user_timeline" | "search";
+
+async function hasCapturedTemplate(page: Page, mode: TimelineMode): Promise<boolean> {
   const result = await page.evaluate(({ targetMode }) => {
     const globalAny = window as unknown as {
       __WEBMCP_X_CAPTURE__?: {
@@ -335,7 +397,11 @@ async function hasCapturedTemplate(page: Page, mode: "home" | "bookmarks" | "twe
         ? ["HomeTimeline", "TweetDetail"]
         : targetMode === "bookmarks"
           ? ["BookmarksAll", "Bookmarks"]
-          : ["TweetDetail"];
+          : targetMode === "tweet"
+            ? ["TweetDetail"]
+            : targetMode === "user_timeline"
+              ? ["UserTweets", "UserTweetsAndReplies", "UserMedia"]
+              : ["SearchTimeline"];
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const entry = entries[i];
       if (entry && typeof entry.op === "string" && ops.includes(entry.op)) {
@@ -347,7 +413,7 @@ async function hasCapturedTemplate(page: Page, mode: "home" | "bookmarks" | "twe
   return result === true;
 }
 
-async function warmupNetworkTemplate(page: Page, mode: "home" | "bookmarks"): Promise<void> {
+async function warmupNetworkTemplate(page: Page, mode: Exclude<TimelineMode, "tweet">): Promise<void> {
   if (await hasCapturedTemplate(page, mode)) {
     return;
   }
@@ -474,8 +540,8 @@ type TimelinePage = {
   };
 };
 
-type ReadPageKind = "home" | "bookmarks";
-type TimelineMode = "home" | "bookmarks" | "tweet";
+type ReadPageKey = string;
+type ProcessTemplateBucket = TimelineMode;
 type NetworkTemplate = {
   url: string;
   method: string;
@@ -483,8 +549,18 @@ type NetworkTemplate = {
   body?: string;
 };
 
-const READ_PAGE_CACHE = new WeakMap<Page, Map<ReadPageKind, Page>>();
-const PROCESS_TEMPLATE_CACHE = new Map<TimelineMode, NetworkTemplate>();
+type ReadPageCacheEntry = {
+  key: string;
+  page: Page;
+};
+
+type ReadPageCacheState = {
+  pages: Map<string, ReadPageCacheEntry>;
+  lru: string[];
+};
+
+const READ_PAGE_CACHE = new WeakMap<Page, ReadPageCacheState>();
+const PROCESS_TEMPLATE_CACHE = new Map<ProcessTemplateBucket, NetworkTemplate>();
 
 async function readTimelineViaNetwork(
   page: Page,
@@ -525,7 +601,11 @@ async function readTimelineViaNetwork(
             ? ["HomeTimeline", "TweetDetail"]
             : mode === "bookmarks"
               ? ["BookmarksAll", "Bookmarks"]
-              : ["TweetDetail"];
+              : mode === "tweet"
+                ? ["TweetDetail"]
+                : mode === "user_timeline"
+                  ? ["UserTweets", "UserTweetsAndReplies", "UserMedia"]
+                  : ["SearchTimeline"];
 
         for (let i = entries.length - 1; i >= 0; i -= 1) {
           const entry = entries[i];
@@ -925,64 +1005,90 @@ async function withEphemeralReadOnlyPage<T>(page: Page, url: string, run: (readP
   }
 }
 
-function getReadPageMap(page: Page): Map<ReadPageKind, Page> {
-  let map = READ_PAGE_CACHE.get(page);
-  if (!map) {
-    map = new Map<ReadPageKind, Page>();
-    READ_PAGE_CACHE.set(page, map);
+function getReadPageCacheState(page: Page): ReadPageCacheState {
+  let state = READ_PAGE_CACHE.get(page);
+  if (!state) {
+    state = {
+      pages: new Map<string, ReadPageCacheEntry>(),
+      lru: [],
+    };
+    READ_PAGE_CACHE.set(page, state);
   }
-  return map;
+  return state;
 }
 
-function isSamePath(currentUrl: string, targetUrl: string): boolean {
+function isSameLocation(currentUrl: string, targetUrl: string): boolean {
   try {
     const current = new URL(currentUrl);
     const target = new URL(targetUrl);
-    return current.origin === target.origin && current.pathname === target.pathname;
+    return current.origin === target.origin && current.pathname === target.pathname && current.search === target.search;
   } catch {
     return false;
   }
 }
 
-async function getOrCreateCachedReadPage(ownerPage: Page, kind: ReadPageKind, url: string): Promise<Page> {
-  const map = getReadPageMap(ownerPage);
-  const existing = map.get(kind);
-  if (existing && !existing.isClosed()) {
-    const currentUrl = existing.url();
-    if (!isSamePath(currentUrl, url)) {
-      await existing.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
-      await waitForTweetSurface(existing);
+function touchReadPageLru(state: ReadPageCacheState, key: string): void {
+  const next = state.lru.filter((item) => item !== key);
+  next.push(key);
+  state.lru = next;
+}
+
+async function evictReadPagesIfNeeded(state: ReadPageCacheState): Promise<void> {
+  while (state.lru.length > MAX_READ_PAGE_CACHE_SIZE) {
+    const evictKey = state.lru.shift();
+    if (!evictKey) {
+      return;
     }
-    return existing;
+    const entry = state.pages.get(evictKey);
+    state.pages.delete(evictKey);
+    if (entry && !entry.page.isClosed()) {
+      await entry.page.close().catch(() => {});
+    }
+  }
+}
+
+async function getOrCreateCachedReadPage(ownerPage: Page, key: ReadPageKey, url: string): Promise<Page> {
+  const state = getReadPageCacheState(ownerPage);
+  const existing = state.pages.get(key);
+  if (existing && !existing.page.isClosed()) {
+    const currentUrl = existing.page.url();
+    if (!isSameLocation(currentUrl, url)) {
+      await existing.page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await waitForTweetSurface(existing.page);
+    }
+    touchReadPageLru(state, key);
+    return existing.page;
   }
 
   const readPage = await ownerPage.context().newPage();
   await ensureNetworkCaptureInstalled(readPage);
   await readPage.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await waitForTweetSurface(readPage);
-  map.set(kind, readPage);
+  state.pages.set(key, { key, page: readPage });
+  touchReadPageLru(state, key);
+  await evictReadPagesIfNeeded(state);
   return readPage;
 }
 
 async function withCachedReadOnlyPage<T>(
   ownerPage: Page,
-  kind: ReadPageKind,
+  key: ReadPageKey,
   url: string,
   run: (readPage: Page) => Promise<T>,
 ): Promise<T> {
-  const readPage = await getOrCreateCachedReadPage(ownerPage, kind, url);
+  const readPage = await getOrCreateCachedReadPage(ownerPage, key, url);
   return await run(readPage);
 }
 
 async function closeCachedReadPages(ownerPage: Page): Promise<void> {
-  const map = READ_PAGE_CACHE.get(ownerPage);
+  const state = READ_PAGE_CACHE.get(ownerPage);
   READ_PAGE_CACHE.delete(ownerPage);
-  if (!map) {
+  if (!state) {
     return;
   }
-  for (const readPage of map.values()) {
-    if (!readPage.isClosed()) {
-      await readPage.close().catch(() => {});
+  for (const entry of state.pages.values()) {
+    if (!entry.page.isClosed()) {
+      await entry.page.close().catch(() => {});
     }
   }
 }
@@ -999,15 +1105,50 @@ async function waitForTweetSurface(page: Page): Promise<void> {
   await page.waitForTimeout(1_000);
 }
 
-async function readTimeline(
+function mapTweetCards(items: TweetCard[]): Array<{ id: string; text: string; url?: string }> {
+  return items.map((item) => {
+    const mapped: { id: string; text: string; url?: string } = {
+      id: item.id,
+      text: item.text,
+    };
+    if (item.url) {
+      mapped.url = item.url;
+    }
+    return mapped;
+  });
+}
+
+function toTimelinePageFromNetwork(input: {
+  items: TweetCard[];
+  source: "network" | "dom";
+  nextCursor?: string;
+  reason?: string;
+}): TimelinePage {
+  const result: TimelinePage = {
+    items: mapTweetCards(input.items),
+    source: input.source,
+    hasMore: false,
+  };
+  if (input.nextCursor) {
+    result.nextCursor = input.nextCursor;
+    result.hasMore = true;
+  }
+  if (input.source === "dom" && input.reason) {
+    result.debug = { reason: input.reason };
+  }
+  return result;
+}
+
+async function readTimelineWithMode(
   page: Page,
+  mode: Exclude<TimelineMode, "tweet">,
   limit: number,
   cursor?: string,
 ): Promise<TimelinePage> {
   await waitForTweetSurface(page);
-  await warmupNetworkTemplate(page, "home");
-  const networkRequest: { mode: "home"; limit: number; cursor?: string } = {
-    mode: "home",
+  await warmupNetworkTemplate(page, mode);
+  const networkRequest: { mode: Exclude<TimelineMode, "tweet">; limit: number; cursor?: string } = {
+    mode,
     limit,
   };
   if (cursor) {
@@ -1015,85 +1156,36 @@ async function readTimeline(
   }
   const fromNetwork = await readTimelineViaNetwork(page, networkRequest);
   if (fromNetwork.items.length > 0) {
-    const items = fromNetwork.items.map((item) => {
-      const mapped: { id: string; text: string; url?: string } = {
-        id: item.id,
-        text: item.text,
-      };
-      if (item.url) {
-        mapped.url = item.url;
-      }
-      return mapped;
-    });
-    const result: TimelinePage = {
-      items,
-      source: fromNetwork.source,
-      hasMore: false,
-    };
-    if (fromNetwork.nextCursor) {
-      result.nextCursor = fromNetwork.nextCursor;
-      result.hasMore = true;
-    }
-    if (fromNetwork.source === "dom" && fromNetwork.reason) {
-      result.debug = { reason: fromNetwork.reason };
-    }
-    return result;
-  }
-  const fromReadOnly = await withCachedReadOnlyPage(page, "home", "https://x.com/home", async (readPage) => {
-    const readOnlyRequest: { mode: "home"; limit: number; cursor?: string } = {
-      mode: "home",
-      limit,
-    };
-    if (cursor) {
-      readOnlyRequest.cursor = cursor;
-    }
-    const network = await readTimelineViaNetwork(readPage, readOnlyRequest);
-    return network;
-  });
-  if (fromReadOnly.items.length > 0) {
-    const items = fromReadOnly.items.map((item) => {
-      const mapped: { id: string; text: string; url?: string } = {
-        id: item.id,
-        text: item.text,
-      };
-      if (item.url) {
-        mapped.url = item.url;
-      }
-      return mapped;
-    });
-    const result: TimelinePage = {
-      items,
-      source: fromReadOnly.source,
-      hasMore: false,
-    };
-    if (fromReadOnly.nextCursor) {
-      result.nextCursor = fromReadOnly.nextCursor;
-      result.hasMore = true;
-    }
-    if (fromReadOnly.source === "dom" && fromReadOnly.reason) {
-      result.debug = { reason: fromReadOnly.reason };
-    }
-    return result;
+    return toTimelinePageFromNetwork(fromNetwork);
   }
   const cards = await extractTweetCards(page, limit);
-  const items = cards.map((card) => {
-    const item: { id: string; text: string; url?: string } = {
-      id: card.id,
-      text: card.text,
-    };
-    if (card.url) {
-      item.url = card.url;
-    }
-    return item;
-  });
   return {
-    items,
+    items: mapTweetCards(cards),
     source: "dom",
     hasMore: false,
     debug: {
-      reason: fromReadOnly.reason ?? fromNetwork.reason ?? "dom_fallback",
+      reason: fromNetwork.reason ?? "dom_fallback",
     },
   };
+}
+
+function normalizeUsername(input: unknown): string {
+  if (typeof input !== "string") {
+    return "";
+  }
+  return input.replace(/^@+/, "").trim();
+}
+
+function normalizeSearchMode(input: unknown): "top" | "latest" {
+  return input === "top" ? "top" : "latest";
+}
+
+function buildSearchUrl(query: string, mode: "top" | "latest"): string {
+  const url = new URL("https://x.com/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("src", "typed_query");
+  url.searchParams.set("f", mode === "top" ? "top" : "live");
+  return url.toString();
 }
 
 async function readTweetByUrl(page: Page, url: string): Promise<JsonValue> {
@@ -1416,7 +1508,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         };
       }
 
-      if (name === "timeline.list") {
+      if (name === "timeline.home.list") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
           return authCheck.result;
@@ -1424,8 +1516,17 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
 
         const limit = normalizeTimelineLimit(args);
         const cursor = typeof args.cursor === "string" ? args.cursor.trim() : "";
-        const result = cursor ? await readTimeline(page, limit, cursor) : await readTimeline(page, limit);
-        return result;
+        const result = cursor
+          ? await readTimelineWithMode(page, "home", limit, cursor)
+          : await readTimelineWithMode(page, "home", limit);
+        if (result.source === "network" || result.items.length > 0) {
+          return result;
+        }
+        return await withCachedReadOnlyPage(page, "home", "https://x.com/home", async (readPage) => {
+          return cursor
+            ? await readTimelineWithMode(readPage, "home", limit, cursor)
+            : await readTimelineWithMode(readPage, "home", limit);
+        });
       }
 
       if (name === "tweet.get") {
@@ -1450,51 +1551,50 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         const limit = normalizeTimelineLimit(args);
         const cursor = typeof args.cursor === "string" ? args.cursor.trim() : "";
         return await withCachedReadOnlyPage(page, "bookmarks", "https://x.com/i/bookmarks", async (readPage) => {
-          await waitForTweetSurface(readPage);
-          await warmupNetworkTemplate(readPage, "bookmarks");
-          const bookmarksRequest: { mode: "bookmarks"; limit: number; cursor?: string } = {
-            mode: "bookmarks",
-            limit,
-          };
-          if (cursor) {
-            bookmarksRequest.cursor = cursor;
-          }
-          const network = await readTimelineViaNetwork(readPage, bookmarksRequest);
-          if (network.items.length > 0) {
-            const items = network.items.map((item) => {
-              const mapped: { id: string; text: string; url?: string } = {
-                id: item.id,
-                text: item.text,
-              };
-              if (item.url) {
-                mapped.url = item.url;
-              }
-              return mapped;
-            });
-            const result: {
-              items: Array<{ id: string; text: string; url?: string }>;
-              source: "network" | "dom";
-              hasMore: boolean;
-              nextCursor?: string;
-              debug?: {
-                reason: string;
-              };
-            } = {
-              items,
-              source: network.source,
-              hasMore: false,
-            };
-            if (network.nextCursor) {
-              result.nextCursor = network.nextCursor;
-              result.hasMore = true;
-            }
-            if (network.source === "dom" && network.reason) {
-              result.debug = { reason: network.reason };
-            }
-            return result;
-          }
+          return cursor
+            ? await readTimelineWithMode(readPage, "bookmarks", limit, cursor)
+            : await readTimelineWithMode(readPage, "bookmarks", limit);
+        });
+      }
 
-          return await readTimeline(readPage, limit, cursor || undefined);
+      if (name === "timeline.user.list") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const username = normalizeUsername(args.username);
+        if (!username) {
+          return errorResult("VALIDATION_ERROR", "username is required");
+        }
+        const limit = normalizeTimelineLimit(args);
+        const cursor = typeof args.cursor === "string" ? args.cursor.trim() : "";
+        const profileUrl = `https://x.com/${username}`;
+        const cacheKey = `user:${username.toLowerCase()}`;
+        return await withCachedReadOnlyPage(page, cacheKey, profileUrl, async (readPage) => {
+          return cursor
+            ? await readTimelineWithMode(readPage, "user_timeline", limit, cursor)
+            : await readTimelineWithMode(readPage, "user_timeline", limit);
+        });
+      }
+
+      if (name === "search.tweets.list") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const query = typeof args.query === "string" ? args.query.trim() : "";
+        if (!query) {
+          return errorResult("VALIDATION_ERROR", "query is required");
+        }
+        const mode = normalizeSearchMode(args.mode);
+        const limit = normalizeTimelineLimit(args);
+        const cursor = typeof args.cursor === "string" ? args.cursor.trim() : "";
+        const searchUrl = buildSearchUrl(query, mode);
+        const cacheKey = `search:${mode}:${query.toLowerCase()}`;
+        return await withCachedReadOnlyPage(page, cacheKey, searchUrl, async (readPage) => {
+          return cursor
+            ? await readTimelineWithMode(readPage, "search", limit, cursor)
+            : await readTimelineWithMode(readPage, "search", limit);
         });
       }
 
