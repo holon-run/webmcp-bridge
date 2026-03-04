@@ -33,6 +33,101 @@ const DEFAULT_MAX_POST_LENGTH = 280;
 const AUTH_STABILIZE_ATTEMPTS = 6;
 const AUTH_STABILIZE_DELAY_MS = 750;
 const AUTH_WARMUP_TIMEOUT_MS = 12_000;
+const DEFAULT_MAX_NETWORK_PAGES = 5;
+
+const CAPTURE_INJECT_SCRIPT = String.raw`
+(() => {
+  const globalAny = window;
+  if (globalAny.__WEBMCP_X_CAPTURE__) {
+    return;
+  }
+
+  const state = {
+    enabled: true,
+    entries: [],
+  };
+
+  const now = () => Date.now();
+  const isGraphQLTimelineUrl = (url) => {
+    if (typeof url !== "string") return false;
+    return (
+      url.includes("/i/api/graphql/") &&
+      (url.includes("/HomeTimeline") || url.includes("/Bookmarks") || url.includes("/BookmarksAll") || url.includes("/TweetDetail"))
+    );
+  };
+
+  const detectOperation = (url) => {
+    if (url.includes("/HomeTimeline")) return "HomeTimeline";
+    if (url.includes("/BookmarksAll")) return "BookmarksAll";
+    if (url.includes("/Bookmarks")) return "Bookmarks";
+    if (url.includes("/TweetDetail")) return "TweetDetail";
+    return "Unknown";
+  };
+
+  const pickHeaders = (headersLike) => {
+    const output = {};
+    if (!headersLike) return output;
+    try {
+      const headers = new Headers(headersLike);
+      headers.forEach((value, key) => {
+        output[String(key).toLowerCase()] = String(value);
+      });
+      return output;
+    } catch {
+      if (typeof headersLike === "object") {
+        for (const [k, v] of Object.entries(headersLike)) {
+          output[String(k).toLowerCase()] = String(v);
+        }
+      }
+      return output;
+    }
+  };
+
+  const appendEntry = (entry) => {
+    state.entries.push(entry);
+    if (state.entries.length > 80) {
+      state.entries.splice(0, state.entries.length - 80);
+    }
+  };
+
+  const originalFetch = globalAny.fetch?.bind(globalAny);
+  if (typeof originalFetch === "function") {
+    globalAny.fetch = async (...args) => {
+      const input = args[0];
+      const init = args[1] || {};
+      const url = typeof input === "string" ? input : input?.url || "";
+      const method = String(init.method || (typeof input !== "string" && input?.method) || "GET").toUpperCase();
+      const headers = pickHeaders(init.headers || (typeof input !== "string" ? input?.headers : undefined));
+      const body = typeof init.body === "string" ? init.body : undefined;
+      const shouldCapture = isGraphQLTimelineUrl(url);
+      const response = await originalFetch(...args);
+
+      if (shouldCapture) {
+        let responseJson;
+        try {
+          responseJson = await response.clone().json();
+        } catch {
+          responseJson = undefined;
+        }
+        appendEntry({
+          ts: now(),
+          op: detectOperation(url),
+          url,
+          method,
+          headers,
+          body,
+          ok: response.ok,
+          status: response.status,
+          responseJson,
+        });
+      }
+      return response;
+    };
+  }
+
+  globalAny.__WEBMCP_X_CAPTURE__ = state;
+})();
+`;
 
 const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
   {
@@ -68,6 +163,11 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
           minimum: 1,
           maximum: MAX_TIMELINE_LIMIT,
         },
+        maxPages: {
+          type: "integer",
+          minimum: 1,
+          maximum: 20,
+        },
       },
       additionalProperties: false,
     },
@@ -100,6 +200,11 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
           type: "integer",
           minimum: 1,
           maximum: MAX_TIMELINE_LIMIT,
+        },
+        maxPages: {
+          type: "integer",
+          minimum: 1,
+          maximum: 20,
         },
       },
       additionalProperties: false,
@@ -168,6 +273,19 @@ function normalizeTimelineLimit(input: Record<string, unknown>): number {
     return DEFAULT_TIMELINE_LIMIT;
   }
   return Math.max(1, Math.min(MAX_TIMELINE_LIMIT, Math.floor(rawLimit)));
+}
+
+function readNumberInput(input: Record<string, unknown>, key: string, fallback: number, min: number, max: number): number {
+  const raw = input[key];
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.floor(raw)));
+}
+
+async function ensureNetworkCaptureInstalled(page: Page): Promise<void> {
+  await page.addInitScript(CAPTURE_INJECT_SCRIPT);
+  await page.evaluate(CAPTURE_INJECT_SCRIPT);
 }
 
 async function detectAuth(page: Page): Promise<AuthProbeResult> {
@@ -250,6 +368,310 @@ async function warmupAuthProbe(page: Page): Promise<void> {
     }
     await page.waitForTimeout(AUTH_STABILIZE_DELAY_MS);
   }
+}
+
+type TweetCard = {
+  id: string;
+  text: string;
+  url?: string;
+  author?: string;
+  createdAt?: string;
+};
+
+async function readTimelineViaNetwork(
+  page: Page,
+  options: {
+    mode: "home" | "bookmarks" | "tweet";
+    limit: number;
+    maxPages: number;
+    tweetId?: string;
+  },
+): Promise<{ items: TweetCard[]; source: "network" | "dom" }> {
+  const response = await page.evaluate(
+    async ({ mode, limit, maxPages, tweetId }) => {
+      const globalAny = window as unknown as {
+        __WEBMCP_X_CAPTURE__?: {
+          entries?: Array<{
+            op?: string;
+            url?: string;
+            method?: string;
+            headers?: Record<string, string>;
+            body?: string;
+            responseJson?: unknown;
+          }>;
+        };
+      };
+
+      const capture = globalAny.__WEBMCP_X_CAPTURE__;
+      const entries = Array.isArray(capture?.entries) ? capture.entries : [];
+
+      const pickTemplate = (): {
+        url: string;
+        method: string;
+        headers: Record<string, string>;
+        body?: string;
+      } | null => {
+        const acceptOps =
+          mode === "home"
+            ? ["HomeTimeline", "TweetDetail"]
+            : mode === "bookmarks"
+              ? ["BookmarksAll", "Bookmarks"]
+              : ["TweetDetail"];
+
+        for (let i = entries.length - 1; i >= 0; i -= 1) {
+          const entry = entries[i];
+          if (!entry || !entry.op || !entry.url || !entry.method) {
+            continue;
+          }
+          if (!acceptOps.includes(entry.op)) {
+            continue;
+          }
+          const output: {
+            url: string;
+            method: string;
+            headers: Record<string, string>;
+            body?: string;
+          } = {
+            url: entry.url,
+            method: entry.method,
+            headers: entry.headers ?? {},
+          };
+          if (entry.body !== undefined) {
+            output.body = entry.body;
+          }
+          return output;
+        }
+        return null;
+      };
+
+      const template = pickTemplate();
+      if (!template) {
+        return { items: [], source: "dom" as const };
+      }
+
+      const parseJsonSafely = (value: string | null): Record<string, unknown> => {
+        if (!value) {
+          return {};
+        }
+        try {
+          const parsed = JSON.parse(value);
+          return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+        } catch {
+          return {};
+        }
+      };
+
+      const normalizeText = (value: string): string => value.replace(/\s+/g, " ").trim();
+
+      const collectFromResult = (input: unknown): { items: TweetCard[]; nextCursor?: string } => {
+        const outputItems: TweetCard[] = [];
+        const seen = new Set<string>();
+        let nextCursor: string | undefined;
+
+        const visit = (value: unknown): void => {
+          if (!value || typeof value !== "object") {
+            return;
+          }
+          if (Array.isArray(value)) {
+            for (const item of value) {
+              visit(item);
+            }
+            return;
+          }
+          const record = value as Record<string, unknown>;
+          const entryId = typeof record.entryId === "string" ? record.entryId : "";
+          const content = (record.content ?? {}) as Record<string, unknown>;
+          const entryType = typeof content.entryType === "string" ? content.entryType : "";
+
+          if (!nextCursor && entryType === "TimelineTimelineCursor") {
+            const cursorType = typeof content.cursorType === "string" ? content.cursorType : "";
+            const cursorValue = typeof content.value === "string" ? content.value : "";
+            if (cursorType.toLowerCase().includes("bottom") && cursorValue) {
+              nextCursor = cursorValue;
+            }
+          }
+
+          if (entryId.includes("cursor-bottom") && !nextCursor) {
+            const cursorValue = typeof content.value === "string" ? content.value : "";
+            if (cursorValue) {
+              nextCursor = cursorValue;
+            }
+          }
+
+          const contentItem = (content.item as Record<string, unknown> | undefined) ?? undefined;
+          const contentItemContent = (contentItem?.itemContent as Record<string, unknown> | undefined) ?? undefined;
+          const itemContent = (content.itemContent as Record<string, unknown> | undefined) ?? contentItemContent;
+          const tweetResults = (itemContent?.tweet_results as Record<string, unknown> | undefined)?.result;
+          let tweet = tweetResults as Record<string, unknown> | undefined;
+          if (tweet && typeof tweet === "object" && "tweet" in tweet) {
+            tweet = tweet.tweet as Record<string, unknown>;
+          }
+          const restId = typeof tweet?.rest_id === "string" ? tweet.rest_id : "";
+          const legacy = (tweet?.legacy as Record<string, unknown> | undefined) ?? {};
+          const fullText =
+            typeof legacy.full_text === "string"
+              ? legacy.full_text
+              : typeof legacy.text === "string"
+                ? legacy.text
+                : "";
+          const noteText =
+            (((tweet?.note_tweet as Record<string, unknown> | undefined)?.note_tweet_results as Record<string, unknown> | undefined)
+              ?.result as Record<string, unknown> | undefined)?.text;
+          const text = normalizeText(typeof noteText === "string" && noteText ? noteText : fullText);
+
+          if (restId && text) {
+            const userResult = (((tweet?.core as Record<string, unknown> | undefined)?.user_results as Record<string, unknown> | undefined)
+              ?.result as Record<string, unknown> | undefined) ?? {};
+            const userLegacy = (userResult.legacy as Record<string, unknown> | undefined) ?? {};
+            const screenName = typeof userLegacy.screen_name === "string" ? userLegacy.screen_name : "";
+            const authorName = typeof userLegacy.name === "string" ? userLegacy.name : "";
+            const createdAt = typeof legacy.created_at === "string" ? legacy.created_at : undefined;
+            const key = `${restId}:${text}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              const item: TweetCard = {
+                id: restId,
+                text,
+              };
+              if (screenName) {
+                item.url = `https://x.com/${screenName}/status/${restId}`;
+                item.author = authorName ? `${authorName}@${screenName}` : `@${screenName}`;
+              }
+              if (createdAt) {
+                item.createdAt = createdAt;
+              }
+              outputItems.push(item);
+            }
+          }
+
+          for (const nested of Object.values(record)) {
+            visit(nested);
+          }
+        };
+
+        visit(input);
+        const result: { items: TweetCard[]; nextCursor?: string } = { items: outputItems };
+        if (nextCursor !== undefined) {
+          result.nextCursor = nextCursor;
+        }
+        return result;
+      };
+
+      const sanitizeHeaders = (headers: Record<string, string>): Record<string, string> => {
+        const blockedPrefixes = ["sec-", ":"];
+        const blockedExact = new Set(["host", "content-length", "cookie", "origin", "referer", "connection"]);
+        const output: Record<string, string> = {};
+        for (const [key, value] of Object.entries(headers)) {
+          const k = key.toLowerCase();
+          if (blockedExact.has(k)) {
+            continue;
+          }
+          if (blockedPrefixes.some((prefix) => k.startsWith(prefix))) {
+            continue;
+          }
+          output[k] = value;
+        }
+        return output;
+      };
+
+      const templateUrl = new URL(template.url, location.origin);
+      const templateVariables = parseJsonSafely(templateUrl.searchParams.get("variables"));
+      const templateFeatures = parseJsonSafely(templateUrl.searchParams.get("features"));
+      const templateFieldToggles = parseJsonSafely(templateUrl.searchParams.get("fieldToggles"));
+      const headers = sanitizeHeaders(template.headers);
+
+      let cursor: string | undefined;
+      const aggregate: TweetCard[] = [];
+      const dedupe = new Set<string>();
+
+      const applyLimit = (items: TweetCard[]): void => {
+        for (const item of items) {
+          const key = `${item.id}:${item.text}`;
+          if (dedupe.has(key)) {
+            continue;
+          }
+          dedupe.add(key);
+          aggregate.push(item);
+          if (aggregate.length >= limit) {
+            break;
+          }
+        }
+      };
+
+      const createRequestUrl = (): string => {
+        const vars = { ...templateVariables };
+        if (mode === "tweet" && tweetId) {
+          vars.focalTweetId = tweetId;
+        }
+        vars.count = Math.max(20, limit);
+        if (cursor) {
+          vars.cursor = cursor;
+        } else {
+          delete vars.cursor;
+        }
+        const next = new URL(template.url, location.origin);
+        next.searchParams.set("variables", JSON.stringify(vars));
+        if (Object.keys(templateFeatures).length > 0) {
+          next.searchParams.set("features", JSON.stringify(templateFeatures));
+        }
+        if (Object.keys(templateFieldToggles).length > 0) {
+          next.searchParams.set("fieldToggles", JSON.stringify(templateFieldToggles));
+        }
+        return next.toString();
+      };
+
+      for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+        const requestUrl = createRequestUrl();
+        let response: Response;
+        try {
+          response = await fetch(requestUrl, {
+            method: template.method,
+            headers,
+            credentials: "include",
+          });
+        } catch {
+          break;
+        }
+        if (!response.ok) {
+          break;
+        }
+        let responseJson: unknown;
+        try {
+          responseJson = await response.json();
+        } catch {
+          break;
+        }
+
+        const parsed = collectFromResult(responseJson);
+        applyLimit(parsed.items);
+        if (aggregate.length >= limit || !parsed.nextCursor) {
+          break;
+        }
+        cursor = parsed.nextCursor;
+      }
+
+      return {
+        items: aggregate.slice(0, limit),
+        source: aggregate.length > 0 ? ("network" as const) : ("dom" as const),
+      };
+    },
+    {
+      mode: options.mode,
+      limit: options.limit,
+      maxPages: options.maxPages,
+      tweetId: options.tweetId,
+    },
+  );
+
+  if (
+    !response ||
+    typeof response !== "object" ||
+    !("items" in response) ||
+    !Array.isArray((response as { items?: unknown }).items)
+  ) {
+    return { items: [], source: "dom" };
+  }
+  return response as { items: TweetCard[]; source: "network" | "dom" };
 }
 
 async function extractTweetCards(
@@ -342,6 +764,7 @@ async function withReadOnlyPage<T>(page: Page, url: string, run: (readPage: Page
   const context = page.context();
   const readPage = await context.newPage();
   try {
+    await ensureNetworkCaptureInstalled(readPage);
     await readPage.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await waitForTweetSurface(readPage);
     return await run(readPage);
@@ -362,8 +785,49 @@ async function waitForTweetSurface(page: Page): Promise<void> {
   await page.waitForTimeout(1_000);
 }
 
-async function readTimeline(page: Page, limit: number): Promise<Array<{ id: string; text: string; url?: string }>> {
+async function readTimeline(
+  page: Page,
+  limit: number,
+  maxPages: number,
+): Promise<Array<{ id: string; text: string; url?: string }>> {
   await waitForTweetSurface(page);
+  const fromNetwork = await readTimelineViaNetwork(page, {
+    mode: "home",
+    limit,
+    maxPages,
+  });
+  if (fromNetwork.items.length > 0) {
+    return fromNetwork.items.map((item) => {
+      const mapped: { id: string; text: string; url?: string } = {
+        id: item.id,
+        text: item.text,
+      };
+      if (item.url) {
+        mapped.url = item.url;
+      }
+      return mapped;
+    });
+  }
+  const fromReadOnly = await withReadOnlyPage(page, "https://x.com/home", async (readPage) => {
+    const network = await readTimelineViaNetwork(readPage, {
+      mode: "home",
+      limit,
+      maxPages,
+    });
+    return network.items;
+  });
+  if (fromReadOnly.length > 0) {
+    return fromReadOnly.map((item) => {
+      const mapped: { id: string; text: string; url?: string } = {
+        id: item.id,
+        text: item.text,
+      };
+      if (item.url) {
+        mapped.url = item.url;
+      }
+      return mapped;
+    });
+  }
   const cards = await extractTweetCards(page, limit);
   return cards.map((card) => {
     const item: { id: string; text: string; url?: string } = {
@@ -379,6 +843,19 @@ async function readTimeline(page: Page, limit: number): Promise<Array<{ id: stri
 
 async function readTweetByUrl(page: Page, url: string): Promise<JsonValue> {
   return await withReadOnlyPage(page, url, async (readPage) => {
+    const matchId = url.match(/status\/(\d+)/)?.[1];
+      if (matchId) {
+        const fromNetwork = await readTimelineViaNetwork(readPage, {
+          mode: "tweet",
+          limit: 1,
+          maxPages: 1,
+          tweetId: matchId,
+        });
+        const first = fromNetwork.items[0];
+        if (first) {
+          return { tweet: first };
+        }
+      }
     const cards = await extractTweetCards(readPage, 1);
     const tweet = cards[0];
     if (!tweet) {
@@ -667,6 +1144,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
   return {
     name: "adapter-x",
     start: async ({ page }) => {
+      await ensureNetworkCaptureInstalled(page);
       await page.waitForLoadState("domcontentloaded").catch(() => {
         // Keep startup best-effort; auth probing will still run.
       });
@@ -699,7 +1177,8 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         }
 
         const limit = normalizeTimelineLimit(args);
-        const items = await readTimeline(page, limit);
+        const maxPages = readNumberInput(args, "maxPages", DEFAULT_MAX_NETWORK_PAGES, 1, 20);
+        const items = await readTimeline(page, limit, maxPages);
         return { items };
       }
 
@@ -723,8 +1202,27 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
           return authCheck.result;
         }
         const limit = normalizeTimelineLimit(args);
+        const maxPages = readNumberInput(args, "maxPages", DEFAULT_MAX_NETWORK_PAGES, 1, 20);
         return await withReadOnlyPage(page, "https://x.com/i/bookmarks", async (readPage) => {
-          const items = await readTimeline(readPage, limit);
+          await waitForTweetSurface(readPage);
+          const network = await readTimelineViaNetwork(readPage, {
+            mode: "bookmarks",
+            limit,
+            maxPages,
+          });
+          const items =
+            network.items.length > 0
+              ? network.items.map((item) => {
+                  const mapped: { id: string; text: string; url?: string } = {
+                    id: item.id,
+                    text: item.text,
+                  };
+                  if (item.url) {
+                    mapped.url = item.url;
+                  }
+                  return mapped;
+                })
+              : await readTimeline(readPage, limit, 1);
           return { items };
         });
       }

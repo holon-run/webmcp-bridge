@@ -27,6 +27,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   };
 
   const page = {
+    addInitScript: vi.fn(async () => {}),
     evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
       if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
         return undefined;
@@ -57,6 +58,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     waitForSelector: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
     waitForTimeout: vi.fn(async () => {}),
     waitForLoadState: vi.fn(async () => {}),
+    reload: vi.fn(async () => {}),
     waitForFunction: vi.fn(async () => {
       if (!behavior.confirmCompose) {
         throw new Error("timeout");
@@ -68,8 +70,11 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     context: vi.fn(() => ({
       newPage: vi.fn(async () => ({
         evaluate: page.evaluate,
+        addInitScript: vi.fn(async () => {}),
         goto: vi.fn(async () => {}),
         waitForTimeout: vi.fn(async () => {}),
+        waitForFunction: vi.fn(async () => true),
+        reload: vi.fn(async () => {}),
         close: vi.fn(async () => {}),
       })),
     })),
