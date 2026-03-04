@@ -1,5 +1,5 @@
 {
-  "name": "@webmcp-bridge/example-playwright-x",
+  "name": "@webmcp-bridge/example-adapter-template",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -9,8 +9,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@webmcp-bridge/adapter-x": "workspace:*",
-    "@webmcp-bridge/playwright": "workspace:*",
-    "playwright": "^1.58.2"
+    "@webmcp-bridge/core": "workspace:*",
+    "@webmcp-bridge/playwright": "workspace:*"
   }
 }

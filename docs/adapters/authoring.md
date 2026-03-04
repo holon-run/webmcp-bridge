@@ -82,6 +82,10 @@ Run with:
 webmcp-local-mcp --adapter-module @your-scope/webmcp-adapter --headless
 ```
 
+Repository template:
+
+- [examples/adapter-template](/Users/jolestar/opensource/src/github.com/holon-run/webmcp-bridge/examples/adapter-template)
+
 ## Naming and schema guidance
 
 - Use stable, product-oriented names: `tweet.get`, `timeline.home.list`, `user.get`.
