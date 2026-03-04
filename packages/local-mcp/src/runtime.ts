@@ -45,6 +45,53 @@ export type LocalMcpRuntime = {
   close: () => Promise<void>;
 };
 
+function normalizeHost(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function matchesHostPattern(host: string, pattern: string): boolean {
+  const normalizedHost = normalizeHost(host);
+  const normalizedPattern = normalizeHost(pattern);
+  if (!normalizedPattern) {
+    return false;
+  }
+  if (normalizedPattern.startsWith("*.")) {
+    const suffix = normalizedPattern.slice(2);
+    if (!suffix) {
+      return false;
+    }
+    if (normalizedHost === suffix) {
+      return false;
+    }
+    return normalizedHost.endsWith(`.${suffix}`);
+  }
+  return normalizedHost === normalizedPattern;
+}
+
+export function isUrlAllowed(url: string, hostPatterns: string[]): boolean {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return false;
+  }
+  if (target.protocol === "about:") {
+    return target.href === "about:blank" && hostPatterns.includes("about:blank");
+  }
+  if (target.protocol !== "https:" && target.protocol !== "http:") {
+    return false;
+  }
+  return hostPatterns.some((pattern) => matchesHostPattern(target.hostname, pattern));
+}
+
+export function resolveTargetUrl(urlOverride: string | undefined, defaultUrl: string | undefined): string {
+  const targetUrl = (urlOverride && urlOverride.trim()) || (defaultUrl && defaultUrl.trim()) || "";
+  if (!targetUrl) {
+    throw new Error("CONFIG_ERROR: no target url provided (missing --url and manifest.defaultUrl)");
+  }
+  return targetUrl;
+}
+
 function resolveBrowserType(browser: BrowserEngine): BrowserType {
   if (browser === "firefox") {
     return firefox;
@@ -60,7 +107,10 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   const browserEngine = options.browser ?? "chromium";
   const headless = options.headless ?? false;
   const browserType = resolveBrowserType(browserEngine);
-  const targetUrl = options.url ?? site.defaultUrl;
+  const targetUrl = resolveTargetUrl(options.url, site.manifest.defaultUrl);
+  if (!isUrlAllowed(targetUrl, site.manifest.hostPatterns)) {
+    throw new Error("URL_NOT_ALLOWED: target url host is not allowed by adapter hostPatterns");
+  }
 
   let profileDirFromTemp = false;
   const userDataDir = options.userDataDir ?? (await mkdtemp(join(tmpdir(), "webmcp-local-mcp-")));

@@ -15,12 +15,26 @@ export type WebMcpToolDefinition = {
   };
 };
 
+export type AdapterManifest = {
+  id: string;
+  displayName: string;
+  version: string;
+  bridgeApiVersion: string;
+  defaultUrl?: string;
+  hostPatterns: string[];
+};
+
 export type SiteAdapter = {
   name: string;
   listTools: (context: { page: Page }) => Promise<Array<WebMcpToolDefinition>>;
   callTool: (request: { name: string; input: JsonValue }, context: { page: Page }) => Promise<JsonValue>;
   start?: (context: { page: Page }) => Promise<void>;
   stop?: (context: { page: Page }) => Promise<void>;
+};
+
+export type SiteAdapterModule = {
+  manifest: AdapterManifest;
+  createAdapter: () => SiteAdapter;
 };
 
 export type CreateWebMcpPageGatewayOptions = {

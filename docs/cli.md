@@ -12,7 +12,7 @@ node packages/local-mcp/dist/cli.js --site <site> [options]
 ## Options
 
 - `--site <site>`: required site id (`x` or `fixture`).
-- `--url <url>`: override the default URL for the site.
+- `--url <url>`: override the adapter default URL (`manifest.defaultUrl`), validated by adapter `hostPatterns`.
 - `--browser <name>`: `chromium` | `firefox` | `webkit`.
 - `--headless`: launch browser in headless mode.
 - `--no-headless`: force headed mode.
@@ -27,3 +27,4 @@ node packages/local-mcp/dist/cli.js --site <site> [options]
 - Native-first: if page has native `navigator.modelContext`, calls route to native WebMCP.
 - Shim fallback: if native is unavailable, local-mcp injects shim and uses site fallback adapter.
 - Stdio transport only in MVP; no Unix socket mode.
+- URL selection is `--url` first, otherwise adapter `manifest.defaultUrl`; startup fails closed if target host is outside adapter `hostPatterns`.

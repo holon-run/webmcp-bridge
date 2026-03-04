@@ -16,7 +16,7 @@ Required:
   --site <site>                Supported site id (currently: x, fixture)
 
 Optional:
-  --url <url>                  Override default site URL
+  --url <url>                  Override adapter default URL (validated by hostPatterns)
   --browser <name>             chromium | firefox | webkit (default: chromium)
   --headless                   Run browser in headless mode (default: false)
   --no-headless                Force headed mode

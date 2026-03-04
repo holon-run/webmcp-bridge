@@ -45,3 +45,4 @@ pnpm build
 
 - Only supports actions in already-authenticated user sessions.
 - Does not manage credentials or bypass platform controls.
+- Target URL defaults to adapter manifest and can be overridden by CLI, but must match adapter host allowlist.

@@ -57,12 +57,14 @@ describe("parseCliArgs", () => {
 describe("resolveSiteDefinition", () => {
   it("resolves x site preset", () => {
     const site = resolveSiteDefinition("x");
-    expect(site.defaultUrl).toContain("x.com");
+    expect(site.manifest.defaultUrl).toContain("x.com");
+    expect(site.manifest.hostPatterns).toContain("x.com");
   });
 
   it("resolves fixture site preset", () => {
     const site = resolveSiteDefinition("fixture");
-    expect(site.defaultUrl).toBe("about:blank");
+    expect(site.manifest.defaultUrl).toBe("about:blank");
+    expect(site.manifest.hostPatterns).toContain("about:blank");
   });
 
   it("throws on unsupported site", () => {

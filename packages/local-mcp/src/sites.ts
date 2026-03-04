@@ -3,27 +3,33 @@
  * It depends on adapter packages and is used by runtime startup to resolve site-specific defaults.
  */
 
-import { createFixtureAdapter } from "@webmcp-bridge/adapter-fixture";
-import { createXAdapter } from "@webmcp-bridge/adapter-x";
-import type { SiteAdapter } from "@webmcp-bridge/playwright";
+import {
+  createAdapter as createFixtureAdapter,
+  manifest as fixtureManifest,
+} from "@webmcp-bridge/adapter-fixture";
+import {
+  createAdapter as createXAdapter,
+  manifest as xManifest,
+} from "@webmcp-bridge/adapter-x";
+import type { AdapterManifest, SiteAdapter } from "@webmcp-bridge/playwright";
 
 export type SupportedSite = "x" | "fixture";
 
 export type SiteDefinition = {
   id: SupportedSite;
-  defaultUrl: string;
+  manifest: AdapterManifest;
   createFallbackAdapter: () => SiteAdapter;
 };
 
 const SITE_DEFINITIONS: Record<SupportedSite, SiteDefinition> = {
   x: {
     id: "x",
-    defaultUrl: "https://x.com/home",
+    manifest: xManifest,
     createFallbackAdapter: () => createXAdapter(),
   },
   fixture: {
     id: "fixture",
-    defaultUrl: "about:blank",
+    manifest: fixtureManifest,
     createFallbackAdapter: () => createFixtureAdapter(),
   },
 };
