@@ -121,7 +121,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
 
   private toCallToolResult(value: JsonValue): CallToolResult {
     if (this.isCallToolResultPayload(value)) {
-      return this.ensureContentText(value as unknown as CallToolResult);
+      return value as unknown as CallToolResult;
     }
 
     const result: CallToolResult = {
@@ -131,32 +131,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     if (this.isErrorPayload(value)) {
       result.isError = true;
     }
-    return this.ensureContentText(result);
-  }
-
-  private ensureContentText(result: CallToolResult): CallToolResult {
-    const hasContent = Array.isArray(result.content) && result.content.length > 0;
-    if (hasContent) {
-      return result;
-    }
-
-    const structured = result.structuredContent;
-    if (structured === undefined) {
-      return {
-        ...result,
-        content: [],
-      };
-    }
-
-    return {
-      ...result,
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(structured),
-        },
-      ],
-    };
+    return result;
   }
 
   private isCallToolResultPayload(value: JsonValue): boolean {
