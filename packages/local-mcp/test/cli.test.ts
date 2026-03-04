@@ -1,5 +1,5 @@
 /**
- * This module tests local-mcp CLI argument parsing and site resolution behavior.
+ * This module tests local-mcp CLI argument parsing and built-in site resolution behavior.
  * It depends on CLI and site modules to validate deterministic startup option handling.
  */
 
@@ -8,7 +8,7 @@ import { parseCliArgs } from "../src/cli.js";
 import { resolveSiteDefinition } from "../src/sites.js";
 
 describe("parseCliArgs", () => {
-  it("parses required and optional flags", () => {
+  it("parses built-in site with optional flags", () => {
     const parsed = parseCliArgs([
       "--site",
       "x",
@@ -31,8 +31,20 @@ describe("parseCliArgs", () => {
     });
   });
 
-  it("throws on missing required --site", () => {
-    expect(() => parseCliArgs([])).toThrow("missing required --site");
+  it("parses external adapter module", () => {
+    const parsed = parseCliArgs(["--adapter-module", "@example/webmcp-adapter"]);
+    expect(parsed.adapterModule).toBe("@example/webmcp-adapter");
+    expect(parsed.site).toBeUndefined();
+  });
+
+  it("throws on missing required source", () => {
+    expect(() => parseCliArgs([])).toThrow("missing required --site or --adapter-module");
+  });
+
+  it("throws when site and adapter-module are both set", () => {
+    expect(() => parseCliArgs(["--site", "x", "--adapter-module", "./adapter.mjs"])).toThrow(
+      "use either --site or --adapter-module, not both",
+    );
   });
 
   it("parses fixture site id", () => {

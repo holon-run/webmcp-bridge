@@ -164,6 +164,29 @@ describe("createLocalMcpStdioServer", () => {
     });
   });
 
+  it("does not pass through invalid CallToolResult-like payload", async () => {
+    gateway.callTool.mockResolvedValueOnce({
+      structuredContent: "invalid",
+    });
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "3c",
+      method: "tools/call",
+      params: {
+        name: "ping",
+        arguments: {},
+      },
+    });
+
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      content: [],
+      structuredContent: {
+        structuredContent: "invalid",
+      },
+    });
+  });
+
   it("returns method-not-found on unknown method", async () => {
     const response = await request({
       jsonrpc: "2.0",

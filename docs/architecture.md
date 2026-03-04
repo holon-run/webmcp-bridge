@@ -10,6 +10,7 @@
 Current adapter roles:
 - `adapter-x`: real X/Twitter fallback adapter.
 - `adapter-fixture`: deterministic integration-test adapter.
+- external adapter modules: third-party packages loaded by `--adapter-module`.
 
 ## Runtime flow
 

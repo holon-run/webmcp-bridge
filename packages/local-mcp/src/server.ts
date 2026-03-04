@@ -134,11 +134,41 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     return result;
   }
 
-  private isCallToolResultPayload(value: JsonValue): boolean {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+
+  private isContentArray(value: unknown): value is Array<Record<string, unknown>> {
+    if (!Array.isArray(value)) {
       return false;
     }
-    return "content" in value || "structuredContent" in value || "isError" in value;
+    return value.every((item) => this.isRecord(item) && typeof item.type === "string");
+  }
+
+  private isCallToolResultPayload(value: JsonValue): boolean {
+    if (!this.isRecord(value)) {
+      return false;
+    }
+    let hasKnownField = false;
+    if ("content" in value) {
+      hasKnownField = true;
+      if (!this.isContentArray(value.content)) {
+        return false;
+      }
+    }
+    if ("structuredContent" in value) {
+      hasKnownField = true;
+      if (!this.isRecord(value.structuredContent)) {
+        return false;
+      }
+    }
+    if ("isError" in value) {
+      hasKnownField = true;
+      if (typeof value.isError !== "boolean") {
+        return false;
+      }
+    }
+    return hasKnownField;
   }
 
   private isErrorPayload(value: JsonValue): boolean {

@@ -22,6 +22,7 @@ export type AdapterManifest = {
   bridgeApiVersion: string;
   defaultUrl?: string;
   hostPatterns: string[];
+  authProbeTool?: string;
 };
 
 export type SiteAdapter = {

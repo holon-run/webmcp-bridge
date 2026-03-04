@@ -1,6 +1,6 @@
 /**
  * This module boots a Playwright page and WebMCP gateway for one target site session.
- * It depends on site presets and Playwright gateway APIs so local-mcp can proxy browser-side tool execution.
+ * It depends on resolved site definitions and Playwright gateway APIs so local-mcp can proxy browser-side tool execution.
  */
 
 import { mkdtemp, rm } from "node:fs/promises";
@@ -22,12 +22,12 @@ import {
   type Page,
 } from "playwright";
 import type { LocalMcpGateway } from "./server.js";
-import { resolveSiteDefinition, type SupportedSite } from "./sites.js";
+import type { SiteDefinition } from "./sites.js";
 
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
 
 export type LocalMcpRuntimeOptions = {
-  site: SupportedSite;
+  siteDefinition: SiteDefinition;
   url?: string;
   browser?: BrowserEngine;
   headless?: boolean;
@@ -36,7 +36,8 @@ export type LocalMcpRuntimeOptions = {
 };
 
 export type LocalMcpRuntime = {
-  site: SupportedSite;
+  site: string;
+  siteDefinition: SiteDefinition;
   targetUrl: string;
   mode: "native" | "shim";
   headless: boolean;
@@ -103,7 +104,7 @@ function resolveBrowserType(browser: BrowserEngine): BrowserType {
 }
 
 export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Promise<LocalMcpRuntime> {
-  const site = resolveSiteDefinition(options.site);
+  const site = options.siteDefinition;
   const browserEngine = options.browser ?? "chromium";
   const headless = options.headless ?? false;
   const browserType = resolveBrowserType(browserEngine);
@@ -169,7 +170,8 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     };
 
     return {
-      site: options.site,
+      site: site.id,
+      siteDefinition: site,
       targetUrl,
       mode: gatewaySession.mode,
       headless,

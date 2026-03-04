@@ -6,14 +6,16 @@
 
 import { pathToFileURL } from "node:url";
 import { startLocalMcpBridge } from "./bridge.js";
-import { resolveSiteDefinition, type SupportedSite } from "./sites.js";
+import { resolveSiteDefinition, type BuiltinSite } from "./sites.js";
 import type { BrowserEngine } from "./runtime.js";
 
 const USAGE = `Usage:
-  webmcp-local-mcp --site <site> [options]
+  webmcp-local-mcp (--site <site> | --adapter-module <specifier>) [options]
 
 Required:
-  --site <site>                Supported site id (currently: x, fixture)
+  One of:
+  --site <site>                Built-in site id (currently: x, fixture)
+  --adapter-module <specifier> External adapter module (npm package, file path, or file:// URL)
 
 Optional:
   --url <url>                  Override adapter default URL (validated by hostPatterns)
@@ -28,7 +30,8 @@ Optional:
 `;
 
 export type LocalMcpCliOptions = {
-  site: SupportedSite;
+  site?: BuiltinSite;
+  adapterModule?: string;
   url?: string;
   browser: BrowserEngine;
   headless: boolean;
@@ -46,7 +49,8 @@ function parseFlagValue(args: string[], index: number, flag: string): string {
 }
 
 export function parseCliArgs(args: string[]): LocalMcpCliOptions {
-  let site: string | undefined;
+  let site: BuiltinSite | undefined;
+  let adapterModule: string | undefined;
   let url: string | undefined;
   let browser: BrowserEngine = "chromium";
   let headless = false;
@@ -58,7 +62,14 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
     const arg = args[i];
 
     if (arg === "--site") {
-      site = parseFlagValue(args, i, "--site");
+      const value = parseFlagValue(args, i, "--site");
+      site = resolveSiteDefinition(value).id as BuiltinSite;
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--adapter-module") {
+      adapterModule = parseFlagValue(args, i, "--adapter-module");
       i += 1;
       continue;
     }
@@ -114,20 +125,27 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
     throw new Error(`unknown argument: ${arg}`);
   }
 
-  if (!site) {
-    throw new Error("missing required --site");
+  if (site && adapterModule) {
+    throw new Error("use either --site or --adapter-module, not both");
   }
 
-  const siteDefinition = resolveSiteDefinition(site);
+  if (!site && !adapterModule) {
+    throw new Error("missing required --site or --adapter-module");
+  }
 
   const options: LocalMcpCliOptions = {
-    site: siteDefinition.id,
     browser,
     headless,
     autoLoginFallback,
     serviceVersion,
   };
 
+  if (site !== undefined) {
+    options.site = site;
+  }
+  if (adapterModule !== undefined) {
+    options.adapterModule = adapterModule;
+  }
   if (url !== undefined) {
     options.url = url;
   }
@@ -163,6 +181,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
 
   const handle = await startLocalMcpBridge({
     ...options,
+    moduleBaseDir: process.cwd(),
     onError: (error) => {
       const message = error instanceof Error ? error.stack ?? error.message : String(error);
       process.stderr.write(`${message}\n`);

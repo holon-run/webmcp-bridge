@@ -14,11 +14,13 @@
 - `tweet.create`: submit a text post with optional `dryRun`.
 
 `timeline.home.list`, `timeline.user.list`, `search.tweets.list`, and `favorites.list` support incremental pagination with:
+
 - input: `limit`, optional `cursor`
 - output: `items`, `source` (`network` or `dom`), `hasMore`, optional `nextCursor`
 - when `source=dom`, `debug.reason` explains fallback cause (for example `no_template`, `http_error_403`, `empty_result`)
 
 `search.tweets.list` input:
+
 - `query` (required)
 - `mode` (optional, `latest` by default, allowed `top | latest`)
 - `limit`, `cursor` (optional)
@@ -36,30 +38,55 @@
 - Network template capture hooks both `fetch` and `XMLHttpRequest`, with a lightweight warmup (scroll/reload) before fallback.
 - Template metadata is cached at process scope (`home` / `bookmarks` / `tweet` / `user_timeline` / `search`) and reused when current-page capture is temporarily unavailable.
 
-## Pagination examples
+## MCP call examples
 
-Home timeline:
+Home timeline first page:
 
-```bash
-x-webmcp-cli timeline.home.list --input '{"limit":10}'
-x-webmcp-cli timeline.home.list --input '{"limit":10,"cursor":"<nextCursor>"}'
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "timeline.home.list",
+    "arguments": { "limit": 10 }
+  }
+}
+```
+
+Home timeline next page:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "timeline.home.list",
+    "arguments": { "limit": 10, "cursor": "<nextCursor>" }
+  }
+}
 ```
 
 User timeline:
 
-```bash
-x-webmcp-cli timeline.user.list --input '{"username":"jack","limit":10}'
-x-webmcp-cli timeline.user.list --input '{"username":"jack","limit":10,"cursor":"<nextCursor>"}'
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "timeline.user.list",
+    "arguments": { "username": "jack", "limit": 10 }
+  }
+}
 ```
 
 Search tweets:
 
-```bash
-x-webmcp-cli search.tweets.list --input '{"query":"playwright","mode":"latest","limit":10}'
-x-webmcp-cli search.tweets.list --input '{"query":"playwright","mode":"latest","limit":10,"cursor":"<nextCursor>"}'
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "search.tweets.list",
+    "arguments": { "query": "playwright", "mode": "latest", "limit": 10 }
+  }
+}
 ```
-
-`timeline.list` has been removed in this phase. Use `timeline.home.list` instead.
 
 ## Known limits
 

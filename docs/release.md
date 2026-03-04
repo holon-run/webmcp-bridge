@@ -10,13 +10,19 @@ pnpm changeset version
 pnpm changeset publish
 ```
 
-## v0.1 release scope
+## Package channels
 
-Published:
+Public packages:
+
 - `@webmcp-bridge/core`
 - `@webmcp-bridge/playwright`
 - `@webmcp-bridge/adapter-fixture`
 - `@webmcp-bridge/adapter-x`
+- `@webmcp-bridge/local-mcp` (beta tag)
+- `@webmcp-bridge/testkit`
 
-Architecture-critical but currently private:
-- `@webmcp-bridge/local-mcp` (stdio MCP site session host and page-gateway proxy entrypoint)
+## Beta policy (`0.x`)
+
+- `@webmcp-bridge/local-mcp` is published as beta.
+- Breaking changes are allowed while APIs are still stabilizing.
+- Every breaking change must be recorded in changesets/changelog.
