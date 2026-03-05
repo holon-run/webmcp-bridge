@@ -14,7 +14,12 @@ import {
   type LocalMcpRuntime,
   type BrowserEngine,
 } from "./runtime.js";
-import { resolveSiteSource, type BuiltinSite, type SiteDefinition } from "./sites.js";
+import {
+  createNativeSiteDefinition,
+  resolveSiteSource,
+  type BuiltinSite,
+  type SiteDefinition,
+} from "./sites.js";
 
 export type StartLocalMcpBridgeOptions = {
   site?: BuiltinSite;
@@ -85,24 +90,38 @@ async function startRuntime(
 }
 
 async function resolveRuntime(options: StartLocalMcpBridgeOptions): Promise<LocalMcpRuntime> {
-  const sourceOptions = {} as {
-    site?: string;
-    adapterModule?: string;
-    moduleBaseDir?: string;
-  };
-  if (options.site !== undefined) {
-    sourceOptions.site = options.site;
+  const hasAdapterSource = Boolean(options.site || options.adapterModule);
+  let siteDefinition: SiteDefinition;
+  if (hasAdapterSource) {
+    const sourceOptions = {} as {
+      site?: string;
+      adapterModule?: string;
+      moduleBaseDir?: string;
+    };
+    if (options.site !== undefined) {
+      sourceOptions.site = options.site;
+    }
+    if (options.adapterModule !== undefined) {
+      sourceOptions.adapterModule = options.adapterModule;
+    }
+    if (options.moduleBaseDir !== undefined) {
+      sourceOptions.moduleBaseDir = options.moduleBaseDir;
+    }
+    siteDefinition = await resolveSiteSource(sourceOptions);
+  } else if (options.url) {
+    siteDefinition = createNativeSiteDefinition(options.url);
+  } else {
+    throw new Error("CONFIG_ERROR: provide --url or one of --site/--adapter-module");
   }
-  if (options.adapterModule !== undefined) {
-    sourceOptions.adapterModule = options.adapterModule;
-  }
-  if (options.moduleBaseDir !== undefined) {
-    sourceOptions.moduleBaseDir = options.moduleBaseDir;
-  }
-  const siteDefinition = await resolveSiteSource(sourceOptions);
 
   const requestedHeadless = options.headless ?? false;
   const primary = await startRuntime(options, siteDefinition, requestedHeadless);
+  if (!hasAdapterSource && primary.mode !== "native") {
+    await primary.close();
+    throw new Error(
+      "NATIVE_ONLY_UNAVAILABLE: page does not expose native WebMCP; provide --site or --adapter-module for shim fallback",
+    );
+  }
 
   const autoLoginFallback = options.autoLoginFallback ?? true;
   const authProbeTool = siteDefinition.manifest.authProbeTool;

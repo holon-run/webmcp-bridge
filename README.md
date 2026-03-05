@@ -21,6 +21,22 @@ The runtime is native-first: if the page exposes native WebMCP, calls go to nati
 ```bash
 pnpm install
 pnpm --filter @webmcp-bridge/local-mcp build
+node packages/local-mcp/dist/cli.js --url https://www.meetcursive.com --headless
+```
+
+Native WebMCP demo with `uxc` shortcut:
+
+```bash
+uxc link cursive-webmcp \
+  "node /Users/jolestar/opensource/src/github.com/holon-run/webmcp-bridge/packages/local-mcp/dist/cli.js --url https://www.meetcursive.com --headless --user-data-dir ~/.uxc/playwright-profile" \
+  --daemon-exclusive ~/.uxc/playwright-profile
+
+cursive-webmcp -h --text
+```
+
+Built-in fallback adapter mode:
+
+```bash
 node packages/local-mcp/dist/cli.js --site x --headless
 ```
 

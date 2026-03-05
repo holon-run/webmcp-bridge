@@ -37,8 +37,15 @@ describe("parseCliArgs", () => {
     expect(parsed.site).toBeUndefined();
   });
 
-  it("throws on missing required source", () => {
-    expect(() => parseCliArgs([])).toThrow("missing required --site or --adapter-module");
+  it("parses native-only mode when url is provided without adapter source", () => {
+    const parsed = parseCliArgs(["--url", "https://www.meetcursive.com"]);
+    expect(parsed.site).toBeUndefined();
+    expect(parsed.adapterModule).toBeUndefined();
+    expect(parsed.url).toBe("https://www.meetcursive.com");
+  });
+
+  it("throws on missing required source and url", () => {
+    expect(() => parseCliArgs([])).toThrow("missing required --url or one of --site/--adapter-module");
   });
 
   it("throws when site and adapter-module are both set", () => {

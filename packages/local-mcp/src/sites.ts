@@ -23,9 +23,9 @@ export type BuiltinSite = "x" | "fixture";
 
 export type SiteDefinition = {
   id: string;
-  source: "builtin" | "external";
+  source: "builtin" | "external" | "native";
   manifest: AdapterManifest;
-  createFallbackAdapter: () => SiteAdapter;
+  createFallbackAdapter?: () => SiteAdapter;
   adapterModule?: string;
 };
 
@@ -173,6 +173,48 @@ export function resolveSiteDefinition(site: string): SiteDefinition {
     return BUILTIN_SITE_DEFINITIONS[site as BuiltinSite];
   }
   throw new Error(`unsupported site: ${site}`);
+}
+
+export function createNativeSiteDefinition(url: string): SiteDefinition {
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl) {
+    throw new Error("CONFIG_ERROR: --url is required when --site/--adapter-module is not provided");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmedUrl);
+  } catch {
+    throw new Error("CONFIG_ERROR: --url must be a valid absolute URL");
+  }
+
+  let hostPatterns: string[];
+  let id: string;
+  if (parsed.protocol === "about:") {
+    if (parsed.href !== "about:blank") {
+      throw new Error("CONFIG_ERROR: native-only mode supports about:blank only for about: URLs");
+    }
+    hostPatterns = ["about:blank"];
+    id = "native:about-blank";
+  } else if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+    hostPatterns = [parsed.hostname];
+    id = `native:${parsed.hostname}`;
+  } else {
+    throw new Error("CONFIG_ERROR: --url must use http:, https:, or about:blank");
+  }
+
+  return {
+    id,
+    source: "native",
+    manifest: {
+      id,
+      displayName: "Native WebMCP Site",
+      version: "0.1.0",
+      bridgeApiVersion: "1.0.0",
+      defaultUrl: parsed.href,
+      hostPatterns,
+    },
+  };
 }
 
 export async function resolveSiteSource(options: ResolveSiteSourceOptions): Promise<SiteDefinition> {

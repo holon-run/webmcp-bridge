@@ -7,7 +7,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveSiteSource } from "../src/sites.js";
+import { createNativeSiteDefinition, resolveSiteSource } from "../src/sites.js";
 
 const tempDirs: string[] = [];
 
@@ -119,5 +119,26 @@ describe("resolveSiteSource", () => {
         adapterModule: module.path,
       }),
     ).rejects.toThrow("ADAPTER_CONTRACT_ERROR: adapter module must export createAdapter()");
+  });
+});
+
+describe("createNativeSiteDefinition", () => {
+  it("creates native-only definition from https url", () => {
+    const site = createNativeSiteDefinition("https://www.meetcursive.com");
+    expect(site.source).toBe("native");
+    expect(site.manifest.defaultUrl).toBe("https://www.meetcursive.com/");
+    expect(site.manifest.hostPatterns).toEqual(["www.meetcursive.com"]);
+    expect(site.createFallbackAdapter).toBeUndefined();
+  });
+
+  it("supports about:blank", () => {
+    const site = createNativeSiteDefinition("about:blank");
+    expect(site.manifest.hostPatterns).toEqual(["about:blank"]);
+  });
+
+  it("rejects invalid url", () => {
+    expect(() => createNativeSiteDefinition("not-a-url")).toThrow(
+      "CONFIG_ERROR: --url must be a valid absolute URL",
+    );
   });
 });

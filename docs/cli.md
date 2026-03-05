@@ -8,18 +8,18 @@ Each process binds one website session and proxies that page's WebMCP tools.
 ## Usage
 
 ```bash
-node packages/local-mcp/dist/cli.js (--site <site> | --adapter-module <specifier>) [options]
+node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier>] [options]
 ```
 
 ## Source selection
 
 - `--site <site>`: use built-in adapter preset (`x` or `fixture`).
 - `--adapter-module <specifier>`: use external adapter module (`npm` package name, file path, or `file://` URL).
-- Exactly one of `--site` or `--adapter-module` must be provided.
+- If neither `--site` nor `--adapter-module` is provided, `--url` runs in native-only mode (no shim fallback).
 
 ## Options
 
-- `--url <url>`: override adapter default URL (`manifest.defaultUrl`), validated by adapter `hostPatterns`.
+- `--url <url>`: target URL in native-only mode; otherwise overrides adapter default URL (`manifest.defaultUrl`).
 - `--browser <name>`: `chromium` | `firefox` | `webkit`.
 - `--headless`: launch browser in headless mode.
 - `--no-headless`: force headed mode.
@@ -33,5 +33,14 @@ node packages/local-mcp/dist/cli.js (--site <site> | --adapter-module <specifier
 
 - Native-first: if page has native `navigator.modelContext`, calls route to native WebMCP.
 - Shim fallback: if native is unavailable, local-mcp uses fallback adapter logic.
+- Native-only mode: without `--site`/`--adapter-module`, startup fails closed when target page has no native WebMCP.
 - URL selection is `--url` first, otherwise adapter `manifest.defaultUrl`; startup fails closed if target host is outside adapter `hostPatterns`.
 - Stdio transport only in MVP.
+
+## `uxc` demo shortcut
+
+```bash
+uxc link cursive-webmcp \
+  "node /Users/jolestar/opensource/src/github.com/holon-run/webmcp-bridge/packages/local-mcp/dist/cli.js --url https://www.meetcursive.com --headless --user-data-dir ~/.uxc/playwright-profile" \
+  --daemon-exclusive ~/.uxc/playwright-profile
+```

@@ -145,9 +145,12 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
 
     const gatewayOptions: CreateWebMcpPageGatewayOptions = {
-      fallbackAdapter: site.createFallbackAdapter(),
       preferNative: options.preferNative ?? true,
     };
+    const fallbackAdapterFactory = site.createFallbackAdapter;
+    if (fallbackAdapterFactory) {
+      gatewayOptions.fallbackAdapter = fallbackAdapterFactory();
+    }
     gatewaySession = await createWebMcpPageGateway(page, gatewayOptions);
     const pageGateway = gatewaySession;
 

@@ -10,15 +10,15 @@ import { resolveSiteDefinition, type BuiltinSite } from "./sites.js";
 import type { BrowserEngine } from "./runtime.js";
 
 const USAGE = `Usage:
-  webmcp-local-mcp (--site <site> | --adapter-module <specifier>) [options]
+  webmcp-local-mcp [--site <site> | --adapter-module <specifier>] [options]
 
-Required:
-  One of:
+Source:
   --site <site>                Built-in site id (currently: x, fixture)
   --adapter-module <specifier> External adapter module (npm package, file path, or file:// URL)
+  If neither source is provided, --url runs in native-only mode (no shim fallback).
 
 Optional:
-  --url <url>                  Override adapter default URL (validated by hostPatterns)
+  --url <url>                  Target URL (required in native-only mode; otherwise overrides adapter default URL)
   --browser <name>             chromium | firefox | webkit (default: chromium)
   --headless                   Run browser in headless mode (default: false)
   --no-headless                Force headed mode
@@ -129,8 +129,8 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
     throw new Error("use either --site or --adapter-module, not both");
   }
 
-  if (!site && !adapterModule) {
-    throw new Error("missing required --site or --adapter-module");
+  if (!site && !adapterModule && !url) {
+    throw new Error("missing required --url or one of --site/--adapter-module");
   }
 
   const options: LocalMcpCliOptions = {
