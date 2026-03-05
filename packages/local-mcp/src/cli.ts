@@ -15,10 +15,10 @@ const USAGE = `Usage:
 Source:
   --site <site>                Built-in site id (currently: x, fixture)
   --adapter-module <specifier> External adapter module (npm package, file path, or file:// URL)
-  If neither source is provided, --url runs in native-only mode (no shim fallback).
+  If neither source is provided, --url runs in native/polyfill mode without adapter fallback.
 
 Optional:
-  --url <url>                  Target URL (required in native-only mode; otherwise overrides adapter default URL)
+  --url <url>                  Target URL (required when no source is set; otherwise overrides adapter default URL)
   --browser <name>             chromium | firefox | webkit (default: chromium)
   --headless                   Run browser in headless mode (default: false)
   --no-headless                Force headed mode

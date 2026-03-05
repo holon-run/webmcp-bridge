@@ -1,5 +1,5 @@
 /**
- * This module provides a native-first WebMCP page gateway with optional shim fallback adapter wiring.
+ * This module provides a native-first WebMCP page gateway with polyfill and adapter-shim fallback wiring.
  * It depends on Playwright page APIs and shared bridge types so local-mcp can call browser WebMCP uniformly.
  */
 
@@ -108,7 +108,7 @@ const INJECT_SCRIPT = String.raw`
     },
   };
 
-  globalAny.__WEBMCP_BRIDGE_MODE__ = "shim";
+  globalAny.__WEBMCP_BRIDGE_MODE__ = "polyfill";
 })();
 `;
 
@@ -168,12 +168,17 @@ export async function createWebMcpPageGateway(
   await page.evaluate(bindScript);
 
   const detectedMode = await page.evaluate(() => {
-    const globalAny = window as unknown as { __WEBMCP_BRIDGE_MODE__?: "native" | "shim" };
-    return globalAny.__WEBMCP_BRIDGE_MODE__ ?? "shim";
+    const globalAny = window as unknown as { __WEBMCP_BRIDGE_MODE__?: "native" | "polyfill" };
+    return globalAny.__WEBMCP_BRIDGE_MODE__ ?? "polyfill";
   });
 
-  const mode: "native" | "shim" = preferNative && detectedMode === "native" ? "native" : "shim";
-  if (mode === "shim") {
+  const mode: "native" | "polyfill" | "adapter-shim" =
+    preferNative && detectedMode === "native"
+      ? "native"
+      : fallbackAdapter
+        ? "adapter-shim"
+        : "polyfill";
+  if (mode === "adapter-shim") {
     await ensureFallbackStarted();
   }
 
@@ -192,7 +197,7 @@ export async function createWebMcpPageGateway(
     mode,
     page,
     listTools: async (): Promise<WebMcpToolDefinition[]> => {
-      if (mode === "shim" && fallbackAdapter) {
+      if (mode === "adapter-shim" && fallbackAdapter) {
         await ensureFallbackStarted();
         const adapterTools = await fallbackAdapter.listTools({ page });
         return adapterTools.map((tool) => ({

@@ -15,11 +15,11 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 
 - `--site <site>`: use built-in adapter preset (`x` or `fixture`).
 - `--adapter-module <specifier>`: use external adapter module (`npm` package name, file path, or `file://` URL).
-- If neither `--site` nor `--adapter-module` is provided, `--url` runs in native-only mode (no shim fallback).
+- If neither `--site` nor `--adapter-module` is provided, `--url` runs in native/polyfill mode (no adapter fallback).
 
 ## Options
 
-- `--url <url>`: target URL in native-only mode; otherwise overrides adapter default URL (`manifest.defaultUrl`).
+- `--url <url>`: target URL in url mode; otherwise overrides adapter default URL (`manifest.defaultUrl`).
 - `--browser <name>`: `chromium` | `firefox` | `webkit`.
 - `--headless`: launch browser in headless mode.
 - `--no-headless`: force headed mode.
@@ -32,8 +32,8 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 ## Behavior
 
 - Native-first: if page has native `navigator.modelContext`, calls route to native WebMCP.
-- Shim fallback: if native is unavailable, local-mcp uses fallback adapter logic.
-- Native-only mode: without `--site`/`--adapter-module`, startup fails closed when target page has no native WebMCP.
+- Polyfill mode: if native is unavailable, local-mcp injects `navigator.modelContext` compatibility APIs in-page.
+- Adapter-shim mode: when adapter source is configured and native is unavailable, fallback adapter logic handles tools.
 - URL selection is `--url` first, otherwise adapter `manifest.defaultUrl`; startup fails closed if target host is outside adapter `hostPatterns`.
 - Stdio transport only in MVP.
 

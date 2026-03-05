@@ -39,7 +39,7 @@ export type LocalMcpRuntime = {
   site: string;
   siteDefinition: SiteDefinition;
   targetUrl: string;
-  mode: "native" | "shim";
+  mode: "native" | "polyfill" | "adapter-shim";
   headless: boolean;
   page: Page;
   gateway: LocalMcpGateway;

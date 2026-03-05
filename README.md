@@ -58,7 +58,7 @@ node packages/local-mcp/dist/cli.js --adapter-module @your-scope/webmcp-adapter 
 2. `local-mcp` starts a Playwright persistent context and opens the target URL.
 3. `local-mcp` creates a page gateway and proxies MCP `tools/list` and `tools/call`.
 4. The gateway uses native `navigator.modelContext` when available.
-5. If native WebMCP is unavailable, shim + adapter fallback handles tool execution.
+5. If native WebMCP is unavailable, runtime uses either in-page polyfill mode or adapter-shim fallback mode.
 6. Results are returned as JSON-serializable MCP payloads.
 
 ## Adapter authoring

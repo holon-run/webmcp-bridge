@@ -40,7 +40,7 @@ export type StartLocalMcpBridgeOptions = {
 export type LocalMcpBridgeHandle = {
   site: string;
   targetUrl: string;
-  mode: "native" | "shim";
+  mode: "native" | "polyfill" | "adapter-shim";
   headless: boolean;
   close: () => Promise<void>;
 };
@@ -116,12 +116,6 @@ async function resolveRuntime(options: StartLocalMcpBridgeOptions): Promise<Loca
 
   const requestedHeadless = options.headless ?? false;
   const primary = await startRuntime(options, siteDefinition, requestedHeadless);
-  if (!hasAdapterSource && primary.mode !== "native") {
-    await primary.close();
-    throw new Error(
-      "NATIVE_ONLY_UNAVAILABLE: page does not expose native WebMCP; provide --site or --adapter-module for shim fallback",
-    );
-  }
 
   const autoLoginFallback = options.autoLoginFallback ?? true;
   const authProbeTool = siteDefinition.manifest.authProbeTool;

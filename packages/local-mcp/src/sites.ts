@@ -192,7 +192,7 @@ export function createNativeSiteDefinition(url: string): SiteDefinition {
   let id: string;
   if (parsed.protocol === "about:") {
     if (parsed.href !== "about:blank") {
-      throw new Error("CONFIG_ERROR: native-only mode supports about:blank only for about: URLs");
+      throw new Error("CONFIG_ERROR: url mode supports about:blank only for about: URLs");
     }
     hostPatterns = ["about:blank"];
     id = "native:about-blank";

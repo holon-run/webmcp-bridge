@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWebMcpPageGateway } from "../src/index.js";
 
-function createMockPage(mode: "native" | "shim", tools: unknown[] = []) {
+function createMockPage(mode: "native" | "polyfill", tools: unknown[] = []) {
   const listeners = new Map<string, Array<() => void>>();
   let noArgFunctionCallCount = 0;
   const page = {
@@ -47,8 +47,8 @@ function createMockPage(mode: "native" | "shim", tools: unknown[] = []) {
 }
 
 describe("createWebMcpPageGateway", () => {
-  it("uses fallback adapter tool listing in shim mode", async () => {
-    const { page } = createMockPage("shim", [{ name: "native.tool" }]);
+  it("uses fallback adapter tool listing in adapter-shim mode", async () => {
+    const { page } = createMockPage("polyfill", [{ name: "native.tool" }]);
     const adapter = {
       name: "x",
       listTools: vi.fn(async () => [{ name: "ping", description: "ping" }]),
@@ -58,7 +58,7 @@ describe("createWebMcpPageGateway", () => {
     };
 
     const gateway = await createWebMcpPageGateway(page as never, { fallbackAdapter: adapter });
-    expect(gateway.mode).toBe("shim");
+    expect(gateway.mode).toBe("adapter-shim");
     expect(adapter.start).toHaveBeenCalledOnce();
     expect((await gateway.listTools()).map((tool) => tool.name)).toEqual(["ping"]);
     expect(adapter.listTools).toHaveBeenCalledOnce();
@@ -76,6 +76,17 @@ describe("createWebMcpPageGateway", () => {
     await expect(gateway.callTool("native.ping", {})).resolves.toEqual({
       ok: true,
       name: "native.ping",
+    });
+  });
+
+  it("uses page registered tools in polyfill mode without adapter", async () => {
+    const { page } = createMockPage("polyfill", [{ name: "site.tool" }]);
+    const gateway = await createWebMcpPageGateway(page as never);
+    expect(gateway.mode).toBe("polyfill");
+    expect((await gateway.listTools()).map((tool) => tool.name)).toEqual(["site.tool"]);
+    await expect(gateway.callTool("site.tool", {})).resolves.toEqual({
+      ok: true,
+      name: "site.tool",
     });
   });
 });

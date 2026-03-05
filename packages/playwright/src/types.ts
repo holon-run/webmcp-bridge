@@ -46,7 +46,7 @@ export type CreateWebMcpPageGatewayOptions = {
 
 export type WebMcpPageGateway = {
   id: string;
-  mode: "native" | "shim";
+  mode: "native" | "polyfill" | "adapter-shim";
   page: Page;
   listTools: () => Promise<WebMcpToolDefinition[]>;
   callTool: (name: string, input: JsonValue) => Promise<JsonValue>;
