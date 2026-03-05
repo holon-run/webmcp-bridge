@@ -103,6 +103,21 @@ function resolveBrowserType(browser: BrowserEngine): BrowserType {
   return chromium;
 }
 
+async function waitForPolyfillTools(
+  pageGateway: Pick<WebMcpPageGateway, "listTools">,
+  timeoutMs = 5000,
+  intervalMs = 200,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const tools = await pageGateway.listTools();
+    if (tools.length > 0) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Promise<LocalMcpRuntime> {
   const site = options.siteDefinition;
   const browserEngine = options.browser ?? "chromium";
@@ -153,6 +168,11 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     }
     gatewaySession = await createWebMcpPageGateway(page, gatewayOptions);
     const pageGateway = gatewaySession;
+    if (pageGateway.mode === "polyfill") {
+      // Ensure page scripts run after modelContext polyfill injection so site tools can register.
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await waitForPolyfillTools(pageGateway);
+    }
 
     let closed = false;
     const close = async (): Promise<void> => {
