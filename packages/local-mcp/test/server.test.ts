@@ -23,7 +23,7 @@ describe("createLocalMcpStdioServer", () => {
   let input: PassThrough;
   let output: PassThrough;
   let server: LocalMcpStdioServer;
-  const responses: McpJsonRpcResponse[] = [];
+  const frames: Array<Record<string, unknown>> = [];
   let outputBuffer = "";
 
   const gateway = {
@@ -39,7 +39,7 @@ describe("createLocalMcpStdioServer", () => {
   beforeEach(async () => {
     input = new PassThrough();
     output = new PassThrough();
-    responses.length = 0;
+    frames.length = 0;
     outputBuffer = "";
     gateway.listTools.mockClear();
     gateway.callTool.mockClear();
@@ -53,7 +53,7 @@ describe("createLocalMcpStdioServer", () => {
         if (!trimmed) {
           continue;
         }
-        responses.push(JSON.parse(trimmed) as McpJsonRpcResponse);
+        frames.push(JSON.parse(trimmed) as Record<string, unknown>);
       }
     });
 
@@ -74,10 +74,21 @@ describe("createLocalMcpStdioServer", () => {
   });
 
   async function request(payload: Record<string, unknown>): Promise<McpJsonRpcResponse> {
-    const beforeCount = responses.length;
+    const requestId = payload.id;
+    const beforeCount = frames.length;
     input.write(`${JSON.stringify(payload)}\n`);
-    await waitFor(() => responses.length > beforeCount);
-    return responses[beforeCount] as McpJsonRpcResponse;
+    await waitFor(() =>
+      frames.slice(beforeCount).some((frame) => {
+        return "id" in frame && frame.id === requestId;
+      }),
+    );
+    const response = frames
+      .slice(beforeCount)
+      .find((frame) => "id" in frame && frame.id === requestId) as McpJsonRpcResponse | undefined;
+    if (!response) {
+      throw new Error("response frame not found");
+    }
+    return response;
   }
 
   it("responds to initialize", async () => {
@@ -101,7 +112,9 @@ describe("createLocalMcpStdioServer", () => {
         name: "webmcp-bridge-local-mcp",
       },
       capabilities: {
-        tools: {},
+        tools: {
+          listChanged: true,
+        },
       },
     });
   });
@@ -198,7 +211,7 @@ describe("createLocalMcpStdioServer", () => {
   });
 
   it("does not respond to notifications", async () => {
-    const beforeCount = responses.length;
+    const beforeCount = frames.length;
     input.write(
       `${JSON.stringify({
         jsonrpc: "2.0",
@@ -208,6 +221,49 @@ describe("createLocalMcpStdioServer", () => {
     );
 
     await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(responses.length).toBe(beforeCount);
+    expect(frames.length).toBe(beforeCount);
+  });
+
+  it("emits tools/list_changed after a tool call mutates available tools", async () => {
+    gateway.listTools.mockResolvedValueOnce([{ name: "navigate", description: "navigate" }]);
+    gateway.listTools.mockResolvedValueOnce([
+      { name: "navigate", description: "navigate" },
+      { name: "search_entities", description: "search entities" },
+    ]);
+
+    await request({
+      jsonrpc: "2.0",
+      id: "5-init",
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {
+            listChanged: true,
+          },
+        },
+        clientInfo: {
+          name: "test-client",
+          version: "0.1.0-test",
+        },
+      },
+    });
+
+    await request({
+      jsonrpc: "2.0",
+      id: "5",
+      method: "tools/call",
+      params: {
+        name: "navigate",
+        arguments: {
+          to: "/entities",
+        },
+      },
+    });
+
+    const listChangedNotification = frames.find(
+      (frame) => frame.method === "notifications/tools/list_changed",
+    );
+    expect(listChangedNotification).toBeDefined();
   });
 });

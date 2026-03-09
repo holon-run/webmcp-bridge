@@ -214,10 +214,6 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
 
   process.once("SIGINT", signalHandler);
   process.once("SIGTERM", signalHandler);
-  process.stdin.once("close", () => {
-    void shutdown();
-  });
-
   return 0;
 }
 

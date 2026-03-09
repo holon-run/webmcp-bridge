@@ -38,6 +38,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private readonly transport: StdioServerTransport;
   private started = false;
   private closed = false;
+  private lastToolsSignature: string | undefined;
 
   constructor(options: LocalMcpStdioServerOptions) {
     this.transport = new StdioServerTransport(options.input, options.output);
@@ -52,21 +53,26 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         capabilities: {
-          tools: {},
+          tools: {
+            listChanged: true,
+          },
         },
       },
     );
 
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       const tools = await options.gateway.listTools();
+      this.lastToolsSignature = this.computeToolsSignature(tools);
       return {
         tools: tools.map((tool) => this.toMcpToolDefinition(tool)),
       };
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+      const previousSignature = await this.ensureToolsSignature(options.gateway);
       const args = this.normalizeToolArguments(request.params.arguments);
       const toolResult = await options.gateway.callTool(request.params.name, args);
+      await this.notifyIfToolsChanged(options.gateway, previousSignature);
       return this.toCallToolResult(toolResult);
     });
   }
@@ -176,6 +182,55 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       return false;
     }
     return "error" in value;
+  }
+
+  private async ensureToolsSignature(gateway: LocalMcpGateway): Promise<string> {
+    if (this.lastToolsSignature !== undefined) {
+      return this.lastToolsSignature;
+    }
+    const tools = await gateway.listTools();
+    const signature = this.computeToolsSignature(tools);
+    this.lastToolsSignature = signature;
+    return signature;
+  }
+
+  private async notifyIfToolsChanged(gateway: LocalMcpGateway, previousSignature: string): Promise<void> {
+    const tools = await gateway.listTools();
+    const nextSignature = this.computeToolsSignature(tools);
+    this.lastToolsSignature = nextSignature;
+    if (nextSignature === previousSignature) {
+      return;
+    }
+    await this.server.sendToolListChanged().catch(() => {
+      // Ignore when client does not advertise listChanged support or session is not notification-ready.
+    });
+  }
+
+  private computeToolsSignature(tools: ReadonlyArray<WebMcpToolDefinition>): string {
+    const normalized = tools
+      .map((tool) => ({
+        annotations: this.normalizeForSignature(tool.annotations ?? {}),
+        description: tool.description ?? "",
+        inputSchema: this.normalizeForSignature(tool.inputSchema ?? { type: "object" }),
+        name: tool.name,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return JSON.stringify(normalized);
+  }
+
+  private normalizeForSignature(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.normalizeForSignature(item));
+    }
+    if (typeof value === "object" && value !== null) {
+      const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+      const output: Record<string, unknown> = {};
+      for (const [key, item] of entries) {
+        output[key] = this.normalizeForSignature(item);
+      }
+      return output;
+    }
+    return value;
   }
 }
 
