@@ -70,6 +70,24 @@ See [Adapter Authoring](docs/adapters/authoring.md) for:
 - pagination/error shape conventions
 - fail-closed adapter requirements
 
+## Native Example App
+
+`examples/architecture-board` is a native WebMCP provider example built as a browser app, not an adapter.
+
+Run it locally:
+
+```bash
+pnpm --filter @webmcp-bridge/example-architecture-board dev
+```
+
+Then connect through the existing bridge:
+
+```bash
+node packages/local-mcp/dist/cli.js --url http://127.0.0.1:4173 --headless
+```
+
+This example is meant to demonstrate human + AI collaboration on the same diagram surface.
+
 ## Development
 
 ```bash

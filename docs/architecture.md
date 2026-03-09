@@ -12,6 +12,9 @@ Current adapter roles:
 - `adapter-fixture`: deterministic integration-test adapter.
 - external adapter modules: third-party packages loaded by `--adapter-module`.
 
+Native example role:
+- `examples/architecture-board`: native WebMCP provider example app for shared human + AI diagram editing.
+
 ## Runtime flow
 
 1. A local MCP client starts `local-mcp` as a stdio server for one site.
@@ -25,3 +28,4 @@ Current adapter roles:
 
 - The project does not store credentials or bypass auth controls.
 - Fallback adapter behavior is best-effort and may require selector updates when websites change.
+- Native example apps are not adapters and should keep product logic outside shared bridge packages.

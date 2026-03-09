@@ -8,7 +8,8 @@ export default defineConfig({
       "packages/adapter-fixture/vitest.config.ts",
       "packages/adapter-x/vitest.config.ts",
       "packages/local-mcp/vitest.config.ts",
-      "packages/testkit/vitest.config.ts"
+      "packages/testkit/vitest.config.ts",
+      "examples/architecture-board/vitest.config.ts"
     ],
   },
 });

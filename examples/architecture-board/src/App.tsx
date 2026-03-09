@@ -1,0 +1,314 @@
+/**
+ * This module renders the native architecture board example UI and wires the Excalidraw canvas to WebMCP tools.
+ * It depends on the example state, Excalidraw interop, and modelContext registration helpers.
+ */
+
+import { useEffect, useRef, useState } from "react";
+import * as React from "react";
+import * as ExcalidrawLib from "@excalidraw/excalidraw";
+import "@excalidraw/excalidraw/index.css";
+import { documentToSceneElements, extractSelection, syncNodePositionsFromScene } from "./excalidraw.js";
+import { ensureModelContext } from "./model-context.js";
+import { DiagramStore } from "./state.js";
+import { registerArchitectureBoardTools } from "./tools.js";
+
+const Excalidraw = (ExcalidrawLib as unknown as { Excalidraw: React.ComponentType<Record<string, unknown>> }).Excalidraw;
+
+type SceneApi = {
+  updateScene: (scene: { elements: unknown[] }) => void;
+  getSceneElements?: () => unknown[];
+  exportToBlob?: (opts: unknown) => Promise<Blob>;
+};
+
+function useDiagramStore(): DiagramStore {
+  const storeRef = useRef<DiagramStore | undefined>(undefined);
+  if (!storeRef.current) {
+    storeRef.current = DiagramStore.load();
+  }
+  return storeRef.current;
+}
+
+function useStoreVersion(store: DiagramStore): number {
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    return store.subscribe(() => {
+      setVersion((value) => value + 1);
+    });
+  }, [store]);
+  return version;
+}
+
+export function App(): React.ReactElement {
+  const store = useDiagramStore();
+  const version = useStoreVersion(store);
+  const sceneApiRef = useRef<SceneApi | undefined>(undefined);
+  const applyingSceneRef = useRef(false);
+  const [modelContextReady, setModelContextReady] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("Loading tools...");
+
+  const snapshot = store.getSnapshot();
+  const summary = store.getSummary();
+
+  useEffect(() => {
+    const modelContext = ensureModelContext(globalThis);
+    void registerArchitectureBoardTools(modelContext, store, () => sceneApiRef.current)
+      .then(() => {
+        setModelContextReady(true);
+        setStatusMessage("navigator.modelContext ready");
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setModelContextReady(false);
+        setStatusMessage(`tool registration failed: ${message}`);
+      });
+  }, [store]);
+
+  useEffect(() => {
+    if (!sceneApiRef.current) {
+      return;
+    }
+    void documentToSceneElements(snapshot.document).then((elements) => {
+      applyingSceneRef.current = true;
+      sceneApiRef.current?.updateScene({ elements });
+      queueMicrotask(() => {
+        applyingSceneRef.current = false;
+      });
+    });
+  }, [snapshot.document, version]);
+
+  return (
+    <div style={styles.shell}>
+      <header style={styles.header}>
+        <div>
+          <p style={styles.eyebrow}>Native WebMCP Example</p>
+          <h1 style={styles.title}>Architecture Board</h1>
+          <p style={styles.subtitle}>Human tweaks the board in the browser while AI edits the same diagram through WebMCP tools.</p>
+        </div>
+        <div style={styles.actions}>
+          <button style={styles.primaryButton} onClick={() => store.resetToDemo()}>
+            Load Demo
+          </button>
+          <button style={styles.secondaryButton} onClick={() => store.clear()}>
+            Clear
+          </button>
+          <button style={styles.secondaryButton} onClick={() => store.removeSelection()}>
+            Delete Selection
+          </button>
+        </div>
+      </header>
+      <main style={styles.main}>
+        <section style={styles.canvasPanel}>
+          <div style={styles.canvasFrame}>
+            <Excalidraw
+              excalidrawAPI={(api: unknown) => {
+                sceneApiRef.current = api as SceneApi;
+              }}
+              onChange={(elements: unknown[], appState: unknown) => {
+                const selectedElementIds =
+                  appState && typeof appState === "object"
+                    ? new Set(
+                        Object.entries(
+                          ((appState as { selectedElementIds?: Record<string, boolean> }).selectedElementIds ?? {}),
+                        )
+                          .filter(([, selected]) => selected)
+                          .map(([elementId]) => elementId),
+                      )
+                    : new Set<string>();
+                if (!applyingSceneRef.current) {
+                  store.setDocument(syncNodePositionsFromScene(store.getDocument(), elements));
+                }
+                store.setSelection(extractSelection(elements, selectedElementIds));
+              }}
+              initialData={{
+                appState: {
+                  viewBackgroundColor: "#f7fee7",
+                },
+              }}
+              theme="light"
+            />
+          </div>
+        </section>
+        <aside style={styles.sidebar}>
+          <section style={styles.card}>
+            <p style={styles.cardEyebrow}>Session</p>
+            <h2 style={styles.cardTitle}>WebMCP Status</h2>
+            <p style={modelContextReady ? styles.goodStatus : styles.badStatus}>{statusMessage}</p>
+            <p style={styles.helperText}>Use `webmcp-local-mcp --url http://127.0.0.1:4173` to connect from the CLI.</p>
+          </section>
+          <section style={styles.card}>
+            <p style={styles.cardEyebrow}>Diagram</p>
+            <h2 style={styles.cardTitle}>Summary</h2>
+            <dl style={styles.metaList}>
+              <div style={styles.metaRow}>
+                <dt>Nodes</dt>
+                <dd>{summary.nodeCount}</dd>
+              </div>
+              <div style={styles.metaRow}>
+                <dt>Edges</dt>
+                <dd>{summary.edgeCount}</dd>
+              </div>
+              <div style={styles.metaRow}>
+                <dt>Selection</dt>
+                <dd>{snapshot.selection.nodeIds.length + snapshot.selection.edgeIds.length}</dd>
+              </div>
+            </dl>
+          </section>
+          <section style={styles.card}>
+            <p style={styles.cardEyebrow}>Selection</p>
+            <h2 style={styles.cardTitle}>Current Focus</h2>
+            <p style={styles.helperText}>Selected nodes: {snapshot.selection.nodeIds.join(", ") || "none"}</p>
+            <p style={styles.helperText}>Selected edges: {snapshot.selection.edgeIds.join(", ") || "none"}</p>
+          </section>
+          <section style={styles.card}>
+            <p style={styles.cardEyebrow}>Tools</p>
+            <h2 style={styles.cardTitle}>MVP Contract</h2>
+            <ul style={styles.toolList}>
+              <li>`nodes.list`</li>
+              <li>`nodes.upsert`</li>
+              <li>`edges.list`</li>
+              <li>`edges.upsert`</li>
+              <li>`layout.apply`</li>
+              <li>`diagram.export`</li>
+            </ul>
+          </section>
+        </aside>
+      </main>
+    </div>
+  );
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  shell: {
+    minHeight: "100vh",
+    background:
+      "radial-gradient(circle at top left, rgba(16, 185, 129, 0.14), transparent 32%), linear-gradient(135deg, #f7fee7 0%, #eff6ff 52%, #fff7ed 100%)",
+    color: "#0f172a",
+    fontFamily: '"IBM Plex Sans", "Helvetica Neue", sans-serif',
+    padding: "24px",
+    boxSizing: "border-box",
+  },
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: "24px",
+    alignItems: "flex-start",
+    marginBottom: "24px",
+    flexWrap: "wrap",
+  },
+  eyebrow: {
+    margin: 0,
+    fontSize: "12px",
+    letterSpacing: "0.16em",
+    textTransform: "uppercase",
+    color: "#0f766e",
+    fontWeight: 700,
+  },
+  title: {
+    margin: "8px 0 12px",
+    fontSize: "40px",
+    lineHeight: 1.05,
+  },
+  subtitle: {
+    margin: 0,
+    maxWidth: "720px",
+    color: "#334155",
+  },
+  actions: {
+    display: "flex",
+    gap: "12px",
+    flexWrap: "wrap",
+  },
+  primaryButton: {
+    background: "#0f766e",
+    color: "#ffffff",
+    border: "none",
+    borderRadius: "999px",
+    padding: "12px 18px",
+    cursor: "pointer",
+    fontWeight: 700,
+  },
+  secondaryButton: {
+    background: "rgba(255,255,255,0.78)",
+    color: "#0f172a",
+    border: "1px solid rgba(15, 23, 42, 0.12)",
+    borderRadius: "999px",
+    padding: "12px 18px",
+    cursor: "pointer",
+    fontWeight: 700,
+  },
+  main: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) 320px",
+    gap: "24px",
+  },
+  canvasPanel: {
+    minWidth: 0,
+  },
+  canvasFrame: {
+    height: "calc(100vh - 180px)",
+    minHeight: "620px",
+    overflow: "hidden",
+    borderRadius: "28px",
+    border: "1px solid rgba(15, 23, 42, 0.08)",
+    boxShadow: "0 24px 80px rgba(15, 23, 42, 0.12)",
+    background: "rgba(255, 255, 255, 0.88)",
+  },
+  sidebar: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "16px",
+  },
+  card: {
+    borderRadius: "24px",
+    background: "rgba(255, 255, 255, 0.86)",
+    border: "1px solid rgba(15, 23, 42, 0.08)",
+    padding: "18px",
+    boxShadow: "0 16px 40px rgba(15, 23, 42, 0.08)",
+  },
+  cardEyebrow: {
+    margin: 0,
+    fontSize: "11px",
+    textTransform: "uppercase",
+    letterSpacing: "0.14em",
+    color: "#64748b",
+    fontWeight: 700,
+  },
+  cardTitle: {
+    margin: "8px 0 12px",
+    fontSize: "20px",
+  },
+  goodStatus: {
+    margin: 0,
+    color: "#047857",
+    fontWeight: 700,
+  },
+  badStatus: {
+    margin: 0,
+    color: "#b91c1c",
+    fontWeight: 700,
+  },
+  helperText: {
+    margin: "8px 0 0",
+    color: "#475569",
+    fontSize: "14px",
+    lineHeight: 1.5,
+  },
+  metaList: {
+    margin: 0,
+  },
+  metaRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: "12px",
+    padding: "8px 0",
+    borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
+  },
+  toolList: {
+    margin: 0,
+    paddingInlineStart: "18px",
+    display: "grid",
+    gap: "8px",
+    fontFamily: '"IBM Plex Mono", monospace',
+    fontSize: "13px",
+  },
+};
