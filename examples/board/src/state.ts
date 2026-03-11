@@ -25,7 +25,7 @@ import type {
   UpsertNodeInput,
 } from "./types.js";
 
-const STORAGE_KEY = "webmcp-bridge.architecture-board.document";
+const STORAGE_KEY = "webmcp-bridge.board.document";
 
 type Listener = () => void;
 

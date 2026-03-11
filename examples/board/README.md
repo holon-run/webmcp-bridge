@@ -1,4 +1,4 @@
-# architecture-board
+# board
 
 Native WebMCP example app for `webmcp-bridge`.
 
@@ -8,10 +8,21 @@ This example is not an adapter. It is a browser app that exposes `navigator.mode
 
 ```bash
 pnpm install
-pnpm --filter @webmcp-bridge/example-architecture-board dev
+pnpm --filter @webmcp-bridge/example-board dev
 ```
 
 The app serves on `http://127.0.0.1:4173`.
+
+## Deploy
+
+Cloudflare Pages is the intended deployment target for the public demo at `https://board.holon.run`.
+
+```bash
+pnpm --filter @webmcp-bridge/example-board build
+pnpm --filter @webmcp-bridge/example-board deploy:pages
+```
+
+The Pages project name is pinned as `board` in [wrangler.jsonc](/Users/jolestar/opensource/src/github.com/holon-run/webmcp-bridge/examples/board/wrangler.jsonc).
 
 ## Connect From local-mcp
 

@@ -1,5 +1,5 @@
 /**
- * This module verifies the native architecture board example through the local-mcp stdio bridge.
+ * This module verifies the native board example through the local-mcp stdio bridge.
  * It depends on the example's Vite dev server and local-mcp bridge so the end-to-end native WebMCP path stays working.
  */
 
@@ -90,7 +90,7 @@ class McpTestClient {
         },
       },
       clientInfo: {
-        name: "architecture-board-test",
+        name: "board-test",
         version: "0.1.0-test",
       },
     });
@@ -153,7 +153,7 @@ async function startExampleServer(): Promise<{ server: ViteDevServer; url: strin
   };
 }
 
-describe("architecture board local-mcp integration", () => {
+describe("board local-mcp integration", () => {
   let server: ViteDevServer | undefined;
   let client: McpTestClient | undefined;
   let userDataDir: string | undefined;
@@ -161,7 +161,7 @@ describe("architecture board local-mcp integration", () => {
   beforeAll(async () => {
     const startedServer = await startExampleServer();
     server = startedServer.server;
-    userDataDir = await mkdtemp(resolve(tmpdir(), "webmcp-bridge-architecture-board-"));
+    userDataDir = await mkdtemp(resolve(tmpdir(), "webmcp-bridge-board-"));
     client = new McpTestClient(startedServer.url, userDataDir);
     const bridgeHandle = await client.start();
     expect(bridgeHandle.mode).toBe("native");
@@ -176,7 +176,7 @@ describe("architecture board local-mcp integration", () => {
   }, TEST_TIMEOUT_MS);
 
   it(
-    "lists native architecture board tools through local-mcp",
+    "lists native board tools through local-mcp",
     async () => {
       const response = await waitFor(
         async () => await client!.request("tools/list", {}),

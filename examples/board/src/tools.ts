@@ -1,5 +1,5 @@
 /**
- * This module defines and registers the WebMCP tools exposed by the native architecture board example.
+ * This module defines and registers the WebMCP tools exposed by the native board example.
  * It depends on the diagram store and local modelContext shim so browser and local-mcp clients share one tool contract.
  */
 
@@ -310,7 +310,7 @@ function toUpsertEdgeInput(value: JsonValue): UpsertEdgeInput {
   return input;
 }
 
-export async function registerArchitectureBoardTools(
+export async function registerBoardTools(
   modelContext: WebMcpModelContext,
   store: DiagramStore,
   getExportApi: () => ExportApi | undefined,

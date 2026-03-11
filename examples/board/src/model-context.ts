@@ -5,7 +5,7 @@
 
 import type { JsonValue, WebMcpModelContext, WebMcpToolDefinition } from "./types.js";
 
-const CONTEXT_KEY = "__webmcpArchitectureBoardModelContext";
+const CONTEXT_KEY = "__webmcpBoardModelContext";
 
 type MutableNavigator = Navigator & {
   modelContext?: WebMcpModelContext;

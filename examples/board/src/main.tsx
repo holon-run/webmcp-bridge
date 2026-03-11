@@ -1,5 +1,5 @@
 /**
- * This module boots the native architecture board example into the browser root.
+ * This module boots the native board example into the browser root.
  * It depends on the App component and is the only browser entrypoint for the Vite app.
  */
 

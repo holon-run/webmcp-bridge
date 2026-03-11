@@ -1,15 +1,15 @@
 /**
- * This module verifies the native architecture board WebMCP tool registration contract.
+ * This module verifies the native board WebMCP tool registration contract.
  * It depends on the in-memory modelContext and store so tool names and result shapes remain stable.
  */
 
 import { ensureModelContext } from "../src/model-context.js";
 import { DiagramStore } from "../src/state.js";
-import { registerArchitectureBoardTools } from "../src/tools.js";
+import { registerBoardTools } from "../src/tools.js";
 
-describe("architecture board tools", () => {
+describe("board tools", () => {
   beforeEach(() => {
-    delete (globalThis as { __webmcpArchitectureBoardModelContext?: unknown }).__webmcpArchitectureBoardModelContext;
+    delete (globalThis as { __webmcpBoardModelContext?: unknown }).__webmcpBoardModelContext;
     Object.defineProperty(globalThis, "navigator", {
       configurable: true,
       value: {},
@@ -27,7 +27,7 @@ describe("architecture board tools", () => {
     const modelContext = ensureModelContext(globalThis);
     const store = DiagramStore.load();
 
-    await registerArchitectureBoardTools(modelContext, store, () => undefined);
+    await registerBoardTools(modelContext, store, () => undefined);
 
     const tools = await modelContext.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -44,7 +44,7 @@ describe("architecture board tools", () => {
     const modelContext = ensureModelContext(globalThis);
     const store = DiagramStore.load();
 
-    await registerArchitectureBoardTools(modelContext, store, () => undefined);
+    await registerBoardTools(modelContext, store, () => undefined);
     const result = await modelContext.callTool("nodes.list", {});
 
     expect(result).toMatchObject({

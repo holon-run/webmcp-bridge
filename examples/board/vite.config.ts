@@ -1,5 +1,5 @@
 /**
- * This module configures the Vite dev/build pipeline for the native architecture board example.
+ * This module configures the Vite dev/build pipeline for the native board example.
  * It depends on the React plugin and is used only by the example package scripts.
  */
 

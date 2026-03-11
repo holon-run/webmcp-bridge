@@ -1,5 +1,5 @@
 /**
- * This module defines Vitest coverage for the native architecture board example.
+ * This module defines Vitest coverage for the native board example.
  * It depends on the root Vitest runner so example-specific pure-unit tests join the workspace suite.
  */
 

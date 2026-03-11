@@ -1,5 +1,5 @@
 /**
- * This module renders the native architecture board example UI and wires the Excalidraw canvas to WebMCP tools.
+ * This module renders the native board example UI and wires the Excalidraw canvas to WebMCP tools.
  * It depends on the example state, Excalidraw interop, and modelContext registration helpers.
  */
 
@@ -10,7 +10,7 @@ import "@excalidraw/excalidraw/index.css";
 import { documentToSceneElements, extractSelection, syncNodePositionsFromScene } from "./excalidraw.js";
 import { ensureModelContext } from "./model-context.js";
 import { DiagramStore } from "./state.js";
-import { registerArchitectureBoardTools } from "./tools.js";
+import { registerBoardTools } from "./tools.js";
 
 const Excalidraw = (ExcalidrawLib as unknown as { Excalidraw: React.ComponentType<Record<string, unknown>> }).Excalidraw;
 
@@ -51,7 +51,7 @@ export function App(): React.ReactElement {
 
   useEffect(() => {
     const modelContext = ensureModelContext(globalThis);
-    void registerArchitectureBoardTools(modelContext, store, () => sceneApiRef.current)
+    void registerBoardTools(modelContext, store, () => sceneApiRef.current)
       .then(() => {
         setModelContextReady(true);
         setStatusMessage("navigator.modelContext ready");
@@ -81,7 +81,7 @@ export function App(): React.ReactElement {
       <header style={styles.header}>
         <div>
           <p style={styles.eyebrow}>Native WebMCP Example</p>
-          <h1 style={styles.title}>Architecture Board</h1>
+          <h1 style={styles.title}>Board</h1>
           <p style={styles.subtitle}>Human tweaks the board in the browser while AI edits the same diagram through WebMCP tools.</p>
         </div>
         <div style={styles.actions}>

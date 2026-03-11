@@ -13,7 +13,7 @@ Current adapter roles:
 - external adapter modules: third-party packages loaded by `--adapter-module`.
 
 Native example role:
-- `examples/architecture-board`: native WebMCP provider example app for shared human + AI diagram editing.
+- `examples/board`: native WebMCP provider example app for shared human + AI diagram editing.
 
 ## Runtime flow
 

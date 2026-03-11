@@ -87,12 +87,12 @@ See [Adapter Authoring](docs/adapters/authoring.md) for:
 
 ## Native Example App
 
-`examples/architecture-board` is a native WebMCP provider example built as a browser app, not an adapter.
+`examples/board` is a native WebMCP provider example built as a browser app, not an adapter.
 
 Run it locally:
 
 ```bash
-pnpm --filter @webmcp-bridge/example-architecture-board dev
+pnpm --filter @webmcp-bridge/example-board dev
 ```
 
 Then connect through the existing bridge:

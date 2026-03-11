@@ -1,11 +1,11 @@
 /**
- * This module covers the pure diagram model helpers for the native architecture board example.
+ * This module covers the pure diagram model helpers for the native board example.
  * It depends on the example model implementation so layout and upsert behavior stay deterministic.
  */
 
 import { applyLayout, createDemoDocument, createEmptyDocument, upsertEdges, upsertNodes } from "../src/model.js";
 
-describe("architecture board model", () => {
+describe("board model", () => {
   it("upserts nodes and edges into a structured document", () => {
     const withNodes = upsertNodes(createEmptyDocument(), [
       { id: "a", label: "Gateway", kind: "service", x: 10, y: 20 },
