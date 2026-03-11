@@ -18,6 +18,21 @@ The runtime is native-first: if the page exposes native WebMCP, calls go to nati
 
 ## Quick start
 
+Run directly from npm:
+
+```bash
+npx -y @webmcp-bridge/local-mcp --url https://www.meetcursive.com --headless
+```
+
+Or install globally:
+
+```bash
+npm i -g @webmcp-bridge/local-mcp
+webmcp-local-mcp --url https://www.meetcursive.com --headless
+```
+
+Run from this repository:
+
 ```bash
 pnpm install
 pnpm --filter @webmcp-bridge/local-mcp build
@@ -28,7 +43,7 @@ Native WebMCP demo with `uxc` shortcut:
 
 ```bash
 uxc link cursive-webmcp \
-  "node /Users/jolestar/opensource/src/github.com/holon-run/webmcp-bridge/packages/local-mcp/dist/cli.js --url https://www.meetcursive.com --headless --user-data-dir ~/.uxc/playwright-profile" \
+  "npx -y @webmcp-bridge/local-mcp --url https://www.meetcursive.com --headless --user-data-dir ~/.uxc/playwright-profile" \
   --daemon-exclusive ~/.uxc/playwright-profile
 
 cursive-webmcp -h --text
@@ -37,19 +52,19 @@ cursive-webmcp -h --text
 Built-in fallback adapter mode:
 
 ```bash
-node packages/local-mcp/dist/cli.js --site x --headless
+webmcp-local-mcp --site x --headless
 ```
 
 Deterministic fixture mode:
 
 ```bash
-node packages/local-mcp/dist/cli.js --site fixture --headless
+webmcp-local-mcp --site fixture --headless
 ```
 
 External adapter module mode:
 
 ```bash
-node packages/local-mcp/dist/cli.js --adapter-module @your-scope/webmcp-adapter --headless
+webmcp-local-mcp --adapter-module @your-scope/webmcp-adapter --headless
 ```
 
 ## Runtime model
@@ -83,7 +98,7 @@ pnpm --filter @webmcp-bridge/example-architecture-board dev
 Then connect through the existing bridge:
 
 ```bash
-node packages/local-mcp/dist/cli.js --url http://127.0.0.1:4173 --headless
+webmcp-local-mcp --url http://127.0.0.1:4173 --headless
 ```
 
 This example is meant to demonstrate human + AI collaboration on the same diagram surface.
@@ -95,6 +110,20 @@ pnpm typecheck
 pnpm test
 pnpm lint
 pnpm build
+```
+
+## Publish to npm
+
+Use `pnpm publish` from this monorepo so workspace protocol dependencies are rewritten to concrete versions in published tarballs.
+
+```bash
+pnpm -r --filter "@webmcp-bridge/*" publish --access public
+```
+
+For a dry run:
+
+```bash
+pnpm -r --filter "@webmcp-bridge/*" publish --dry-run
 ```
 
 ## Constraints
