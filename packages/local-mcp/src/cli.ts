@@ -4,7 +4,9 @@
  * It depends on bridge startup APIs so command-line usage reuses the same runtime/server lifecycle.
  */
 
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { startLocalMcpBridge } from "./bridge.js";
 import { resolveSiteDefinition, type BuiltinSite } from "./sites.js";
 import type { BrowserEngine } from "./runtime.js";
@@ -156,12 +158,22 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
   return options;
 }
 
-function isMainModule(metaUrl: string): boolean {
-  const mainPath = process.argv[1];
+function resolveCanonicalPath(pathValue: string): string {
+  const absolutePath = resolve(pathValue);
+  try {
+    return realpathSync(absolutePath);
+  } catch {
+    return absolutePath;
+  }
+}
+
+export function isMainModule(metaUrl: string, mainPath = process.argv[1]): boolean {
   if (!mainPath) {
     return false;
   }
-  return pathToFileURL(mainPath).href === metaUrl;
+  const canonicalMainPath = resolveCanonicalPath(mainPath);
+  const canonicalModulePath = resolveCanonicalPath(fileURLToPath(metaUrl));
+  return canonicalMainPath === canonicalModulePath;
 }
 
 export async function runCli(args = process.argv.slice(2)): Promise<number> {
