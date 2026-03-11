@@ -18,17 +18,17 @@ The runtime is native-first: if the page exposes native WebMCP, calls go to nati
 
 ## Quick start
 
-Run directly from npm:
+Run directly from npm against the public native WebMCP demo:
 
 ```bash
-npx -y @webmcp-bridge/local-mcp --url https://www.meetcursive.com --headless
+npx -y @webmcp-bridge/local-mcp --url https://board.holon.run --headless
 ```
 
 Or install globally:
 
 ```bash
 npm i -g @webmcp-bridge/local-mcp
-webmcp-local-mcp --url https://www.meetcursive.com --headless
+webmcp-local-mcp --url https://board.holon.run --headless
 ```
 
 Run from this repository:
@@ -36,17 +36,17 @@ Run from this repository:
 ```bash
 pnpm install
 pnpm --filter @webmcp-bridge/local-mcp build
-node packages/local-mcp/dist/cli.js --url https://www.meetcursive.com --headless
+node packages/local-mcp/dist/cli.js --url https://board.holon.run --headless
 ```
 
 Native WebMCP demo with `uxc` shortcut:
 
 ```bash
-uxc link cursive-webmcp \
-  "npx -y @webmcp-bridge/local-mcp --url https://www.meetcursive.com --headless --user-data-dir ~/.uxc/playwright-profile" \
+uxc link board-webmcp \
+  "npx -y @webmcp-bridge/local-mcp --url https://board.holon.run --headless --user-data-dir ~/.uxc/playwright-profile" \
   --daemon-exclusive ~/.uxc/playwright-profile
 
-cursive-webmcp -h --text
+board-webmcp -h --text
 ```
 
 Built-in fallback adapter mode:
@@ -88,6 +88,12 @@ See [Adapter Authoring](docs/adapters/authoring.md) for:
 ## Native Example App
 
 `examples/board` is a native WebMCP provider example built as a browser app, not an adapter.
+
+Public demo:
+
+```bash
+webmcp-local-mcp --url https://board.holon.run --headless
+```
 
 Run it locally:
 

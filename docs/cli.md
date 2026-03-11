@@ -41,6 +41,6 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 
 ```bash
 uxc link cursive-webmcp \
-  "node /Users/jolestar/opensource/src/github.com/holon-run/webmcp-bridge/packages/local-mcp/dist/cli.js --url https://www.meetcursive.com --headless --user-data-dir ~/.uxc/playwright-profile" \
+  "node packages/local-mcp/dist/cli.js --url https://board.holon.run --headless --user-data-dir ~/.uxc/playwright-profile" \
   --daemon-exclusive ~/.uxc/playwright-profile
 ```

@@ -2,7 +2,7 @@
 
 Native WebMCP example app for `webmcp-bridge`.
 
-This example is not an adapter. It is a browser app that exposes `navigator.modelContext` directly and lets a human and an AI edit the same architecture diagram together.
+This example is not an adapter. It is a browser app that exposes `navigator.modelContext` directly and lets a human and an AI edit the same diagram together.
 
 ## Run
 
@@ -25,6 +25,14 @@ pnpm --filter @webmcp-bridge/example-board deploy:pages
 The Pages project name is pinned as `board` in [wrangler.jsonc](/Users/jolestar/opensource/src/github.com/holon-run/webmcp-bridge/examples/board/wrangler.jsonc).
 
 ## Connect From local-mcp
+
+Public deployment:
+
+```bash
+node packages/local-mcp/dist/cli.js --url https://board.holon.run --headless
+```
+
+Local development:
 
 ```bash
 node packages/local-mcp/dist/cli.js --url http://127.0.0.1:4173 --headless
