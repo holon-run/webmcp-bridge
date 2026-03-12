@@ -450,7 +450,7 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
         }
         const blob = await exportToBlob({
           mimeType: "image/png",
-          elements: api.getSceneElements?.() ?? scene.elements,
+          elements: api?.getSceneElements?.() ?? scene.elements,
           appState: {
             exportBackground: true,
             viewBackgroundColor: scene.appState.viewBackgroundColor,
