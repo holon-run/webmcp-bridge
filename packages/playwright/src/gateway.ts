@@ -67,6 +67,18 @@ const INJECT_SCRIPT = String.raw`
     unregisterTool: async (name) => {
       tools.delete(String(name || ""));
     },
+    listTools: async () =>
+      Array.from(tools.values()).map((tool) => {
+        const output = {
+          name: tool.name,
+          inputSchema: tool.inputSchema || { type: "object" },
+          annotations: tool.annotations || {},
+        };
+        if (typeof tool.description === "string" && tool.description.trim()) {
+          return { ...output, description: tool.description };
+        }
+        return output;
+      }),
     callTool: async (name, input) => {
       const local = tools.get(String(name || ""));
       if (local && typeof local.execute === "function") {
@@ -91,18 +103,7 @@ const INJECT_SCRIPT = String.raw`
   }
 
   globalAny.__webmcpBridge = {
-    list: async () =>
-      Array.from(tools.values()).map((tool) => {
-        const output = {
-          name: tool.name,
-          inputSchema: tool.inputSchema || { type: "object" },
-          annotations: tool.annotations || {},
-        };
-        if (typeof tool.description === "string" && tool.description.trim()) {
-          return { ...output, description: tool.description };
-        }
-        return output;
-      }),
+    list: async () => await modelContext.listTools(),
     invoke: async (name, input) => {
       return await modelContext.callTool(String(name || ""), input || {});
     },

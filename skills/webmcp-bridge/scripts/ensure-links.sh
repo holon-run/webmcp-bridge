@@ -112,10 +112,10 @@ fi
 
 cli_name="${name}-webmcp-cli"
 ui_name="${name}-webmcp-ui"
-link_args=()
+link_command=(uxc link)
 if [[ -n "$link_dir" ]]; then
   mkdir -p "$link_dir"
-  link_args+=(--dir "$link_dir")
+  link_command+=(--dir "$link_dir")
 fi
 
 read -r -a launcher_parts <<< "$local_mcp_command"
@@ -125,8 +125,8 @@ ui_args=("${launcher_parts[@]}" "${source_args[@]}" --no-headless --user-data-di
 cli_command="$(shell_join "${cli_args[@]}")"
 ui_command="$(shell_join "${ui_args[@]}")"
 
-uxc link "${link_args[@]}" "$cli_name" "$cli_command" --daemon-exclusive "$profile" --force >/dev/null
-uxc link "${link_args[@]}" "$ui_name" "$ui_command" --daemon-exclusive "$profile" --force >/dev/null
+"${link_command[@]}" "$cli_name" "$cli_command" --daemon-exclusive "$profile" --force >/dev/null
+"${link_command[@]}" "$ui_name" "$ui_command" --daemon-exclusive "$profile" --force >/dev/null
 
 printf 'linked %s -> %s\n' "$cli_name" "$cli_command"
 printf 'linked %s -> %s\n' "$ui_name" "$ui_command"

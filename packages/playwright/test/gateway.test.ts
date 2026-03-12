@@ -89,4 +89,13 @@ describe("createWebMcpPageGateway", () => {
       name: "site.tool",
     });
   });
+
+  it("injects polyfill listTools support for page-hosted providers", async () => {
+    const { page } = createMockPage("polyfill", []);
+    await createWebMcpPageGateway(page as never);
+
+    const initScripts = page.addInitScript.mock.calls.map(([script]) => String(script));
+    expect(initScripts.some((script) => script.includes("listTools: async"))).toBe(true);
+    expect(initScripts.some((script) => script.includes("globalAny.__webmcpBridge ="))).toBe(true);
+  });
 });

@@ -154,6 +154,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   try {
     context = await browserType.launchPersistentContext(userDataDir, {
       headless,
+      viewport: null,
     });
 
     const page = context.pages()[0] ?? (await context.newPage());
