@@ -17,12 +17,12 @@ import type {
   UpsertNodeInput,
 } from "./types.js";
 
-const DEFAULT_NODE_WIDTH = 220;
+const DEFAULT_NODE_WIDTH = 260;
 const DEFAULT_NODE_HEIGHT = 120;
 const GRID_X_GAP = 280;
 const GRID_Y_GAP = 180;
-const LAYER_Y_GAP = 220;
-const LAYER_X_GAP = 300;
+const LAYER_Y_GAP = 260;
+const LAYER_X_GAP = 380;
 
 function createId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -199,6 +199,25 @@ export function removeBySelection(document: DiagramDocument, selection: DiagramS
     ...document,
     nodes: withoutNodes,
     edges: withoutEdges,
+  };
+}
+
+export function removeNodesById(document: DiagramDocument, nodeIds: readonly string[]): DiagramDocument {
+  const selectedNodeIds = new Set(nodeIds);
+  const withoutNodes = document.nodes.filter((node) => !selectedNodeIds.has(node.id));
+  const survivingNodeIds = new Set(withoutNodes.map((node) => node.id));
+  return {
+    ...document,
+    nodes: withoutNodes,
+    edges: document.edges.filter((edge) => survivingNodeIds.has(edge.sourceNodeId) && survivingNodeIds.has(edge.targetNodeId)),
+  };
+}
+
+export function removeEdgesById(document: DiagramDocument, edgeIds: readonly string[]): DiagramDocument {
+  const selectedEdgeIds = new Set(edgeIds);
+  return {
+    ...document,
+    edges: document.edges.filter((edge) => !selectedEdgeIds.has(edge.id)),
   };
 }
 

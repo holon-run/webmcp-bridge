@@ -7,17 +7,41 @@ import { useEffect, useRef, useState } from "react";
 import * as React from "react";
 import * as ExcalidrawLib from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
-import { documentToSceneElements, extractSelection, syncNodePositionsFromScene } from "./excalidraw.js";
+import { documentToSceneElements, extractSelection, sceneElementsToDocument } from "./excalidraw.js";
 import { ensureModelContext } from "./model-context.js";
 import { DiagramStore } from "./state.js";
 import { registerBoardTools } from "./tools.js";
 
 const Excalidraw = (ExcalidrawLib as unknown as { Excalidraw: React.ComponentType<Record<string, unknown>> }).Excalidraw;
+const CaptureUpdateAction = (
+  ExcalidrawLib as unknown as {
+    CaptureUpdateAction?: {
+      NEVER?: "NEVER";
+    };
+  }
+).CaptureUpdateAction;
 
 type SceneApi = {
-  updateScene: (scene: { elements: unknown[] }) => void;
+  updateScene: (scene: { elements: unknown[]; captureUpdate?: "NEVER" | "EVENTUALLY" | "IMMEDIATELY" }) => void;
   getSceneElements?: () => unknown[];
+  getAppState?: () => {
+    zoom?: { value?: number };
+    scrollX?: number;
+    scrollY?: number;
+  };
   exportToBlob?: (opts: unknown) => Promise<Blob>;
+  resetScene?: () => void;
+  scrollToContent?: (
+    target?: unknown[] | string | unknown,
+    opts?: {
+      fitToContent?: boolean;
+      fitToViewport?: boolean;
+      viewportZoomFactor?: number;
+      animate?: boolean;
+      duration?: number;
+    },
+  ) => void;
+  refresh?: () => void;
 };
 
 function useDiagramStore(): DiagramStore {
@@ -28,23 +52,29 @@ function useDiagramStore(): DiagramStore {
   return storeRef.current;
 }
 
-function useStoreVersion(store: DiagramStore): number {
-  const [version, setVersion] = useState(0);
+function estimateSceneElementCount(document: { nodes: readonly unknown[]; edges: readonly { label?: string; protocol?: string }[] }): number {
+  const labeledEdges = document.edges.filter((edge) => edge.label || edge.protocol).length;
+  return document.nodes.length + document.edges.length + labeledEdges;
+}
+
+export function App(): React.ReactElement {
+  const store = useDiagramStore();
+  const [, setVersion] = useState(0);
+  const [sceneVersion, setSceneVersion] = useState(0);
   useEffect(() => {
     return store.subscribe(() => {
       setVersion((value) => value + 1);
     });
   }, [store]);
-  return version;
-}
-
-export function App(): React.ReactElement {
-  const store = useDiagramStore();
-  const version = useStoreVersion(store);
   const sceneApiRef = useRef<SceneApi | undefined>(undefined);
   const applyingSceneRef = useRef(false);
+  const expectedSceneDocumentRef = useRef<string>("");
+  const syncRetryCountRef = useRef(0);
+  const applyingSceneTimeoutRef = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
+  const lastSceneDocumentRef = useRef<string>("");
   const [modelContextReady, setModelContextReady] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Loading tools...");
+  const [debugTick, setDebugTick] = useState(0);
 
   const snapshot = store.getSnapshot();
   const summary = store.getSummary();
@@ -67,14 +97,113 @@ export function App(): React.ReactElement {
     if (!sceneApiRef.current) {
       return;
     }
+    const serializedDocument = JSON.stringify(snapshot.document);
+    const currentSceneElements = sceneApiRef.current.getSceneElements?.() ?? [];
+    const expectedSceneElementCount = estimateSceneElementCount(snapshot.document);
+    const expectsVisibleScene = snapshot.document.nodes.length > 0 || snapshot.document.edges.length > 0;
+    const sceneLooksEmpty = currentSceneElements.length === 0;
+    const sceneLooksOutOfSync = expectsVisibleScene && currentSceneElements.length !== expectedSceneElementCount;
+    if (
+      serializedDocument === lastSceneDocumentRef.current &&
+      !(expectsVisibleScene && sceneLooksEmpty) &&
+      !sceneLooksOutOfSync
+    ) {
+      return;
+    }
     void documentToSceneElements(snapshot.document).then((elements) => {
       applyingSceneRef.current = true;
-      sceneApiRef.current?.updateScene({ elements });
-      queueMicrotask(() => {
-        applyingSceneRef.current = false;
+      expectedSceneDocumentRef.current = serializedDocument;
+      syncRetryCountRef.current = 0;
+      if (applyingSceneTimeoutRef.current !== undefined) {
+        globalThis.clearTimeout(applyingSceneTimeoutRef.current);
+      }
+      lastSceneDocumentRef.current = serializedDocument;
+      if (
+        snapshot.document.nodes.length === 0 &&
+        snapshot.document.edges.length === 0 ||
+        currentSceneElements.length > elements.length
+      ) {
+        sceneApiRef.current?.resetScene?.();
+      }
+      sceneApiRef.current?.updateScene({
+        elements,
+        captureUpdate: CaptureUpdateAction?.NEVER ?? "NEVER",
       });
+      globalThis.requestAnimationFrame(() => {
+        sceneApiRef.current?.scrollToContent?.(elements, {
+          fitToViewport: true,
+          viewportZoomFactor: 0.9,
+          animate: false,
+        });
+        sceneApiRef.current?.refresh?.();
+      });
+      applyingSceneTimeoutRef.current = globalThis.setTimeout(() => {
+        const liveSceneCount = sceneApiRef.current?.getSceneElements?.().length ?? 0;
+        if (liveSceneCount !== expectedSceneElementCount && syncRetryCountRef.current < 3) {
+          syncRetryCountRef.current += 1;
+          lastSceneDocumentRef.current = "";
+          applyingSceneTimeoutRef.current = undefined;
+          setSceneVersion((value) => value + 1);
+          return;
+        }
+        applyingSceneRef.current = false;
+        expectedSceneDocumentRef.current = "";
+        syncRetryCountRef.current = 0;
+        applyingSceneTimeoutRef.current = undefined;
+      }, 200);
     });
-  }, [snapshot.document, version]);
+  }, [snapshot.document, sceneVersion]);
+
+  useEffect(() => {
+    return () => {
+      if (applyingSceneTimeoutRef.current !== undefined) {
+        globalThis.clearTimeout(applyingSceneTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const fitView = (): void => {
+      const api = sceneApiRef.current;
+      const elements = api?.getSceneElements?.() ?? [];
+      api?.scrollToContent?.(elements, {
+        fitToViewport: true,
+        viewportZoomFactor: 0.9,
+        animate: false,
+      });
+      api?.refresh?.();
+    };
+
+    (globalThis as typeof globalThis & { __boardFitView?: () => void }).__boardFitView = fitView;
+    return () => {
+      delete (globalThis as typeof globalThis & { __boardFitView?: () => void }).__boardFitView;
+    };
+  }, []);
+
+  useEffect(() => {
+    const interval = globalThis.setInterval(() => {
+      setDebugTick((value) => value + 1);
+    }, 500);
+    return () => {
+      globalThis.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    const boardGlobal = globalThis as typeof globalThis & { __excalidrawAPI?: SceneApi };
+    if (sceneApiRef.current) {
+      boardGlobal.__excalidrawAPI = sceneApiRef.current;
+    } else {
+      delete boardGlobal.__excalidrawAPI;
+    }
+    return () => {
+      delete boardGlobal.__excalidrawAPI;
+    };
+  });
+
+  const sceneElements = sceneApiRef.current?.getSceneElements?.() ?? [];
+  const appState = sceneApiRef.current?.getAppState?.();
+  void debugTick;
 
   return (
     <div style={styles.shell}>
@@ -94,6 +223,20 @@ export function App(): React.ReactElement {
           <button style={styles.secondaryButton} onClick={() => store.removeSelection()}>
             Delete Selection
           </button>
+          <button
+            style={styles.secondaryButton}
+            onClick={() => {
+              const elements = sceneApiRef.current?.getSceneElements?.() ?? [];
+              sceneApiRef.current?.scrollToContent?.(elements, {
+                fitToViewport: true,
+                viewportZoomFactor: 0.9,
+                animate: false,
+              });
+              sceneApiRef.current?.refresh?.();
+            }}
+          >
+            Fit View
+          </button>
         </div>
       </header>
       <main style={styles.main}>
@@ -102,6 +245,7 @@ export function App(): React.ReactElement {
             <Excalidraw
               excalidrawAPI={(api: unknown) => {
                 sceneApiRef.current = api as SceneApi;
+                setSceneVersion((value) => value + 1);
               }}
               onChange={(elements: unknown[], appState: unknown) => {
                 const selectedElementIds =
@@ -114,8 +258,21 @@ export function App(): React.ReactElement {
                           .map(([elementId]) => elementId),
                       )
                     : new Set<string>();
-                if (!applyingSceneRef.current) {
-                  store.setDocument(syncNodePositionsFromScene(store.getDocument(), elements));
+                const nextDocument = sceneElementsToDocument(store.getDocument(), elements);
+                const serializedNextDocument = JSON.stringify(nextDocument);
+                if (applyingSceneRef.current) {
+                  if (serializedNextDocument === expectedSceneDocumentRef.current) {
+                    applyingSceneRef.current = false;
+                    expectedSceneDocumentRef.current = "";
+                    syncRetryCountRef.current = 0;
+                    if (applyingSceneTimeoutRef.current !== undefined) {
+                      globalThis.clearTimeout(applyingSceneTimeoutRef.current);
+                      applyingSceneTimeoutRef.current = undefined;
+                    }
+                  }
+                } else {
+                  lastSceneDocumentRef.current = serializedNextDocument;
+                  store.setDocument(nextDocument);
                 }
                 store.setSelection(extractSelection(elements, selectedElementIds));
               }}
@@ -165,11 +322,65 @@ export function App(): React.ReactElement {
             <ul style={styles.toolList}>
               <li>`nodes.list`</li>
               <li>`nodes.upsert`</li>
+              <li>`nodes.remove`</li>
               <li>`edges.list`</li>
               <li>`edges.upsert`</li>
+              <li>`edges.remove`</li>
               <li>`layout.apply`</li>
+              <li>`diagram.reset`</li>
               <li>`diagram.export`</li>
             </ul>
+          </section>
+          <section style={styles.card}>
+            <p style={styles.cardEyebrow}>Debug</p>
+            <h2 style={styles.cardTitle}>Canvas State</h2>
+            <dl style={styles.metaList}>
+              <div style={styles.metaRow}>
+                <dt>Store Nodes</dt>
+                <dd>{summary.nodeCount}</dd>
+              </div>
+              <div style={styles.metaRow}>
+                <dt>Store Edges</dt>
+                <dd>{summary.edgeCount}</dd>
+              </div>
+              <div style={styles.metaRow}>
+                <dt>Scene Elements</dt>
+                <dd>{sceneElements.length}</dd>
+              </div>
+              <div style={styles.metaRow}>
+                <dt>Zoom</dt>
+                <dd>{appState?.zoom?.value?.toFixed(2) ?? "n/a"}</dd>
+              </div>
+              <div style={styles.metaRow}>
+                <dt>Scroll</dt>
+                <dd>{appState ? `${Math.round(appState.scrollX ?? 0)}, ${Math.round(appState.scrollY ?? 0)}` : "n/a"}</dd>
+              </div>
+            </dl>
+            <div style={styles.debugActions}>
+              <button
+                style={styles.secondaryButton}
+                onClick={() => {
+                  lastSceneDocumentRef.current = "";
+                  setSceneVersion((value) => value + 1);
+                }}
+              >
+                Force Sync
+              </button>
+              <button
+                style={styles.secondaryButton}
+                onClick={() => {
+                  const elements = sceneApiRef.current?.getSceneElements?.() ?? [];
+                  sceneApiRef.current?.scrollToContent?.(elements, {
+                    fitToViewport: true,
+                    viewportZoomFactor: 0.9,
+                    animate: false,
+                  });
+                  sceneApiRef.current?.refresh?.();
+                }}
+              >
+                Force Fit
+              </button>
+            </div>
           </section>
         </aside>
       </main>
@@ -179,13 +390,17 @@ export function App(): React.ReactElement {
 
 const styles: Record<string, React.CSSProperties> = {
   shell: {
-    minHeight: "100vh",
+    minHeight: "100dvh",
+    height: "100dvh",
     background:
       "radial-gradient(circle at top left, rgba(16, 185, 129, 0.14), transparent 32%), linear-gradient(135deg, #f7fee7 0%, #eff6ff 52%, #fff7ed 100%)",
     color: "#0f172a",
     fontFamily: '"IBM Plex Sans", "Helvetica Neue", sans-serif',
     padding: "24px",
     boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
   },
   header: {
     display: "flex",
@@ -240,13 +455,16 @@ const styles: Record<string, React.CSSProperties> = {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) 320px",
     gap: "24px",
+    flex: 1,
+    minHeight: 0,
   },
   canvasPanel: {
     minWidth: 0,
+    minHeight: 0,
   },
   canvasFrame: {
-    height: "calc(100vh - 180px)",
-    minHeight: "620px",
+    height: "100%",
+    minHeight: 0,
     overflow: "hidden",
     borderRadius: "28px",
     border: "1px solid rgba(15, 23, 42, 0.08)",
@@ -257,6 +475,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: "16px",
+    minHeight: 0,
+    overflow: "auto",
   },
   card: {
     borderRadius: "24px",
@@ -310,5 +530,11 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
     fontFamily: '"IBM Plex Mono", monospace',
     fontSize: "13px",
+  },
+  debugActions: {
+    display: "flex",
+    gap: "12px",
+    flexWrap: "wrap",
+    marginTop: "16px",
   },
 };

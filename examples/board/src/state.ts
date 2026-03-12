@@ -8,8 +8,10 @@ import {
   createDemoDocument,
   createEmptyDocument,
   createSnapshot,
+  removeEdgesById,
   removeBySelection,
   removeDanglingEdges,
+  removeNodesById,
   summarizeDocument,
   upsertEdges,
   upsertNodes,
@@ -28,6 +30,20 @@ import type {
 const STORAGE_KEY = "webmcp-bridge.board.document";
 
 type Listener = () => void;
+
+function selectionsEqual(left: DiagramSelection, right: DiagramSelection): boolean {
+  if (left.nodeIds.length !== right.nodeIds.length || left.edgeIds.length !== right.edgeIds.length) {
+    return false;
+  }
+  return (
+    left.nodeIds.every((value, index) => value === right.nodeIds[index]) &&
+    left.edgeIds.every((value, index) => value === right.edgeIds[index])
+  );
+}
+
+function documentsEqual(left: DiagramDocument, right: DiagramDocument): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 function isDiagramDocument(value: unknown): value is DiagramDocument {
   if (!value || typeof value !== "object") {
@@ -98,11 +114,18 @@ export class DiagramStore {
   }
 
   setDocument(document: DiagramDocument): void {
-    this.document = removeDanglingEdges(document);
+    const nextDocument = removeDanglingEdges(document);
+    if (documentsEqual(this.document, nextDocument)) {
+      return;
+    }
+    this.document = nextDocument;
     this.emit();
   }
 
   setSelection(selection: DiagramSelection): void {
+    if (selectionsEqual(this.selection, selection)) {
+      return;
+    }
     this.selection = selection;
     this.emit();
   }
@@ -127,6 +150,26 @@ export class DiagramStore {
 
   upsertEdges(inputs: UpsertEdgeInput[]): DiagramDocument {
     this.document = upsertEdges(this.document, inputs);
+    this.emit();
+    return this.document;
+  }
+
+  removeNodes(nodeIds: string[]): DiagramDocument {
+    this.document = removeNodesById(this.document, nodeIds);
+    this.selection = {
+      nodeIds: this.selection.nodeIds.filter((nodeId) => !nodeIds.includes(nodeId)),
+      edgeIds: this.selection.edgeIds.filter((edgeId) => this.document.edges.some((edge) => edge.id === edgeId)),
+    };
+    this.emit();
+    return this.document;
+  }
+
+  removeEdges(edgeIds: string[]): DiagramDocument {
+    this.document = removeEdgesById(this.document, edgeIds);
+    this.selection = {
+      nodeIds: this.selection.nodeIds,
+      edgeIds: this.selection.edgeIds.filter((edgeId) => !edgeIds.includes(edgeId)),
+    };
     this.emit();
     return this.document;
   }

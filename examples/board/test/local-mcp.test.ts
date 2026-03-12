@@ -260,4 +260,69 @@ describe("board local-mcp integration", () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    "preserves existing edges when nodes are updated through local-mcp",
+    async () => {
+      await client!.request("tools/call", {
+        name: "diagram.reset",
+        arguments: {},
+      });
+
+      await client!.request("tools/call", {
+        name: "nodes.upsert",
+        arguments: {
+          nodes: [
+            { id: "left", label: "Left", kind: "service", x: 120, y: 120 },
+            { id: "right", label: "Right", kind: "service", x: 520, y: 120 },
+          ],
+        },
+      });
+
+      await client!.request("tools/call", {
+        name: "edges.upsert",
+        arguments: {
+          edges: [
+            { id: "edge-1", sourceNodeId: "left", targetNodeId: "right", protocol: "sync" },
+          ],
+        },
+      });
+
+      await client!.request("tools/call", {
+        name: "nodes.upsert",
+        arguments: {
+          nodes: [
+            { id: "left", label: "Left", kind: "service", x: 180, y: 180 },
+          ],
+        },
+      });
+
+      const edges = await waitFor(
+        async () => readStructuredContent(await client!.request("tools/call", { name: "edges.list", arguments: {} })),
+        (candidate) => {
+          const items = Array.isArray(candidate.items) ? candidate.items : [];
+          return items.some((item) => {
+            return (
+              typeof item === "object" &&
+              item !== null &&
+              "id" in item &&
+              item.id === "edge-1"
+            );
+          });
+        },
+        15_000,
+      );
+
+      expect(edges.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "edge-1",
+            sourceNodeId: "left",
+            targetNodeId: "right",
+          }),
+        ]),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

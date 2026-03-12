@@ -33,9 +33,12 @@ describe("board tools", () => {
     expect(tools.map((tool) => tool.name)).toEqual([
       "nodes.list",
       "nodes.upsert",
+      "nodes.remove",
       "edges.list",
       "edges.upsert",
+      "edges.remove",
       "layout.apply",
+      "diagram.reset",
       "diagram.export",
     ]);
   });
@@ -53,6 +56,26 @@ describe("board tools", () => {
         nodeCount: expect.any(Number),
         edgeCount: expect.any(Number),
       },
+    });
+  });
+
+  it("removes nodes and dangling edges", async () => {
+    const modelContext = ensureModelContext(globalThis);
+    const store = DiagramStore.load();
+
+    await registerBoardTools(modelContext, store, () => undefined);
+    await modelContext.callTool("nodes.remove", { nodeIds: ["orders"] });
+    const nodes = await modelContext.callTool("nodes.list", {});
+    const edges = await modelContext.callTool("edges.list", {});
+
+    expect(nodes).toMatchObject({
+      items: expect.not.arrayContaining([expect.objectContaining({ id: "orders" })]),
+    });
+    expect(edges).toMatchObject({
+      items: expect.not.arrayContaining([
+        expect.objectContaining({ sourceNodeId: "orders" }),
+        expect.objectContaining({ targetNodeId: "orders" }),
+      ]),
     });
   });
 });

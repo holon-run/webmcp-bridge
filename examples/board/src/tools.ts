@@ -14,9 +14,12 @@ type ExportApi = {
 const TOOL_NAMES = [
   "nodes.list",
   "nodes.upsert",
+  "nodes.remove",
   "edges.list",
   "edges.upsert",
+  "edges.remove",
   "layout.apply",
+  "diagram.reset",
   "diagram.export",
 ] as const;
 
@@ -77,6 +80,33 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
         };
       },
     },
+    "nodes.remove": {
+      name: "nodes.remove",
+      description: "Remove one or more nodes by id and delete their dangling edges.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["nodeIds"],
+        properties: {
+          nodeIds: {
+            type: "array",
+            description: "Node ids to delete.",
+            items: {
+              type: "string",
+              description: "Stable node id to remove.",
+            },
+          },
+        },
+      },
+      execute: async (input) => {
+        const nodeIds = readStringArrayField(input, "nodeIds");
+        const document = store.removeNodes(nodeIds);
+        return {
+          document,
+          summary: store.getSummary(),
+        };
+      },
+    },
     "edges.list": {
       name: "edges.list",
       description: "List all structured diagram edges.",
@@ -129,6 +159,33 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
         };
       },
     },
+    "edges.remove": {
+      name: "edges.remove",
+      description: "Remove one or more edges by id.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["edgeIds"],
+        properties: {
+          edgeIds: {
+            type: "array",
+            description: "Edge ids to delete.",
+            items: {
+              type: "string",
+              description: "Stable edge id to remove.",
+            },
+          },
+        },
+      },
+      execute: async (input) => {
+        const edgeIds = readStringArrayField(input, "edgeIds");
+        const document = store.removeEdges(edgeIds);
+        return {
+          document,
+          summary: store.getSummary(),
+        };
+      },
+    },
     "layout.apply": {
       name: "layout.apply",
       description: "Apply a deterministic layout to the whole diagram or current selection.",
@@ -148,6 +205,21 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
         );
         return {
           document,
+          summary: store.getSummary(),
+        };
+      },
+    },
+    "diagram.reset": {
+      name: "diagram.reset",
+      description: "Clear the diagram and selection state.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+      },
+      execute: async () => {
+        store.clear();
+        return {
+          document: store.getDocument(),
           summary: store.getSummary(),
         };
       },
@@ -189,6 +261,15 @@ function readArrayField(value: JsonValue, field: string): JsonValue[] {
     throw new Error(`${field} must be an array`);
   }
   return current;
+}
+
+function readStringArrayField(value: JsonValue, field: string): string[] {
+  return readArrayField(value, field).map((item, index) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error(`${field}[${String(index)}] must be a non-empty string`);
+    }
+    return item;
+  });
 }
 
 function readRequiredString(value: JsonValue, field: string): string {
