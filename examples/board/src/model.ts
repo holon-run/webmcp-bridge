@@ -8,7 +8,6 @@ import type {
   DiagramEdge,
   DiagramNode,
   DiagramSelection,
-  DiagramSnapshot,
   DiagramSummary,
   LayoutMode,
   LayoutScope,
@@ -325,11 +324,4 @@ export function applyLayout(
     return layoutGrid(document, scope, selection);
   }
   return layoutLayered(document, scope, selection);
-}
-
-export function createSnapshot(document: DiagramDocument, selection: DiagramSelection): DiagramSnapshot {
-  return {
-    document,
-    selection,
-  };
 }

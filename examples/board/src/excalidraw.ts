@@ -1,15 +1,198 @@
 /**
- * This module converts the structured diagram model to and from Excalidraw scene elements.
- * It depends on the example's model/types modules and is used only by the React app layer.
+ * This module derives bridge-managed graph data from Excalidraw scene snapshots and applies scene-first mutations.
+ * It depends on the pure model helpers and is used by both the React UI and WebMCP tools.
  */
 
-import type { DiagramDocument, DiagramEdge, DiagramNode, ExcalidrawCustomData } from "./types.js";
+import {
+  applyLayout,
+  createDemoDocument,
+  createEmptyDocument,
+  removeBySelection,
+  removeDanglingEdges,
+  summarizeDocument,
+  upsertEdges,
+  upsertNodes,
+  removeEdgesById,
+  removeNodesById,
+} from "./model.js";
+import type {
+  BoardSceneAppState,
+  BoardSceneSnapshot,
+  DiagramDocument,
+  DiagramEdge,
+  DiagramNode,
+  DiagramSelection,
+  DiagramSummary,
+  ExcalidrawCustomData,
+  ExcalidrawEdgeCustomData,
+  ExcalidrawNodeCustomData,
+  LayoutMode,
+  LayoutScope,
+  UpsertEdgeInput,
+  UpsertNodeInput,
+} from "./types.js";
 
-const ExcalidrawLibPromise = import("@excalidraw/excalidraw");
+const DEFAULT_SCENE_BACKGROUND = "#f7fee7";
 const NODE_SHAPE_PREFIX = "node-shape-";
-const NODE_LABEL_PREFIX = "node-label-";
 const EDGE_LINE_PREFIX = "edge-line-";
-const EDGE_LABEL_PREFIX = "edge-label-";
+
+type RawElement = Record<string, unknown>;
+
+type RawAppState = {
+  viewBackgroundColor?: unknown;
+  scrollX?: unknown;
+  scrollY?: unknown;
+  zoom?: unknown;
+  selectedElementIds?: Record<string, boolean>;
+};
+
+type ExcalidrawSkeletonLabel = {
+  text?: string;
+};
+
+type ExcalidrawSkeleton = {
+  id?: string;
+  type?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  label?: ExcalidrawSkeletonLabel;
+  [key: string]: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneElement<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function fallbackConvertToExcalidrawElements(elements: unknown[]): unknown[] {
+  const converted: unknown[] = [];
+  for (const item of elements) {
+    if (!isRecord(item)) {
+      converted.push(item);
+      continue;
+    }
+    const skeleton = item as ExcalidrawSkeleton;
+    const labelText = typeof skeleton.label?.text === "string" ? skeleton.label.text : undefined;
+    const { label, ...shape } = skeleton;
+    converted.push(shape);
+    if (labelText && typeof skeleton.id === "string") {
+      converted.push({
+        id: `${skeleton.id}-label`,
+        type: "text",
+        text: labelText,
+        containerId: skeleton.id,
+        x: typeof skeleton.x === "number" ? skeleton.x + 24 : 0,
+        y: typeof skeleton.y === "number" ? skeleton.y + 24 : 0,
+      });
+    }
+  }
+  return converted;
+}
+
+async function loadConvertToExcalidrawElements(): Promise<(elements: unknown[]) => unknown[]> {
+  try {
+    const excalidrawLib = await import("@excalidraw/excalidraw");
+    return (
+      excalidrawLib as unknown as {
+        convertToExcalidrawElements: (elements: unknown[]) => unknown[];
+      }
+    ).convertToExcalidrawElements;
+  } catch {
+    return fallbackConvertToExcalidrawElements;
+  }
+}
+
+function isDeleted(element: unknown): boolean {
+  return isRecord(element) && element.isDeleted === true;
+}
+
+function normalizeElements(elements: readonly unknown[]): unknown[] {
+  return elements.filter((element) => !isDeleted(element)).map((element) => cloneElement(element));
+}
+
+function normalizeLabelText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function sanitizeAppState(appState: unknown): BoardSceneAppState {
+  if (!isRecord(appState)) {
+    return {
+      viewBackgroundColor: DEFAULT_SCENE_BACKGROUND,
+    };
+  }
+  const rawZoom = appState.zoom;
+  const zoom =
+    typeof rawZoom === "number"
+      ? rawZoom
+      : isRecord(rawZoom) && typeof rawZoom.value === "number"
+        ? rawZoom.value
+        : undefined;
+  return {
+    viewBackgroundColor: typeof appState.viewBackgroundColor === "string" ? appState.viewBackgroundColor : DEFAULT_SCENE_BACKGROUND,
+    ...(typeof appState.scrollX === "number" ? { scrollX: appState.scrollX } : {}),
+    ...(typeof appState.scrollY === "number" ? { scrollY: appState.scrollY } : {}),
+    ...(typeof zoom === "number" ? { zoom } : {}),
+  };
+}
+
+export function toExcalidrawAppState(appState: BoardSceneAppState): Record<string, unknown> {
+  const next: Record<string, unknown> = {
+    viewBackgroundColor: appState.viewBackgroundColor ?? DEFAULT_SCENE_BACKGROUND,
+  };
+  if (typeof appState.scrollX === "number") {
+    next.scrollX = appState.scrollX;
+  }
+  if (typeof appState.scrollY === "number") {
+    next.scrollY = appState.scrollY;
+  }
+  if (typeof appState.zoom === "number") {
+    next.zoom = { value: appState.zoom };
+  }
+  return next;
+}
+
+export function createSceneSnapshot(elements: readonly unknown[], appState?: unknown): BoardSceneSnapshot {
+  return {
+    version: 1,
+    elements: normalizeElements(elements),
+    appState: sanitizeAppState(appState),
+  };
+}
+
+export function createEmptySceneSnapshot(): BoardSceneSnapshot {
+  return {
+    version: 1,
+    elements: [],
+    appState: {
+      viewBackgroundColor: DEFAULT_SCENE_BACKGROUND,
+    },
+  };
+}
+
+function createNodeCustomData(node: DiagramNode): ExcalidrawNodeCustomData {
+  return {
+    bridgeType: "node",
+    bridgeId: node.id,
+    nodeKind: node.kind,
+    ...(node.description !== undefined ? { description: node.description } : {}),
+  };
+}
+
+function createEdgeCustomData(edge: DiagramEdge): ExcalidrawEdgeCustomData {
+  return {
+    bridgeType: "edge",
+    bridgeId: edge.id,
+    sourceNodeId: edge.sourceNodeId,
+    targetNodeId: edge.targetNodeId,
+    ...(edge.label !== undefined ? { label: edge.label } : {}),
+    ...(edge.protocol !== undefined ? { protocol: edge.protocol } : {}),
+  };
+}
 
 function createNodeStyle(node: DiagramNode): Record<string, unknown> {
   const palette: Record<DiagramNode["kind"], { strokeColor: string; backgroundColor: string }> = {
@@ -23,11 +206,11 @@ function createNodeStyle(node: DiagramNode): Record<string, unknown> {
   return palette[node.kind];
 }
 
-function createCustomData(bridgeType: ExcalidrawCustomData["bridgeType"], bridgeId: string): ExcalidrawCustomData {
-  return {
-    bridgeType,
-    bridgeId,
-  };
+function formatEdgeText(edge: DiagramEdge): string | undefined {
+  if (edge.protocol && edge.label) {
+    return `${edge.protocol} (${edge.label})`;
+  }
+  return edge.protocol ?? edge.label;
 }
 
 function getNodeCenter(node: DiagramNode): { x: number; y: number } {
@@ -59,12 +242,7 @@ function projectToNodeBoundary(node: DiagramNode, toward: { x: number; y: number
 }
 
 export async function documentToSceneElements(document: DiagramDocument): Promise<unknown[]> {
-  const excalidrawLib = await ExcalidrawLibPromise;
-  const convertToExcalidrawElements = (
-    excalidrawLib as unknown as {
-      convertToExcalidrawElements: (elements: unknown[]) => unknown[];
-    }
-  ).convertToExcalidrawElements;
+  const convertToExcalidrawElements = await loadConvertToExcalidrawElements();
 
   const skeletons: unknown[] = [];
   for (const node of document.nodes) {
@@ -84,7 +262,7 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
         verticalAlign: "middle",
         strokeColor: "#0f172a",
       },
-      customData: createCustomData("node", node.id),
+      customData: createNodeCustomData(node),
       ...createNodeStyle(node),
     });
   }
@@ -101,7 +279,7 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
     const to = projectToNodeBoundary(target, sourceCenter);
     skeletons.push({
       type: "arrow",
-      id: `edge-line-${edge.id}`,
+      id: `${EDGE_LINE_PREFIX}${edge.id}`,
       x: from.x,
       y: from.y,
       points: [
@@ -110,400 +288,243 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
       ],
       startArrowhead: null,
       endArrowhead: "arrow",
-      label:
-        edge.label || edge.protocol
-          ? {
-              text: edge.protocol ? `${edge.protocol}${edge.label ? ` (${edge.label})` : ""}` : (edge.label ?? ""),
-              fontSize: 20,
-              fontFamily: 5,
-              textAlign: "center",
-              verticalAlign: "middle",
-              strokeColor: "#334155",
-            }
-          : undefined,
+      label: formatEdgeText(edge)
+        ? {
+            text: formatEdgeText(edge),
+            fontSize: 20,
+            fontFamily: 5,
+            textAlign: "center",
+            verticalAlign: "middle",
+            strokeColor: "#334155",
+          }
+        : undefined,
       strokeColor: "#0f172a",
-      customData: createCustomData("edge", edge.id),
+      customData: createEdgeCustomData(edge),
     });
   }
 
   return convertToExcalidrawElements(skeletons);
 }
 
-function decodeBridgeDataFromElementId(elementId: string): ExcalidrawCustomData | undefined {
-  if (elementId.startsWith(NODE_SHAPE_PREFIX)) {
+export async function createDemoSceneSnapshot(): Promise<BoardSceneSnapshot> {
+  return {
+    version: 1,
+    elements: await documentToSceneElements(createDemoDocument()),
+    appState: {
+      viewBackgroundColor: DEFAULT_SCENE_BACKGROUND,
+    },
+  };
+}
+
+export async function migrateLegacyDocumentToSceneSnapshot(rawDocument: string): Promise<BoardSceneSnapshot> {
+  try {
+    const parsed = JSON.parse(rawDocument) as DiagramDocument;
+    if (parsed && parsed.version === 1 && Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
+      return {
+        version: 1,
+        elements: await documentToSceneElements(removeDanglingEdges(parsed)),
+        appState: {
+          viewBackgroundColor: DEFAULT_SCENE_BACKGROUND,
+        },
+      };
+    }
+  } catch {
+    // fall through to demo snapshot
+  }
+  return await createDemoSceneSnapshot();
+}
+
+function readElementId(element: unknown): string | undefined {
+  return isRecord(element) && typeof element.id === "string" && element.id.length > 0 ? element.id : undefined;
+}
+
+function readContainerId(element: unknown): string | undefined {
+  return isRecord(element) && typeof element.containerId === "string" && element.containerId.length > 0 ? element.containerId : undefined;
+}
+
+function readBridgeData(element: unknown): ExcalidrawCustomData | undefined {
+  if (!isRecord(element) || !isRecord(element.customData)) {
+    return undefined;
+  }
+  const customData = element.customData as Record<string, unknown>;
+  if (customData.bridgeType === "node" && typeof customData.bridgeId === "string" && typeof customData.nodeKind === "string") {
     return {
       bridgeType: "node",
-      bridgeId: elementId.slice(NODE_SHAPE_PREFIX.length),
+      bridgeId: customData.bridgeId,
+      nodeKind: customData.nodeKind as DiagramNode["kind"],
+      ...(typeof customData.description === "string" ? { description: customData.description } : {}),
     };
   }
-  if (elementId.startsWith(NODE_LABEL_PREFIX)) {
-    return {
-      bridgeType: "node",
-      bridgeId: elementId.slice(NODE_LABEL_PREFIX.length),
-    };
-  }
-  if (elementId.startsWith(EDGE_LINE_PREFIX)) {
+  if (
+    customData.bridgeType === "edge" &&
+    typeof customData.bridgeId === "string" &&
+    typeof customData.sourceNodeId === "string" &&
+    typeof customData.targetNodeId === "string"
+  ) {
     return {
       bridgeType: "edge",
-      bridgeId: elementId.slice(EDGE_LINE_PREFIX.length),
-    };
-  }
-  if (elementId.startsWith(EDGE_LABEL_PREFIX)) {
-    return {
-      bridgeType: "edge-label",
-      bridgeId: elementId.slice(EDGE_LABEL_PREFIX.length),
+      bridgeId: customData.bridgeId,
+      sourceNodeId: customData.sourceNodeId,
+      targetNodeId: customData.targetNodeId,
+      ...(typeof customData.label === "string" ? { label: customData.label } : {}),
+      ...(typeof customData.protocol === "string" ? { protocol: customData.protocol } : {}),
     };
   }
   return undefined;
 }
 
-function readBridgeData(element: unknown): ExcalidrawCustomData | undefined {
-  if (!element || typeof element !== "object") {
-    return undefined;
+function collectBridgeContainerIds(elements: readonly unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const element of elements) {
+    if (isDeleted(element)) {
+      continue;
+    }
+    const bridgeData = readBridgeData(element);
+    const id = readElementId(element);
+    if (bridgeData && id) {
+      ids.add(id);
+    }
   }
-  const customData = (element as { customData?: unknown }).customData;
-  if (!customData || typeof customData !== "object") {
-    return undefined;
-  }
-  const bridgeType = (customData as { bridgeType?: unknown }).bridgeType;
-  const bridgeId = (customData as { bridgeId?: unknown }).bridgeId;
-  if (
-    (bridgeType === "node" || bridgeType === "edge" || bridgeType === "edge-label") &&
-    typeof bridgeId === "string" &&
-    bridgeId.length > 0
-  ) {
-    return {
-      bridgeType,
-      bridgeId,
-    };
-  }
-  const elementId = readElementId(element);
-  return elementId ? decodeBridgeDataFromElementId(elementId) : undefined;
+  return ids;
 }
 
-function readElementId(element: unknown): string | undefined {
-  if (!element || typeof element !== "object") {
-    return undefined;
-  }
-  const value = (element as { id?: unknown }).id;
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function normalizeLabelText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function isDeleted(element: unknown): boolean {
-  if (!element || typeof element !== "object") {
+function isBridgeManagedElement(element: unknown, bridgeContainerIds: ReadonlySet<string>): boolean {
+  if (isDeleted(element)) {
     return false;
   }
-  return (element as { isDeleted?: unknown }).isDeleted === true;
+  if (readBridgeData(element)) {
+    return true;
+  }
+  const containerId = readContainerId(element);
+  return typeof containerId === "string" && bridgeContainerIds.has(containerId);
+}
+
+function splitSceneElements(elements: readonly unknown[]): { bridgeElements: unknown[]; externalElements: unknown[] } {
+  const bridgeContainerIds = collectBridgeContainerIds(elements);
+  const bridgeElements: unknown[] = [];
+  const externalElements: unknown[] = [];
+  for (const element of elements) {
+    if (isDeleted(element)) {
+      continue;
+    }
+    if (isBridgeManagedElement(element, bridgeContainerIds)) {
+      bridgeElements.push(cloneElement(element));
+      continue;
+    }
+    externalElements.push(cloneElement(element));
+  }
+  return { bridgeElements, externalElements };
 }
 
 function getTextForContainer(elements: readonly unknown[]): Map<string, string> {
   const labels = new Map<string, string>();
   for (const element of elements) {
-    if (!element || typeof element !== "object" || isDeleted(element)) {
+    if (!isRecord(element) || isDeleted(element)) {
       continue;
     }
-    const typed = element as {
-      type?: unknown;
-      text?: unknown;
-      containerId?: unknown;
-      customData?: unknown;
-    };
-    if (typed.type !== "text" || typeof typed.text !== "string" || !typed.text.trim()) {
+    if (element.type !== "text" || typeof element.text !== "string" || !element.text.trim()) {
       continue;
     }
-    if (typeof typed.containerId === "string" && typed.containerId.length > 0) {
-      labels.set(typed.containerId, normalizeLabelText(typed.text));
+    const containerId = readContainerId(element);
+    if (!containerId) {
       continue;
     }
-    const bridgeData = readBridgeData(element);
-    if (bridgeData?.bridgeType === "node") {
-      labels.set(`bridge:${bridgeData.bridgeId}`, normalizeLabelText(typed.text));
-    }
+    labels.set(containerId, normalizeLabelText(element.text));
   }
   return labels;
 }
 
-type TextEntry = {
-  text: string;
-  x: number;
-  y: number;
-};
-
-function collectFreeTextEntries(elements: readonly unknown[]): TextEntry[] {
-  const entries: TextEntry[] = [];
-  for (const element of elements) {
-    if (!element || typeof element !== "object" || isDeleted(element)) {
-      continue;
-    }
-    const typed = element as {
-      type?: unknown;
-      text?: unknown;
-      x?: unknown;
-      y?: unknown;
-      containerId?: unknown;
-    };
-    if (
-      typed.type !== "text" ||
-      typeof typed.text !== "string" ||
-      !typed.text.trim() ||
-      typeof typed.x !== "number" ||
-      typeof typed.y !== "number" ||
-      typeof typed.containerId === "string"
-    ) {
-      continue;
-    }
-    entries.push({
-      text: normalizeLabelText(typed.text),
-      x: typed.x,
-      y: typed.y,
-    });
-  }
-  return entries;
-}
-
-type RectBounds = { x: number; y: number; width: number; height: number };
-
-function isPointInsideRect(rectangle: RectBounds, x: number, y: number): boolean {
-  return x >= rectangle.x && x <= rectangle.x + rectangle.width && y >= rectangle.y && y <= rectangle.y + rectangle.height;
-}
-
-function findTextInsideRectangle(textEntries: readonly TextEntry[], rectangle: RectBounds): string | undefined {
-  return textEntries.find((entry) => isPointInsideRect(rectangle, entry.x, entry.y))?.text;
-}
-
-function matchPreviousNodeByGeometry(
-  previousNodes: ReadonlyMap<string, DiagramNode>,
-  rectangle: { x: number; y: number; width: number; height: number },
-): DiagramNode | undefined {
-  for (const node of previousNodes.values()) {
-    if (
-      Math.abs(node.x - rectangle.x) < 1 &&
-      Math.abs(node.y - rectangle.y) < 1 &&
-      Math.abs(node.width - rectangle.width) < 1 &&
-      Math.abs(node.height - rectangle.height) < 1
-    ) {
-      return node;
-    }
-  }
-  return undefined;
-}
-
-function inferNodeKind(label: string | undefined): DiagramNode["kind"] {
-  const normalized = (label ?? "").toLowerCase();
-  if (normalized.includes("db") || normalized.includes("database")) {
-    return "database";
-  }
-  if (normalized.includes("queue") || normalized.includes("bus")) {
-    return "queue";
-  }
-  if (normalized.includes("cache")) {
-    return "cache";
-  }
-  if (normalized.includes("user") || normalized.includes("human") || normalized.includes("agent") || normalized.includes("client")) {
-    return "actor";
-  }
-  if (normalized.includes("site") || normalized.includes("browser") || normalized.includes("external")) {
-    return "external";
-  }
-  return "service";
-}
-
-function readArrowEndpoints(element: unknown): { startX: number; startY: number; endX: number; endY: number } | undefined {
-  if (!element || typeof element !== "object") {
-    return undefined;
-  }
-  const typed = element as { type?: unknown; x?: unknown; y?: unknown; points?: unknown };
-  if (typed.type !== "arrow" || typeof typed.x !== "number" || typeof typed.y !== "number" || !Array.isArray(typed.points)) {
-    return undefined;
-  }
-  const lastPoint = typed.points[typed.points.length - 1];
-  if (!Array.isArray(lastPoint) || typeof lastPoint[0] !== "number" || typeof lastPoint[1] !== "number") {
-    return undefined;
-  }
-  return {
-    startX: typed.x,
-    startY: typed.y,
-    endX: typed.x + lastPoint[0],
-    endY: typed.y + lastPoint[1],
-  };
-}
-
-function containsPoint(node: DiagramNode, x: number, y: number): boolean {
-  return x >= node.x && x <= node.x + node.width && y >= node.y && y <= node.y + node.height;
-}
-
-export function sceneElementsToDocument(previous: DiagramDocument, elements: readonly unknown[]): DiagramDocument {
-  const textForContainer = getTextForContainer(elements);
-  const freeTextEntries = collectFreeTextEntries(elements);
-  const previousNodes = new Map(previous.nodes.map((node) => [node.id, node]));
+export function deriveDocumentFromScene(snapshot: BoardSceneSnapshot): DiagramDocument {
+  const labelsByContainerId = getTextForContainer(snapshot.elements);
   const nodes: DiagramNode[] = [];
-
-  for (const element of elements) {
-    if (!element || typeof element !== "object" || isDeleted(element)) {
+  for (const element of snapshot.elements) {
+    if (!isRecord(element) || isDeleted(element) || element.type !== "rectangle") {
       continue;
     }
-    const typed = element as {
-      type?: unknown;
-      x?: unknown;
-      y?: unknown;
-      width?: unknown;
-      height?: unknown;
-    };
-    if (
-      typed.type !== "rectangle" ||
-      typeof typed.x !== "number" ||
-      typeof typed.y !== "number" ||
-      typeof typed.width !== "number" ||
-      typeof typed.height !== "number"
-    ) {
-      continue;
-    }
-    const bridgeData = readBridgeData(element);
-    const rectangle: RectBounds = {
-      x: typed.x,
-      y: typed.y,
-      width: typed.width,
-      height: typed.height,
-    };
-    const geometryMatch = matchPreviousNodeByGeometry(previousNodes, rectangle);
-    const rawId =
-      bridgeData?.bridgeType === "node" ? bridgeData.bridgeId : geometryMatch?.id ?? readElementId(element);
-    if (!rawId) {
-      continue;
-    }
-    const existing = previousNodes.get(rawId) ?? geometryMatch;
-    const label =
-      textForContainer.get(readElementId(element) ?? "") ??
-      textForContainer.get(`bridge:${rawId}`) ??
-      findTextInsideRectangle(freeTextEntries, rectangle) ??
-      existing?.label ??
-      "Untitled";
-
-    const nextNode: DiagramNode = {
-      id: rawId,
-      label,
-      kind: existing?.kind ?? inferNodeKind(label),
-      x: typed.x,
-      y: typed.y,
-      width: typed.width,
-      height: typed.height,
-    };
-    if (existing?.description !== undefined) {
-      nextNode.description = existing.description;
-    }
-    nodes.push(nextNode);
-  }
-
-  const mergedNodesMap = new Map(previous.nodes.map((node) => [node.id, node]));
-  for (const node of nodes) {
-    mergedNodesMap.set(node.id, node);
-  }
-  const mergedNodes = [...mergedNodesMap.values()];
-  const nodeById = new Map(mergedNodes.map((node) => [node.id, node]));
-  const previousEdges = new Map(previous.edges.map((edge) => [edge.id, edge]));
-  const edges: DiagramEdge[] = [];
-
-  for (const element of elements) {
-    if (!element || typeof element !== "object" || isDeleted(element)) {
-      continue;
-    }
-    const bridgeData = readBridgeData(element);
-    const edgeId = bridgeData?.bridgeType === "edge" ? bridgeData.bridgeId : readElementId(element);
-    const endpoints = readArrowEndpoints(element);
-    if (!edgeId || !endpoints) {
-      continue;
-    }
-    const source = nodes.find((node) => containsPoint(node, endpoints.startX, endpoints.startY));
-    const target = nodes.find((node) => containsPoint(node, endpoints.endX, endpoints.endY));
-    if (!source || !target || source.id === target.id) {
-      continue;
-    }
-    const existing = previousEdges.get(edgeId);
-    const nextEdge: DiagramEdge = {
-      id: edgeId,
-      sourceNodeId: source.id,
-      targetNodeId: target.id,
-    };
-    if (existing?.label !== undefined) {
-      nextEdge.label = existing.label;
-    }
-    if (existing?.protocol !== undefined) {
-      nextEdge.protocol = existing.protocol;
-    }
-    edges.push(nextEdge);
-  }
-
-  const mergedEdgesMap = new Map(
-    previous.edges
-      .filter((edge) => nodeById.has(edge.sourceNodeId) && nodeById.has(edge.targetNodeId))
-      .map((edge) => [edge.id, edge]),
-  );
-  for (const edge of edges) {
-    mergedEdgesMap.set(edge.id, edge);
-  }
-  const nextEdges = [...mergedEdgesMap.values()];
-
-  return {
-    version: 1,
-    nodes: mergedNodes,
-    edges: nextEdges,
-  };
-}
-
-export function syncNodePositionsFromScene(document: DiagramDocument, elements: readonly unknown[]): DiagramDocument {
-  const positions = new Map<string, { x: number; y: number }>();
-  for (const element of elements) {
     const bridgeData = readBridgeData(element);
     if (!bridgeData || bridgeData.bridgeType !== "node") {
       continue;
     }
-    const typed = element as { type?: unknown; x?: unknown; y?: unknown };
-    if (typed.type !== "rectangle" || typeof typed.x !== "number" || typeof typed.y !== "number") {
+    if (
+      typeof element.x !== "number" ||
+      typeof element.y !== "number" ||
+      typeof element.width !== "number" ||
+      typeof element.height !== "number"
+    ) {
       continue;
     }
-    positions.set(bridgeData.bridgeId, { x: typed.x, y: typed.y });
+    const label = labelsByContainerId.get(readElementId(element) ?? "") ?? "Untitled";
+    nodes.push({
+      id: bridgeData.bridgeId,
+      label,
+      kind: bridgeData.nodeKind,
+      ...(bridgeData.description !== undefined ? { description: bridgeData.description } : {}),
+      x: element.x,
+      y: element.y,
+      width: element.width,
+      height: element.height,
+    });
   }
 
-  return {
-    ...document,
-    nodes: document.nodes.map((node) => {
-      const position = positions.get(node.id);
-      if (!position) {
-        return node;
-      }
-      return {
-        ...node,
-        x: position.x,
-        y: position.y,
-      };
-    }),
-  };
-}
-
-export function extractSelection(elements: readonly unknown[], selectedIds: ReadonlySet<string>) {
-  const nodeIds = new Set<string>();
-  const edgeIds = new Set<string>();
-  for (const element of elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
-    const id = (element as { id?: unknown }).id;
-    if (typeof id !== "string" || !selectedIds.has(id)) {
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges: DiagramEdge[] = [];
+  for (const element of snapshot.elements) {
+    if (!isRecord(element) || isDeleted(element) || element.type !== "arrow") {
       continue;
     }
     const bridgeData = readBridgeData(element);
+    if (!bridgeData || bridgeData.bridgeType !== "edge") {
+      continue;
+    }
+    if (!nodeIds.has(bridgeData.sourceNodeId) || !nodeIds.has(bridgeData.targetNodeId)) {
+      continue;
+    }
+    edges.push({
+      id: bridgeData.bridgeId,
+      sourceNodeId: bridgeData.sourceNodeId,
+      targetNodeId: bridgeData.targetNodeId,
+      ...(bridgeData.label !== undefined ? { label: bridgeData.label } : {}),
+      ...(bridgeData.protocol !== undefined ? { protocol: bridgeData.protocol } : {}),
+    });
+  }
+
+  return removeDanglingEdges({
+    version: 1,
+    nodes,
+    edges,
+  });
+}
+
+export function deriveSummaryFromScene(snapshot: BoardSceneSnapshot): DiagramSummary {
+  return summarizeDocument(deriveDocumentFromScene(snapshot));
+}
+
+function selectionFromScene(elements: readonly unknown[], selectedElementIds: ReadonlySet<string>): DiagramSelection {
+  const nodeIds = new Set<string>();
+  const edgeIds = new Set<string>();
+  const bridgeDataByElementId = new Map<string, ExcalidrawCustomData>();
+  for (const element of elements) {
+    const id = readElementId(element);
+    const bridgeData = readBridgeData(element);
+    if (id && bridgeData) {
+      bridgeDataByElementId.set(id, bridgeData);
+    }
+  }
+
+  for (const element of elements) {
+    const id = readElementId(element);
+    if (!id || !selectedElementIds.has(id)) {
+      continue;
+    }
+    const direct = bridgeDataByElementId.get(id);
+    const viaContainer = readContainerId(element) ? bridgeDataByElementId.get(readContainerId(element) as string) : undefined;
+    const bridgeData = direct ?? viaContainer;
     if (!bridgeData) {
       continue;
     }
     if (bridgeData.bridgeType === "node") {
       nodeIds.add(bridgeData.bridgeId);
-      continue;
-    }
-    if (bridgeData.bridgeType === "edge" || bridgeData.bridgeType === "edge-label") {
+    } else {
       edgeIds.add(bridgeData.bridgeId);
     }
   }
@@ -512,4 +533,86 @@ export function extractSelection(elements: readonly unknown[], selectedIds: Read
     nodeIds: [...nodeIds],
     edgeIds: [...edgeIds],
   };
+}
+
+export function deriveSelection(snapshot: BoardSceneSnapshot, selectedElementIds: ReadonlySet<string>): DiagramSelection {
+  return selectionFromScene(snapshot.elements, selectedElementIds);
+}
+
+function expandSelectedElementIds(elements: readonly unknown[], selectedElementIds: ReadonlySet<string>): Set<string> {
+  const expanded = new Set(selectedElementIds);
+  for (const element of elements) {
+    const containerId = readContainerId(element);
+    const id = readElementId(element);
+    if (!containerId || !id) {
+      continue;
+    }
+    if (selectedElementIds.has(containerId)) {
+      expanded.add(id);
+    }
+  }
+  return expanded;
+}
+
+async function replaceBridgeElements(snapshot: BoardSceneSnapshot, document: DiagramDocument, externalElements?: unknown[]): Promise<BoardSceneSnapshot> {
+  const nextExternalElements = externalElements ?? splitSceneElements(snapshot.elements).externalElements;
+  const bridgeElements = await documentToSceneElements(document);
+  return {
+    version: 1,
+    elements: [...nextExternalElements, ...bridgeElements],
+    appState: snapshot.appState,
+  };
+}
+
+export async function upsertNodesInScene(snapshot: BoardSceneSnapshot, inputs: UpsertNodeInput[]): Promise<BoardSceneSnapshot> {
+  const nextDocument = upsertNodes(deriveDocumentFromScene(snapshot), inputs);
+  return await replaceBridgeElements(snapshot, nextDocument);
+}
+
+export async function upsertEdgesInScene(snapshot: BoardSceneSnapshot, inputs: UpsertEdgeInput[]): Promise<BoardSceneSnapshot> {
+  const nextDocument = upsertEdges(deriveDocumentFromScene(snapshot), inputs);
+  return await replaceBridgeElements(snapshot, nextDocument);
+}
+
+export async function removeNodesFromScene(snapshot: BoardSceneSnapshot, nodeIds: readonly string[]): Promise<BoardSceneSnapshot> {
+  const nextDocument = removeNodesById(deriveDocumentFromScene(snapshot), nodeIds);
+  return await replaceBridgeElements(snapshot, nextDocument);
+}
+
+export async function removeEdgesFromScene(snapshot: BoardSceneSnapshot, edgeIds: readonly string[]): Promise<BoardSceneSnapshot> {
+  const nextDocument = removeEdgesById(deriveDocumentFromScene(snapshot), edgeIds);
+  return await replaceBridgeElements(snapshot, nextDocument);
+}
+
+export async function applyLayoutToScene(
+  snapshot: BoardSceneSnapshot,
+  mode: LayoutMode,
+  scope: LayoutScope,
+  selectedElementIds: ReadonlySet<string>,
+): Promise<BoardSceneSnapshot> {
+  const document = deriveDocumentFromScene(snapshot);
+  const selection = selectionFromScene(snapshot.elements, selectedElementIds);
+  const nextDocument = applyLayout(document, mode, scope, selection);
+  return await replaceBridgeElements(snapshot, nextDocument);
+}
+
+export async function removeSelectionFromScene(snapshot: BoardSceneSnapshot, selectedElementIds: ReadonlySet<string>): Promise<BoardSceneSnapshot> {
+  const expandedSelection = expandSelectedElementIds(snapshot.elements, selectedElementIds);
+  const externalElements = splitSceneElements(snapshot.elements).externalElements.filter((element) => {
+    const id = readElementId(element);
+    return !id || !expandedSelection.has(id);
+  });
+  const nextDocument = removeBySelection(deriveDocumentFromScene(snapshot), selectionFromScene(snapshot.elements, selectedElementIds));
+  return await replaceBridgeElements(snapshot, nextDocument, externalElements);
+}
+
+export function selectedElementIdsFromAppState(appState: unknown): Set<string> {
+  if (!isRecord(appState) || !isRecord(appState.selectedElementIds)) {
+    return new Set<string>();
+  }
+  return new Set(
+    Object.entries(appState.selectedElementIds as Record<string, unknown>)
+      .filter(([, selected]) => selected === true)
+      .map(([elementId]) => elementId),
+  );
 }

@@ -1,6 +1,6 @@
 /**
- * This module defines the structured diagram and local WebMCP contracts used by the example app.
- * It is depended on by state, tool registration, Excalidraw interop, and tests.
+ * This module defines the board scene, derived diagram view, and local WebMCP contracts used by the example app.
+ * It is depended on by scene state, Excalidraw interop, tool registration, and tests.
  */
 
 export type JsonValue =
@@ -72,9 +72,23 @@ export type UpsertEdgeInput = {
   protocol?: string;
 };
 
-export type DiagramSnapshot = {
-  document: DiagramDocument;
+export type BoardSceneAppState = {
+  viewBackgroundColor?: string;
+  scrollX?: number;
+  scrollY?: number;
+  zoom?: number;
+};
+
+export type BoardSceneSnapshot = {
+  version: 1;
+  elements: unknown[];
+  appState: BoardSceneAppState;
+};
+
+export type BoardSnapshot = {
+  scene: BoardSceneSnapshot;
   selection: DiagramSelection;
+  selectedElementIds: string[];
 };
 
 export type WebMcpToolDefinition = {
@@ -96,7 +110,20 @@ export type WebMcpModelContext = {
   callTool: (name: string, input: JsonValue) => Promise<JsonValue>;
 };
 
-export type ExcalidrawCustomData = {
-  bridgeType: "node" | "edge" | "edge-label";
+export type ExcalidrawNodeCustomData = {
+  bridgeType: "node";
   bridgeId: string;
+  nodeKind: NodeKind;
+  description?: string;
 };
+
+export type ExcalidrawEdgeCustomData = {
+  bridgeType: "edge";
+  bridgeId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  label?: string;
+  protocol?: string;
+};
+
+export type ExcalidrawCustomData = ExcalidrawNodeCustomData | ExcalidrawEdgeCustomData;

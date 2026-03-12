@@ -1,9 +1,18 @@
 /**
  * This module defines and registers the WebMCP tools exposed by the native board example.
- * It depends on the diagram store and local modelContext shim so browser and local-mcp clients share one tool contract.
+ * It depends on the authoritative scene state and scene-derived helpers so browser and local-mcp clients share one tool contract.
  */
 
-import type { DiagramStore } from "./state.js";
+import type { BoardSceneState } from "./scene-state.js";
+import {
+  applyLayoutToScene,
+  deriveDocumentFromScene,
+  deriveSummaryFromScene,
+  removeEdgesFromScene,
+  removeNodesFromScene,
+  upsertEdgesInScene,
+  upsertNodesInScene,
+} from "./excalidraw.js";
 import type { JsonValue, NodeKind, UpsertEdgeInput, UpsertNodeInput, WebMcpModelContext, WebMcpToolDefinition } from "./types.js";
 
 type ExportApi = {
@@ -25,7 +34,7 @@ const TOOL_NAMES = [
 
 type ToolName = (typeof TOOL_NAMES)[number];
 
-function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi | undefined): Record<ToolName, WebMcpToolDefinition> {
+function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => ExportApi | undefined): Record<ToolName, WebMcpToolDefinition> {
   return {
     "nodes.list": {
       name: "nodes.list",
@@ -36,9 +45,10 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
         additionalProperties: false,
       },
       execute: async () => {
+        const scene = sceneState.getSnapshot();
         return {
-          items: store.getDocument().nodes,
-          summary: store.getSummary(),
+          items: deriveDocumentFromScene(scene).nodes,
+          summary: deriveSummaryFromScene(scene),
         };
       },
     },
@@ -71,12 +81,14 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
       },
       execute: async (input) => {
         const nodes = readArrayField(input, "nodes");
-        const document = store.upsertNodes(
+        const nextScene = await upsertNodesInScene(
+          sceneState.getSnapshot(),
           nodes.map((node) => toUpsertNodeInput(node)),
         );
+        sceneState.setSnapshot(nextScene);
         return {
-          document,
-          summary: store.getSummary(),
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
         };
       },
     },
@@ -100,10 +112,11 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
       },
       execute: async (input) => {
         const nodeIds = readStringArrayField(input, "nodeIds");
-        const document = store.removeNodes(nodeIds);
+        const nextScene = await removeNodesFromScene(sceneState.getSnapshot(), nodeIds);
+        sceneState.setSnapshot(nextScene);
         return {
-          document,
-          summary: store.getSummary(),
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
         };
       },
     },
@@ -116,9 +129,10 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
         additionalProperties: false,
       },
       execute: async () => {
+        const scene = sceneState.getSnapshot();
         return {
-          items: store.getDocument().edges,
-          summary: store.getSummary(),
+          items: deriveDocumentFromScene(scene).edges,
+          summary: deriveSummaryFromScene(scene),
         };
       },
     },
@@ -150,12 +164,14 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
       },
       execute: async (input) => {
         const edges = readArrayField(input, "edges");
-        const document = store.upsertEdges(
+        const nextScene = await upsertEdgesInScene(
+          sceneState.getSnapshot(),
           edges.map((edge) => toUpsertEdgeInput(edge)),
         );
+        sceneState.setSnapshot(nextScene);
         return {
-          document,
-          summary: store.getSummary(),
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
         };
       },
     },
@@ -179,10 +195,11 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
       },
       execute: async (input) => {
         const edgeIds = readStringArrayField(input, "edgeIds");
-        const document = store.removeEdges(edgeIds);
+        const nextScene = await removeEdgesFromScene(sceneState.getSnapshot(), edgeIds);
+        sceneState.setSnapshot(nextScene);
         return {
-          document,
-          summary: store.getSummary(),
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
         };
       },
     },
@@ -199,13 +216,16 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
         },
       },
       execute: async (input) => {
-        const document = store.applyLayout(
+        const nextScene = await applyLayoutToScene(
+          sceneState.getSnapshot(),
           readLayoutMode(input),
           readLayoutScope(input),
+          sceneState.getSelectedElementIds(),
         );
+        sceneState.setSnapshot(nextScene);
         return {
-          document,
-          summary: store.getSummary(),
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
         };
       },
     },
@@ -217,10 +237,11 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
         additionalProperties: false,
       },
       execute: async () => {
-        store.clear();
+        sceneState.clear();
+        const nextScene = sceneState.getSnapshot();
         return {
-          document: store.getDocument(),
-          summary: store.getSummary(),
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
         };
       },
     },
@@ -237,10 +258,28 @@ function createToolRegistry(store: DiagramStore, getExportApi: () => ExportApi |
       },
       execute: async (input) => {
         const format = readExportFormat(input);
-        const exported = await store.exportDiagram(format, getExportApi());
+        const scene = sceneState.getSnapshot();
+        if (format === "json") {
+          return {
+            format,
+            data: deriveDocumentFromScene(scene),
+          };
+        }
+        const api = getExportApi();
+        if (!api?.exportToBlob) {
+          throw new Error("png export requires an active Excalidraw API");
+        }
+        const blob = await api.exportToBlob({
+          mimeType: "image/png",
+          elements: api.getSceneElements?.() ?? scene.elements,
+          appState: {
+            exportBackground: true,
+          },
+          files: {},
+        });
         return {
           format,
-          data: exported,
+          data: await blobToDataUrl(blob),
         };
       },
     },
@@ -391,9 +430,24 @@ function toUpsertEdgeInput(value: JsonValue): UpsertEdgeInput {
   return input;
 }
 
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("failed to read export blob"));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
 export async function registerBoardTools(
   modelContext: WebMcpModelContext,
-  store: DiagramStore,
+  sceneState: BoardSceneState,
   getExportApi: () => ExportApi | undefined,
 ): Promise<void> {
   const existing = await modelContext.listTools();
@@ -403,7 +457,7 @@ export async function registerBoardTools(
     }
   }
 
-  const tools = createToolRegistry(store, getExportApi);
+  const tools = createToolRegistry(sceneState, getExportApi);
   for (const name of TOOL_NAMES) {
     await modelContext.registerTool(tools[name]);
   }

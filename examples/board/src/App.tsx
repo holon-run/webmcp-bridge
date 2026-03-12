@@ -1,15 +1,23 @@
 /**
- * This module renders the native board example UI and wires the Excalidraw canvas to WebMCP tools.
- * It depends on the example state, Excalidraw interop, and modelContext registration helpers.
+ * This module renders the native board example UI and wires the Excalidraw canvas directly to the scene-first WebMCP tools.
+ * It depends on the scene state, Excalidraw interop helpers, and modelContext registration helpers.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as React from "react";
 import * as ExcalidrawLib from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
-import { documentToSceneElements, extractSelection, sceneElementsToDocument } from "./excalidraw.js";
+import {
+  createSceneSnapshot,
+  deriveDocumentFromScene,
+  deriveSelection,
+  deriveSummaryFromScene,
+  removeSelectionFromScene,
+  selectedElementIdsFromAppState,
+  toExcalidrawAppState,
+} from "./excalidraw.js";
 import { ensureModelContext } from "./model-context.js";
-import { DiagramStore } from "./state.js";
+import { BoardSceneState } from "./scene-state.js";
 import { registerBoardTools } from "./tools.js";
 
 const Excalidraw = (ExcalidrawLib as unknown as { Excalidraw: React.ComponentType<Record<string, unknown>> }).Excalidraw;
@@ -22,12 +30,17 @@ const CaptureUpdateAction = (
 ).CaptureUpdateAction;
 
 type SceneApi = {
-  updateScene: (scene: { elements: unknown[]; captureUpdate?: "NEVER" | "EVENTUALLY" | "IMMEDIATELY" }) => void;
+  updateScene: (scene: {
+    elements: unknown[];
+    appState?: Record<string, unknown>;
+    captureUpdate?: "NEVER" | "EVENTUALLY" | "IMMEDIATELY";
+  }) => void;
   getSceneElements?: () => unknown[];
   getAppState?: () => {
     zoom?: { value?: number };
     scrollX?: number;
     scrollY?: number;
+    selectedElementIds?: Record<string, boolean>;
   };
   exportToBlob?: (opts: unknown) => Promise<Blob>;
   resetScene?: () => void;
@@ -44,44 +57,43 @@ type SceneApi = {
   refresh?: () => void;
 };
 
-function useDiagramStore(): DiagramStore {
-  const storeRef = useRef<DiagramStore | undefined>(undefined);
-  if (!storeRef.current) {
-    storeRef.current = DiagramStore.load();
-  }
-  return storeRef.current;
-}
-
-function estimateSceneElementCount(document: { nodes: readonly unknown[]; edges: readonly { label?: string; protocol?: string }[] }): number {
-  const labeledEdges = document.edges.filter((edge) => edge.label || edge.protocol).length;
-  return document.nodes.length + document.edges.length + labeledEdges;
-}
-
 export function App(): React.ReactElement {
-  const store = useDiagramStore();
-  const [, setVersion] = useState(0);
-  const [sceneVersion, setSceneVersion] = useState(0);
-  useEffect(() => {
-    return store.subscribe(() => {
-      setVersion((value) => value + 1);
-    });
-  }, [store]);
-  const sceneApiRef = useRef<SceneApi | undefined>(undefined);
-  const applyingSceneRef = useRef(false);
-  const expectedSceneDocumentRef = useRef<string>("");
-  const syncRetryCountRef = useRef(0);
-  const applyingSceneTimeoutRef = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
-  const lastSceneDocumentRef = useRef<string>("");
+  const [sceneState, setSceneState] = useState<BoardSceneState | undefined>(undefined);
+  const [version, setVersion] = useState(0);
+  const [renderTick, setRenderTick] = useState(0);
   const [modelContextReady, setModelContextReady] = useState(false);
-  const [statusMessage, setStatusMessage] = useState("Loading tools...");
+  const [statusMessage, setStatusMessage] = useState("Loading board state...");
   const [debugTick, setDebugTick] = useState(0);
-
-  const snapshot = store.getSnapshot();
-  const summary = store.getSummary();
+  const sceneApiRef = useRef<SceneApi | undefined>(undefined);
+  const lastAppliedSnapshotRef = useRef("");
 
   useEffect(() => {
+    let mounted = true;
+    let unsubscribe: (() => void) | undefined;
+
+    void BoardSceneState.load().then((loadedState) => {
+      if (!mounted) {
+        return;
+      }
+      setSceneState(loadedState);
+      setStatusMessage("Loading tools...");
+      unsubscribe = loadedState.subscribe(() => {
+        setVersion((value) => value + 1);
+      });
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sceneState) {
+      return;
+    }
     const modelContext = ensureModelContext(globalThis);
-    void registerBoardTools(modelContext, store, () => sceneApiRef.current)
+    void registerBoardTools(modelContext, sceneState, () => sceneApiRef.current)
       .then(() => {
         setModelContextReady(true);
         setStatusMessage("navigator.modelContext ready");
@@ -91,94 +103,29 @@ export function App(): React.ReactElement {
         setModelContextReady(false);
         setStatusMessage(`tool registration failed: ${message}`);
       });
-  }, [store]);
+  }, [sceneState]);
 
   useEffect(() => {
-    if (!sceneApiRef.current) {
+    if (!sceneState || !sceneApiRef.current) {
       return;
     }
-    const serializedDocument = JSON.stringify(snapshot.document);
-    const currentSceneElements = sceneApiRef.current.getSceneElements?.() ?? [];
-    const expectedSceneElementCount = estimateSceneElementCount(snapshot.document);
-    const expectsVisibleScene = snapshot.document.nodes.length > 0 || snapshot.document.edges.length > 0;
-    const sceneLooksEmpty = currentSceneElements.length === 0;
-    const sceneLooksOutOfSync = expectsVisibleScene && currentSceneElements.length !== expectedSceneElementCount;
-    if (
-      serializedDocument === lastSceneDocumentRef.current &&
-      !(expectsVisibleScene && sceneLooksEmpty) &&
-      !sceneLooksOutOfSync
-    ) {
+    const snapshot = sceneState.getSnapshot();
+    const serializedSnapshot = JSON.stringify(snapshot);
+    if (serializedSnapshot === lastAppliedSnapshotRef.current) {
       return;
     }
-    void documentToSceneElements(snapshot.document).then((elements) => {
-      applyingSceneRef.current = true;
-      expectedSceneDocumentRef.current = serializedDocument;
-      syncRetryCountRef.current = 0;
-      if (applyingSceneTimeoutRef.current !== undefined) {
-        globalThis.clearTimeout(applyingSceneTimeoutRef.current);
-      }
-      lastSceneDocumentRef.current = serializedDocument;
-      if (
-        snapshot.document.nodes.length === 0 &&
-        snapshot.document.edges.length === 0 ||
-        currentSceneElements.length > elements.length
-      ) {
-        sceneApiRef.current?.resetScene?.();
-      }
-      sceneApiRef.current?.updateScene({
-        elements,
-        captureUpdate: CaptureUpdateAction?.NEVER ?? "NEVER",
-      });
-      globalThis.requestAnimationFrame(() => {
-        sceneApiRef.current?.scrollToContent?.(elements, {
-          fitToViewport: true,
-          viewportZoomFactor: 0.9,
-          animate: false,
-        });
-        sceneApiRef.current?.refresh?.();
-      });
-      applyingSceneTimeoutRef.current = globalThis.setTimeout(() => {
-        const liveSceneCount = sceneApiRef.current?.getSceneElements?.().length ?? 0;
-        if (liveSceneCount !== expectedSceneElementCount && syncRetryCountRef.current < 3) {
-          syncRetryCountRef.current += 1;
-          lastSceneDocumentRef.current = "";
-          applyingSceneTimeoutRef.current = undefined;
-          setSceneVersion((value) => value + 1);
-          return;
-        }
-        applyingSceneRef.current = false;
-        expectedSceneDocumentRef.current = "";
-        syncRetryCountRef.current = 0;
-        applyingSceneTimeoutRef.current = undefined;
-      }, 200);
+    const currentElements = sceneApiRef.current.getSceneElements?.() ?? [];
+    if (snapshot.elements.length === 0 || currentElements.length > snapshot.elements.length) {
+      sceneApiRef.current.resetScene?.();
+    }
+    sceneApiRef.current.updateScene({
+      elements: snapshot.elements,
+      appState: toExcalidrawAppState(snapshot.appState),
+      captureUpdate: CaptureUpdateAction?.NEVER ?? "NEVER",
     });
-  }, [snapshot.document, sceneVersion]);
-
-  useEffect(() => {
-    return () => {
-      if (applyingSceneTimeoutRef.current !== undefined) {
-        globalThis.clearTimeout(applyingSceneTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const fitView = (): void => {
-      const api = sceneApiRef.current;
-      const elements = api?.getSceneElements?.() ?? [];
-      api?.scrollToContent?.(elements, {
-        fitToViewport: true,
-        viewportZoomFactor: 0.9,
-        animate: false,
-      });
-      api?.refresh?.();
-    };
-
-    (globalThis as typeof globalThis & { __boardFitView?: () => void }).__boardFitView = fitView;
-    return () => {
-      delete (globalThis as typeof globalThis & { __boardFitView?: () => void }).__boardFitView;
-    };
-  }, []);
+    sceneApiRef.current.refresh?.();
+    lastAppliedSnapshotRef.current = serializedSnapshot;
+  }, [sceneState, version, renderTick]);
 
   useEffect(() => {
     const interval = globalThis.setInterval(() => {
@@ -190,20 +137,51 @@ export function App(): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    const boardGlobal = globalThis as typeof globalThis & { __excalidrawAPI?: SceneApi };
+    const boardGlobal = globalThis as typeof globalThis & { __excalidrawAPI?: SceneApi; __boardFitView?: () => void };
     if (sceneApiRef.current) {
       boardGlobal.__excalidrawAPI = sceneApiRef.current;
+      boardGlobal.__boardFitView = () => {
+        const elements = sceneApiRef.current?.getSceneElements?.() ?? [];
+        sceneApiRef.current?.scrollToContent?.(elements, {
+          fitToViewport: true,
+          viewportZoomFactor: 0.9,
+          animate: false,
+        });
+        sceneApiRef.current?.refresh?.();
+      };
     } else {
       delete boardGlobal.__excalidrawAPI;
+      delete boardGlobal.__boardFitView;
     }
     return () => {
       delete boardGlobal.__excalidrawAPI;
+      delete boardGlobal.__boardFitView;
     };
   });
 
-  const sceneElements = sceneApiRef.current?.getSceneElements?.() ?? [];
+  const snapshot = sceneState?.getSnapshot();
+  const selectedElementIds = sceneState?.getSelectedElementIds() ?? new Set<string>();
+  const selection = useMemo(() => (snapshot ? deriveSelection(snapshot, selectedElementIds) : { nodeIds: [], edgeIds: [] }), [snapshot, selectedElementIds]);
+  const summary = useMemo(
+    () => (snapshot ? deriveSummaryFromScene(snapshot) : { nodeCount: 0, edgeCount: 0, kinds: { actor: 0, service: 0, database: 0, queue: 0, cache: 0, external: 0 } }),
+    [snapshot],
+  );
+  const derivedDocument = useMemo(() => (snapshot ? deriveDocumentFromScene(snapshot) : { version: 1 as const, nodes: [], edges: [] }), [snapshot]);
+  const sceneElements = sceneApiRef.current?.getSceneElements?.() ?? snapshot?.elements ?? [];
   const appState = sceneApiRef.current?.getAppState?.();
   void debugTick;
+
+  if (!sceneState || !snapshot) {
+    return (
+      <div style={styles.loadingShell}>
+        <div style={styles.loadingCard}>
+          <p style={styles.eyebrow}>Native WebMCP Example</p>
+          <h1 style={styles.title}>Board</h1>
+          <p style={styles.subtitle}>Loading scene snapshot…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.shell}>
@@ -214,19 +192,42 @@ export function App(): React.ReactElement {
           <p style={styles.subtitle}>Human tweaks the board in the browser while AI edits the same diagram through WebMCP tools.</p>
         </div>
         <div style={styles.actions}>
-          <button style={styles.primaryButton} onClick={() => store.resetToDemo()}>
+          <button
+            style={styles.primaryButton}
+            onClick={() => {
+              void sceneState.resetToDemo().then(() => {
+                lastAppliedSnapshotRef.current = "";
+                setRenderTick((value) => value + 1);
+              });
+            }}
+          >
             Load Demo
           </button>
-          <button style={styles.secondaryButton} onClick={() => store.clear()}>
+          <button
+            style={styles.secondaryButton}
+            onClick={() => {
+              sceneState.clear();
+              lastAppliedSnapshotRef.current = "";
+              setRenderTick((value) => value + 1);
+            }}
+          >
             Clear
           </button>
-          <button style={styles.secondaryButton} onClick={() => store.removeSelection()}>
+          <button
+            style={styles.secondaryButton}
+            onClick={() => {
+              void removeSelectionFromScene(sceneState.getSnapshot(), sceneState.getSelectedElementIds()).then((nextSnapshot) => {
+                sceneState.setSelectedElementIds([]);
+                sceneState.setSnapshot(nextSnapshot);
+              });
+            }}
+          >
             Delete Selection
           </button>
           <button
             style={styles.secondaryButton}
             onClick={() => {
-              const elements = sceneApiRef.current?.getSceneElements?.() ?? [];
+              const elements = sceneApiRef.current?.getSceneElements?.() ?? snapshot.elements;
               sceneApiRef.current?.scrollToContent?.(elements, {
                 fitToViewport: true,
                 viewportZoomFactor: 0.9,
@@ -245,41 +246,18 @@ export function App(): React.ReactElement {
             <Excalidraw
               excalidrawAPI={(api: unknown) => {
                 sceneApiRef.current = api as SceneApi;
-                setSceneVersion((value) => value + 1);
+                lastAppliedSnapshotRef.current = JSON.stringify(sceneState.getSnapshot());
               }}
-              onChange={(elements: unknown[], appState: unknown) => {
-                const selectedElementIds =
-                  appState && typeof appState === "object"
-                    ? new Set(
-                        Object.entries(
-                          ((appState as { selectedElementIds?: Record<string, boolean> }).selectedElementIds ?? {}),
-                        )
-                          .filter(([, selected]) => selected)
-                          .map(([elementId]) => elementId),
-                      )
-                    : new Set<string>();
-                const nextDocument = sceneElementsToDocument(store.getDocument(), elements);
-                const serializedNextDocument = JSON.stringify(nextDocument);
-                if (applyingSceneRef.current) {
-                  if (serializedNextDocument === expectedSceneDocumentRef.current) {
-                    applyingSceneRef.current = false;
-                    expectedSceneDocumentRef.current = "";
-                    syncRetryCountRef.current = 0;
-                    if (applyingSceneTimeoutRef.current !== undefined) {
-                      globalThis.clearTimeout(applyingSceneTimeoutRef.current);
-                      applyingSceneTimeoutRef.current = undefined;
-                    }
-                  }
-                } else {
-                  lastSceneDocumentRef.current = serializedNextDocument;
-                  store.setDocument(nextDocument);
-                }
-                store.setSelection(extractSelection(elements, selectedElementIds));
+              onChange={(elements: unknown[], nextAppState: unknown) => {
+                const nextSelectionIds = selectedElementIdsFromAppState(nextAppState);
+                sceneState.setSelectedElementIds(nextSelectionIds);
+                const nextSnapshot = createSceneSnapshot(elements, nextAppState);
+                lastAppliedSnapshotRef.current = JSON.stringify(nextSnapshot);
+                sceneState.setSnapshot(nextSnapshot, "canvas");
               }}
               initialData={{
-                appState: {
-                  viewBackgroundColor: "#f7fee7",
-                },
+                elements: snapshot.elements,
+                appState: toExcalidrawAppState(snapshot.appState),
               }}
               theme="light"
             />
@@ -306,15 +284,15 @@ export function App(): React.ReactElement {
               </div>
               <div style={styles.metaRow}>
                 <dt>Selection</dt>
-                <dd>{snapshot.selection.nodeIds.length + snapshot.selection.edgeIds.length}</dd>
+                <dd>{selection.nodeIds.length + selection.edgeIds.length}</dd>
               </div>
             </dl>
           </section>
           <section style={styles.card}>
             <p style={styles.cardEyebrow}>Selection</p>
             <h2 style={styles.cardTitle}>Current Focus</h2>
-            <p style={styles.helperText}>Selected nodes: {snapshot.selection.nodeIds.join(", ") || "none"}</p>
-            <p style={styles.helperText}>Selected edges: {snapshot.selection.edgeIds.join(", ") || "none"}</p>
+            <p style={styles.helperText}>Selected nodes: {selection.nodeIds.join(", ") || "none"}</p>
+            <p style={styles.helperText}>Selected edges: {selection.edgeIds.join(", ") || "none"}</p>
           </section>
           <section style={styles.card}>
             <p style={styles.cardEyebrow}>Tools</p>
@@ -336,11 +314,11 @@ export function App(): React.ReactElement {
             <h2 style={styles.cardTitle}>Canvas State</h2>
             <dl style={styles.metaList}>
               <div style={styles.metaRow}>
-                <dt>Store Nodes</dt>
+                <dt>Derived Nodes</dt>
                 <dd>{summary.nodeCount}</dd>
               </div>
               <div style={styles.metaRow}>
-                <dt>Store Edges</dt>
+                <dt>Derived Edges</dt>
                 <dd>{summary.edgeCount}</dd>
               </div>
               <div style={styles.metaRow}>
@@ -349,19 +327,23 @@ export function App(): React.ReactElement {
               </div>
               <div style={styles.metaRow}>
                 <dt>Zoom</dt>
-                <dd>{appState?.zoom?.value?.toFixed(2) ?? "n/a"}</dd>
+                <dd>{appState?.zoom?.value?.toFixed(2) ?? snapshot.appState.zoom?.toFixed(2) ?? "n/a"}</dd>
               </div>
               <div style={styles.metaRow}>
                 <dt>Scroll</dt>
-                <dd>{appState ? `${Math.round(appState.scrollX ?? 0)}, ${Math.round(appState.scrollY ?? 0)}` : "n/a"}</dd>
+                <dd>
+                  {appState
+                    ? `${Math.round(appState.scrollX ?? 0)}, ${Math.round(appState.scrollY ?? 0)}`
+                    : `${Math.round(snapshot.appState.scrollX ?? 0)}, ${Math.round(snapshot.appState.scrollY ?? 0)}`}
+                </dd>
               </div>
             </dl>
             <div style={styles.debugActions}>
               <button
                 style={styles.secondaryButton}
                 onClick={() => {
-                  lastSceneDocumentRef.current = "";
-                  setSceneVersion((value) => value + 1);
+                  lastAppliedSnapshotRef.current = "";
+                  setRenderTick((value) => value + 1);
                 }}
               >
                 Force Sync
@@ -369,7 +351,7 @@ export function App(): React.ReactElement {
               <button
                 style={styles.secondaryButton}
                 onClick={() => {
-                  const elements = sceneApiRef.current?.getSceneElements?.() ?? [];
+                  const elements = sceneApiRef.current?.getSceneElements?.() ?? snapshot.elements;
                   sceneApiRef.current?.scrollToContent?.(elements, {
                     fitToViewport: true,
                     viewportZoomFactor: 0.9,
@@ -381,6 +363,7 @@ export function App(): React.ReactElement {
                 Force Fit
               </button>
             </div>
+            <p style={styles.helperText}>Derived scene nodes: {derivedDocument.nodes.map((node) => node.id).join(", ") || "none"}</p>
           </section>
         </aside>
       </main>
@@ -389,6 +372,20 @@ export function App(): React.ReactElement {
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  loadingShell: {
+    minHeight: "100dvh",
+    display: "grid",
+    placeItems: "center",
+    background:
+      "radial-gradient(circle at top left, rgba(16, 185, 129, 0.14), transparent 32%), linear-gradient(135deg, #f7fee7 0%, #eff6ff 52%, #fff7ed 100%)",
+    padding: "24px",
+  },
+  loadingCard: {
+    borderRadius: "24px",
+    background: "rgba(255,255,255,0.9)",
+    padding: "24px 28px",
+    boxShadow: "0 16px 40px rgba(15, 23, 42, 0.08)",
+  },
   shell: {
     minHeight: "100dvh",
     height: "100dvh",
@@ -519,22 +516,20 @@ const styles: Record<string, React.CSSProperties> = {
   metaRow: {
     display: "flex",
     justifyContent: "space-between",
+    padding: "6px 0",
+    borderBottom: "1px solid rgba(148, 163, 184, 0.18)",
     gap: "12px",
-    padding: "8px 0",
-    borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
   },
   toolList: {
     margin: 0,
-    paddingInlineStart: "18px",
-    display: "grid",
-    gap: "8px",
-    fontFamily: '"IBM Plex Mono", monospace',
-    fontSize: "13px",
+    paddingLeft: "18px",
+    color: "#334155",
+    lineHeight: 1.7,
   },
   debugActions: {
     display: "flex",
-    gap: "12px",
+    gap: "10px",
     flexWrap: "wrap",
-    marginTop: "16px",
+    marginTop: "12px",
   },
 };
