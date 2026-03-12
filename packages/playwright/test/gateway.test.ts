@@ -10,8 +10,10 @@ function createMockPage(mode: "native" | "polyfill", tools: unknown[] = []) {
   const listeners = new Map<string, Array<() => void>>();
   let noArgFunctionCallCount = 0;
   const page = {
-    addInitScript: vi.fn(async () => {}),
-    exposeFunction: vi.fn(async () => {}),
+    addInitScript: vi.fn<(...args: [string]) => Promise<void>>(async () => {}),
+    exposeFunction: vi.fn<(...args: [string, (...args: unknown[]) => unknown]) => Promise<void>>(
+      async () => {},
+    ),
     evaluate: vi.fn(async (script: string | ((...args: unknown[]) => unknown), payload?: unknown) => {
       if (typeof script !== "function") {
         return undefined;

@@ -6,7 +6,6 @@
 import {
   applyLayout,
   createDemoDocument,
-  createEmptyDocument,
   removeBySelection,
   removeDanglingEdges,
   summarizeDocument,
@@ -44,14 +43,6 @@ const EDGE_LINE_PREFIX = "edge-line-";
 
 type RawElement = Record<string, unknown>;
 
-type RawAppState = {
-  viewBackgroundColor?: unknown;
-  scrollX?: unknown;
-  scrollY?: unknown;
-  zoom?: unknown;
-  selectedElementIds?: Record<string, boolean>;
-};
-
 type ExcalidrawSkeletonLabel = {
   text?: string;
 };
@@ -84,7 +75,8 @@ function fallbackConvertToExcalidrawElements(elements: unknown[]): unknown[] {
     }
     const skeleton = item as ExcalidrawSkeleton;
     const labelText = typeof skeleton.label?.text === "string" ? skeleton.label.text : undefined;
-    const { label, ...shape } = skeleton;
+    const shape = { ...skeleton };
+    delete shape.label;
     converted.push(shape);
     if (labelText && typeof skeleton.id === "string") {
       converted.push({
