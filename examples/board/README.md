@@ -26,6 +26,10 @@ The Pages project name is pinned as `board` in [wrangler.jsonc](/Users/jolestar/
 
 ## Connect From local-mcp
 
+Architecture overview:
+
+![Bridge architecture](../../docs/images/bridge-architecture.png)
+
 Public deployment:
 
 ```bash
@@ -38,13 +42,21 @@ Local development:
 node packages/local-mcp/dist/cli.js --url http://127.0.0.1:4173 --headless
 ```
 
-## MVP Tools
+## WebMCP Tools
 
 - `nodes.list`
 - `nodes.upsert`
+- `nodes.style`
+- `nodes.resize`
+- `nodes.remove`
 - `edges.list`
 - `edges.upsert`
+- `edges.style`
+- `edges.remove`
 - `layout.apply`
+- `canvas.style`
+- `view.fit`
+- `diagram.reset`
 - `diagram.export`
 
 ## Notes

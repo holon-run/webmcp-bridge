@@ -91,12 +91,14 @@ Recommended order:
 
 ![Bridge architecture](docs/images/bridge-architecture.png)
 
-1. A local MCP host launches `webmcp-local-mcp` for one site session.
-2. `local-mcp` starts a Playwright persistent context and opens the target URL.
-3. `local-mcp` creates a page gateway and proxies MCP `tools/list` and `tools/call`.
-4. The gateway uses native `navigator.modelContext` when available.
-5. If native WebMCP is unavailable, runtime uses either in-page polyfill mode or adapter-shim fallback mode.
-6. Results are returned as JSON-serializable MCP payloads.
+`webmcp-local-mcp` owns one site session per process, drives a Playwright page, and proxies `tools/list` / `tools/call` into browser-side WebMCP execution.
+
+The bridge is native-first:
+
+- native sites execute through browser `navigator.modelContext`
+- non-native sites execute through injected WebMCP shim paths
+
+Both paths return standard JSON-serializable MCP payloads to the local caller.
 
 ## Adapter authoring
 
