@@ -1,11 +1,20 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "baseUrl": "../..",
     "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "types": ["vite/client", "vitest/globals"],
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@webmcp-bridge/core": ["packages/core/src/index.ts"],
+      "@webmcp-bridge/playwright": ["packages/playwright/src/index.ts"],
+      "@webmcp-bridge/local-mcp": ["packages/local-mcp/src/index.ts"],
+      "@webmcp-bridge/adapter-x": ["packages/adapter-x/src/index.ts"],
+      "@webmcp-bridge/adapter-fixture": ["packages/adapter-fixture/src/index.ts"],
+      "@webmcp-bridge/testkit": ["packages/testkit/src/index.ts"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "vite.config.ts"]
 }
