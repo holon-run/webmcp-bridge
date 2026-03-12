@@ -40,7 +40,7 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 ## `uxc` demo shortcut
 
 ```bash
-uxc link cursive-webmcp \
-  "node packages/local-mcp/dist/cli.js --url https://board.holon.run --headless --user-data-dir ~/.uxc/playwright-profile" \
-  --daemon-exclusive ~/.uxc/playwright-profile
+uxc link board-webmcp \
+  "node packages/local-mcp/dist/cli.js --url https://board.holon.run --headless --user-data-dir ~/.uxc/webmcp-profile/board" \
+  --daemon-exclusive ~/.uxc/webmcp-profile/board
 ```

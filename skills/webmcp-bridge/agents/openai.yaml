@@ -1,0 +1,7 @@
+interface:
+  display_name: "WebMCP Bridge"
+  short_description: "Connect browser WebMCP sites through local-mcp"
+  default_prompt: "Use $webmcp-bridge to create or refresh local-mcp bridge links for a website and then call its tools through UXC."
+
+policy:
+  allow_implicit_invocation: true

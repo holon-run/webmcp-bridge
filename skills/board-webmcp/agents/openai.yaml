@@ -1,0 +1,7 @@
+interface:
+  display_name: "Board WebMCP"
+  short_description: "Operate the board demo through local-mcp"
+  default_prompt: "Use $board-webmcp to connect to board.holon.run, inspect the board schema, and update the shared diagram through local-mcp."
+
+policy:
+  allow_implicit_invocation: true

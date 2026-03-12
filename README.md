@@ -24,6 +24,12 @@ Run directly from npm against the public native WebMCP demo:
 npx -y @webmcp-bridge/local-mcp --url https://board.holon.run --headless
 ```
 
+On a fresh machine, or when running under a brand new `HOME`, install Playwright browsers first:
+
+```bash
+npx playwright install
+```
+
 Or install globally:
 
 ```bash
@@ -43,8 +49,8 @@ Native WebMCP demo with `uxc` shortcut:
 
 ```bash
 uxc link board-webmcp \
-  "npx -y @webmcp-bridge/local-mcp --url https://board.holon.run --headless --user-data-dir ~/.uxc/playwright-profile" \
-  --daemon-exclusive ~/.uxc/playwright-profile
+  "npx -y @webmcp-bridge/local-mcp --url https://board.holon.run --headless --user-data-dir ~/.uxc/webmcp-profile/board" \
+  --daemon-exclusive ~/.uxc/webmcp-profile/board
 
 board-webmcp -h --text
 ```
