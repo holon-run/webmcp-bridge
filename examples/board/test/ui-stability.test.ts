@@ -112,7 +112,7 @@ describe("board ui stability", () => {
 
       const summaryText = await page!.locator("body").innerText();
       expect(summaryText).toContain("Board");
-      expect(summaryText).toContain("Nodes");
+      expect(summaryText).toContain("Show Panel");
       expect(pageErrors).toEqual([]);
     },
     TEST_TIMEOUT_MS,

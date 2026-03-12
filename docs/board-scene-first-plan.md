@@ -268,3 +268,70 @@ Start with Phase 1 and Phase 2 together:
 4. keep `edges.*` temporarily on current bridge metadata, but move their source of truth to scene as well
 
 This should eliminate the current `store/document` vs `scene` divergence before any further polish work.
+
+### Recommended Post-Refactor Tool Additions
+
+Once `examples/board` is stable on the scene-first architecture, the next useful expansion is not more graph structure tools, but presentation and collaboration tools.
+
+Recommended additions:
+
+1. `nodes.style`
+   - purpose: patch node presentation without changing node semantics
+   - input:
+     - `nodeIds: string[]`
+     - `strokeColor?: string`
+     - `backgroundColor?: string`
+     - `textColor?: string`
+     - `fillStyle?: "solid" | "hachure" | "cross-hatch"`
+     - `roughness?: number`
+     - `opacity?: number`
+
+2. `edges.style`
+   - purpose: patch edge and edge-label presentation
+   - input:
+     - `edgeIds: string[]`
+     - `strokeColor?: string`
+     - `textColor?: string`
+     - `strokeStyle?: "solid" | "dashed" | "dotted"`
+     - `strokeWidth?: number`
+     - `opacity?: number`
+
+3. `nodes.resize`
+   - purpose: resize one or more nodes without changing labels or graph structure
+   - input:
+     - `nodeIds: string[]`
+     - `width?: number`
+     - `height?: number`
+
+4. `canvas.style`
+   - purpose: patch canvas-level presentation
+   - input:
+     - `backgroundColor?: string`
+
+5. `view.fit`
+   - purpose: let AI bring the current viewport back to the diagram content during collaboration
+   - input:
+     - `animate?: boolean`
+     - `viewportZoomFactor?: number`
+
+Design notes:
+
+- do not overload `nodes.upsert` with style fields; keep structure and presentation separate
+- do not create a second style store; styles should live on Excalidraw scene elements
+- `nodes.list` and `edges.list` should eventually expose optional `style` fields so AI can read current presentation state before patching it
+- `view.fit` is intentionally non-persistent; it is a collaboration/runtime tool, not document state
+
+Recommended implementation order:
+
+1. `nodes.style`
+2. `edges.style`
+3. `view.fit`
+4. `nodes.resize`
+5. `canvas.style`
+
+Non-goals for this phase:
+
+- arbitrary Excalidraw property passthrough
+- group/rotation/font-family/full typography controls
+- generic selection APIs
+- style presets as first-class MCP tools

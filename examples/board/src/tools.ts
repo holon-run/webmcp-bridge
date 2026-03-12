@@ -10,29 +10,70 @@ import {
   deriveSummaryFromScene,
   removeEdgesFromScene,
   removeNodesFromScene,
+  resizeNodesInScene,
+  styleCanvasInScene,
+  styleEdgesInScene,
+  styleNodesInScene,
   upsertEdgesInScene,
   upsertNodesInScene,
 } from "./excalidraw.js";
-import type { JsonValue, NodeKind, UpsertEdgeInput, UpsertNodeInput, WebMcpModelContext, WebMcpToolDefinition } from "./types.js";
+import type {
+  EdgeStylePatch,
+  FitViewInput,
+  JsonValue,
+  NodeKind,
+  NodeStylePatch,
+  ResizeNodeInput,
+  UpsertEdgeInput,
+  UpsertNodeInput,
+  WebMcpModelContext,
+  WebMcpToolDefinition,
+} from "./types.js";
 
 type ExportApi = {
   getSceneElements?: () => unknown[];
+  refresh?: () => void;
+  scrollToContent?: (
+    target?: unknown[] | string | unknown,
+    opts?: {
+      fitToContent?: boolean;
+      fitToViewport?: boolean;
+      viewportZoomFactor?: number;
+      animate?: boolean;
+      duration?: number;
+    },
+  ) => void;
   exportToBlob?: (opts: unknown) => Promise<Blob>;
 };
 
 const TOOL_NAMES = [
   "nodes.list",
   "nodes.upsert",
+  "nodes.style",
+  "nodes.resize",
   "nodes.remove",
   "edges.list",
   "edges.upsert",
+  "edges.style",
   "edges.remove",
   "layout.apply",
+  "canvas.style",
+  "view.fit",
   "diagram.reset",
   "diagram.export",
 ] as const;
 
 type ToolName = (typeof TOOL_NAMES)[number];
+
+async function loadExportToBlob(): Promise<((opts: unknown) => Promise<Blob>) | undefined> {
+  try {
+    const excalidrawLib = await import("@excalidraw/excalidraw");
+    const exporter = (excalidrawLib as unknown as { exportToBlob?: (opts: unknown) => Promise<Blob> }).exportToBlob;
+    return typeof exporter === "function" ? exporter : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => ExportApi | undefined): Record<ToolName, WebMcpToolDefinition> {
   return {
@@ -85,6 +126,62 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
           sceneState.getSnapshot(),
           nodes.map((node) => toUpsertNodeInput(node)),
         );
+        sceneState.setSnapshot(nextScene);
+        return {
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
+        };
+      },
+    },
+    "nodes.style": {
+      name: "nodes.style",
+      description: "Patch visual styles for one or more nodes without changing their structure.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["nodeIds"],
+        properties: {
+          nodeIds: {
+            type: "array",
+            description: "Node ids to style.",
+            items: { type: "string", description: "Stable node id to style." },
+          },
+          strokeColor: { type: "string", description: "Optional node stroke color." },
+          backgroundColor: { type: "string", description: "Optional node fill color." },
+          textColor: { type: "string", description: "Optional node label color." },
+          fillStyle: { type: "string", description: "Optional node fill style." },
+          roughness: { type: "number", description: "Optional Excalidraw roughness." },
+          opacity: { type: "number", description: "Optional node opacity from 0 to 100." },
+        },
+      },
+      execute: async (input) => {
+        const nextScene = styleNodesInScene(sceneState.getSnapshot(), readNodeStylePatch(input));
+        sceneState.setSnapshot(nextScene);
+        return {
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
+        };
+      },
+    },
+    "nodes.resize": {
+      name: "nodes.resize",
+      description: "Resize one or more nodes without changing their positions.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["nodeIds"],
+        properties: {
+          nodeIds: {
+            type: "array",
+            description: "Node ids to resize.",
+            items: { type: "string", description: "Stable node id to resize." },
+          },
+          width: { type: "number", description: "Optional new node width." },
+          height: { type: "number", description: "Optional new node height." },
+        },
+      },
+      execute: async (input) => {
+        const nextScene = resizeNodesInScene(sceneState.getSnapshot(), readResizeNodeInput(input));
         sceneState.setSnapshot(nextScene);
         return {
           document: deriveDocumentFromScene(nextScene),
@@ -175,6 +272,35 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
         };
       },
     },
+    "edges.style": {
+      name: "edges.style",
+      description: "Patch visual styles for one or more edges without changing their endpoints.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["edgeIds"],
+        properties: {
+          edgeIds: {
+            type: "array",
+            description: "Edge ids to style.",
+            items: { type: "string", description: "Stable edge id to style." },
+          },
+          strokeColor: { type: "string", description: "Optional edge stroke color." },
+          textColor: { type: "string", description: "Optional edge label color." },
+          strokeStyle: { type: "string", description: "Optional line style: solid, dashed, or dotted." },
+          strokeWidth: { type: "number", description: "Optional edge stroke width." },
+          opacity: { type: "number", description: "Optional edge opacity from 0 to 100." },
+        },
+      },
+      execute: async (input) => {
+        const nextScene = styleEdgesInScene(sceneState.getSnapshot(), readEdgeStylePatch(input));
+        sceneState.setSnapshot(nextScene);
+        return {
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
+        };
+      },
+    },
     "edges.remove": {
       name: "edges.remove",
       description: "Remove one or more edges by id.",
@@ -229,6 +355,58 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
         };
       },
     },
+    "canvas.style": {
+      name: "canvas.style",
+      description: "Update persisted canvas-level presentation settings such as background color.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          backgroundColor: { type: "string", description: "Optional Excalidraw view background color." },
+        },
+      },
+      execute: async (input) => {
+        const backgroundColor = readOptionalString(input, "backgroundColor");
+        const nextScene = styleCanvasInScene(sceneState.getSnapshot(), {
+          ...(backgroundColor !== undefined ? { backgroundColor } : {}),
+        });
+        sceneState.setSnapshot(nextScene);
+        return {
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
+        };
+      },
+    },
+    "view.fit": {
+      name: "view.fit",
+      description: "Fit the current viewport to the visible diagram without changing persisted document state.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          animate: { type: "boolean", description: "Whether to animate the viewport change." },
+          viewportZoomFactor: { type: "number", description: "Optional zoom factor applied during fit." },
+        },
+      },
+      execute: async (input) => {
+        const api = getExportApi();
+        if (!api?.scrollToContent) {
+          throw new Error("view.fit requires an active Excalidraw API");
+        }
+        const fitInput = readFitViewInput(input);
+        const scene = sceneState.getSnapshot();
+        api.scrollToContent(api.getSceneElements?.() ?? scene.elements, {
+          fitToViewport: true,
+          viewportZoomFactor: fitInput.viewportZoomFactor ?? 0.9,
+          animate: fitInput.animate ?? false,
+        });
+        api.refresh?.();
+        return {
+          ok: true,
+          summary: deriveSummaryFromScene(scene),
+        };
+      },
+    },
     "diagram.reset": {
       name: "diagram.reset",
       description: "Clear the diagram and selection state.",
@@ -266,14 +444,16 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
           };
         }
         const api = getExportApi();
-        if (!api?.exportToBlob) {
+        const exportToBlob = api?.exportToBlob ?? (await loadExportToBlob());
+        if (!exportToBlob) {
           throw new Error("png export requires an active Excalidraw API");
         }
-        const blob = await api.exportToBlob({
+        const blob = await exportToBlob({
           mimeType: "image/png",
           elements: api.getSceneElements?.() ?? scene.elements,
           appState: {
             exportBackground: true,
+            viewBackgroundColor: scene.appState.viewBackgroundColor,
           },
           files: {},
         });
@@ -344,6 +524,18 @@ function readOptionalNumber(value: JsonValue, field: string): number | undefined
   return current;
 }
 
+function readOptionalBoolean(value: JsonValue, field: string): boolean | undefined {
+  const record = readRecord(value);
+  const current = record[field];
+  if (current === undefined || current === null) {
+    return undefined;
+  }
+  if (typeof current !== "boolean") {
+    throw new Error(`${field} must be a boolean`);
+  }
+  return current;
+}
+
 function readNodeKind(value: JsonValue, field: string): NodeKind {
   const current = readRequiredString(value, field);
   if (
@@ -382,6 +574,28 @@ function readExportFormat(value: JsonValue): "json" | "png" {
   const current = readRequiredString(value, "format");
   if (current !== "json" && current !== "png") {
     throw new Error("format must be json or png");
+  }
+  return current;
+}
+
+function readFillStyle(value: JsonValue, field: string): "solid" | "hachure" | "cross-hatch" | undefined {
+  const current = readOptionalString(value, field);
+  if (current === undefined) {
+    return undefined;
+  }
+  if (current !== "solid" && current !== "hachure" && current !== "cross-hatch") {
+    throw new Error(`${field} must be solid, hachure, or cross-hatch`);
+  }
+  return current;
+}
+
+function readStrokeStyle(value: JsonValue, field: string): "solid" | "dashed" | "dotted" | undefined {
+  const current = readOptionalString(value, field);
+  if (current === undefined) {
+    return undefined;
+  }
+  if (current !== "solid" && current !== "dashed" && current !== "dotted") {
+    throw new Error(`${field} must be solid, dashed, or dotted`);
   }
   return current;
 }
@@ -428,6 +642,62 @@ function toUpsertEdgeInput(value: JsonValue): UpsertEdgeInput {
     input.protocol = protocol;
   }
   return input;
+}
+
+function readNodeStylePatch(value: JsonValue): NodeStylePatch {
+  const strokeColor = readOptionalString(value, "strokeColor");
+  const backgroundColor = readOptionalString(value, "backgroundColor");
+  const textColor = readOptionalString(value, "textColor");
+  const fillStyle = readFillStyle(value, "fillStyle");
+  const roughness = readOptionalNumber(value, "roughness");
+  const opacity = readOptionalNumber(value, "opacity");
+  return {
+    nodeIds: readStringArrayField(value, "nodeIds"),
+    ...(strokeColor !== undefined ? { strokeColor } : {}),
+    ...(backgroundColor !== undefined ? { backgroundColor } : {}),
+    ...(textColor !== undefined ? { textColor } : {}),
+    ...(fillStyle !== undefined ? { fillStyle } : {}),
+    ...(roughness !== undefined ? { roughness } : {}),
+    ...(opacity !== undefined ? { opacity } : {}),
+  };
+}
+
+function readEdgeStylePatch(value: JsonValue): EdgeStylePatch {
+  const strokeColor = readOptionalString(value, "strokeColor");
+  const textColor = readOptionalString(value, "textColor");
+  const strokeStyle = readStrokeStyle(value, "strokeStyle");
+  const strokeWidth = readOptionalNumber(value, "strokeWidth");
+  const opacity = readOptionalNumber(value, "opacity");
+  return {
+    edgeIds: readStringArrayField(value, "edgeIds"),
+    ...(strokeColor !== undefined ? { strokeColor } : {}),
+    ...(textColor !== undefined ? { textColor } : {}),
+    ...(strokeStyle !== undefined ? { strokeStyle } : {}),
+    ...(strokeWidth !== undefined ? { strokeWidth } : {}),
+    ...(opacity !== undefined ? { opacity } : {}),
+  };
+}
+
+function readResizeNodeInput(value: JsonValue): ResizeNodeInput {
+  const width = readOptionalNumber(value, "width");
+  const height = readOptionalNumber(value, "height");
+  if (width === undefined && height === undefined) {
+    throw new Error("at least one of width or height must be provided");
+  }
+  return {
+    nodeIds: readStringArrayField(value, "nodeIds"),
+    ...(width !== undefined ? { width } : {}),
+    ...(height !== undefined ? { height } : {}),
+  };
+}
+
+function readFitViewInput(value: JsonValue): FitViewInput {
+  const animate = readOptionalBoolean(value, "animate");
+  const viewportZoomFactor = readOptionalNumber(value, "viewportZoomFactor");
+  return {
+    ...(animate !== undefined ? { animate } : {}),
+    ...(viewportZoomFactor !== undefined ? { viewportZoomFactor } : {}),
+  };
 }
 
 async function blobToDataUrl(blob: Blob): Promise<string> {

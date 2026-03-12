@@ -22,6 +22,7 @@ export type DiagramNode = {
   y: number;
   width: number;
   height: number;
+  style?: DiagramNodeStyle;
 };
 
 export type DiagramEdge = {
@@ -30,6 +31,24 @@ export type DiagramEdge = {
   targetNodeId: string;
   label?: string;
   protocol?: string;
+  style?: DiagramEdgeStyle;
+};
+
+export type DiagramNodeStyle = {
+  strokeColor?: string;
+  backgroundColor?: string;
+  textColor?: string;
+  fillStyle?: "solid" | "hachure" | "cross-hatch";
+  roughness?: number;
+  opacity?: number;
+};
+
+export type DiagramEdgeStyle = {
+  strokeColor?: string;
+  textColor?: string;
+  strokeStyle?: "solid" | "dashed" | "dotted";
+  strokeWidth?: number;
+  opacity?: number;
 };
 
 export type DiagramDocument = {
@@ -70,6 +89,29 @@ export type UpsertEdgeInput = {
   targetNodeId: string;
   label?: string;
   protocol?: string;
+};
+
+export type NodeStylePatch = DiagramNodeStyle & {
+  nodeIds: string[];
+};
+
+export type EdgeStylePatch = DiagramEdgeStyle & {
+  edgeIds: string[];
+};
+
+export type ResizeNodeInput = {
+  nodeIds: string[];
+  width?: number;
+  height?: number;
+};
+
+export type CanvasStylePatch = {
+  backgroundColor?: string;
+};
+
+export type FitViewInput = {
+  animate?: boolean;
+  viewportZoomFactor?: number;
 };
 
 export type BoardSceneAppState = {

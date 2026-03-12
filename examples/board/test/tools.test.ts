@@ -55,6 +55,15 @@ const SEEDED_SCENE = {
         protocol: "grpc",
       },
     },
+    {
+      id: "edge-text-orders",
+      type: "text",
+      text: "grpc",
+      containerId: "edge-line-orders",
+      x: 720,
+      y: 140,
+      strokeColor: "#334155",
+    },
   ],
   appState: {
     viewBackgroundColor: "#f7fee7",
@@ -106,11 +115,16 @@ describe("board tools", () => {
     expect(tools.map((tool) => tool.name)).toEqual([
       "nodes.list",
       "nodes.upsert",
+      "nodes.style",
+      "nodes.resize",
       "nodes.remove",
       "edges.list",
       "edges.upsert",
+      "edges.style",
       "edges.remove",
       "layout.apply",
+      "canvas.style",
+      "view.fit",
       "diagram.reset",
       "diagram.export",
     ]);
@@ -151,6 +165,116 @@ describe("board tools", () => {
     });
     expect(edges).toMatchObject({
       items: [],
+    });
+  });
+
+  it("patches node style and size through scene-first tools", async () => {
+    vi.doMock("@excalidraw/excalidraw", () => ({
+      convertToExcalidrawElements: (elements: unknown[]) => elements,
+    }));
+    const modelContext = ensureModelContext(globalThis);
+    const sceneState = await BoardSceneState.load();
+
+    await registerBoardTools(modelContext, sceneState, () => undefined);
+    await modelContext.callTool("nodes.style", {
+      nodeIds: ["orders"],
+      strokeColor: "#2563eb",
+      backgroundColor: "#dbeafe",
+      textColor: "#1e3a8a",
+      fillStyle: "solid",
+      roughness: 0,
+      opacity: 80,
+    });
+    await modelContext.callTool("nodes.resize", {
+      nodeIds: ["orders"],
+      width: 320,
+      height: 140,
+    });
+    const nodes = await modelContext.callTool("nodes.list", {});
+
+    expect(nodes).toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          id: "orders",
+          width: 320,
+          height: 140,
+          style: expect.objectContaining({
+            strokeColor: "#2563eb",
+            backgroundColor: "#dbeafe",
+            textColor: "#1e3a8a",
+            fillStyle: "solid",
+            roughness: 0,
+            opacity: 80,
+          }),
+        }),
+      ]),
+    });
+  });
+
+  it("patches edge style and canvas style", async () => {
+    vi.doMock("@excalidraw/excalidraw", () => ({
+      convertToExcalidrawElements: (elements: unknown[]) => elements,
+    }));
+    const modelContext = ensureModelContext(globalThis);
+    const sceneState = await BoardSceneState.load();
+
+    await registerBoardTools(modelContext, sceneState, () => undefined);
+    await modelContext.callTool("edges.style", {
+      edgeIds: ["e-orders"],
+      strokeColor: "#ea580c",
+      textColor: "#9a3412",
+      strokeStyle: "dashed",
+      strokeWidth: 3,
+      opacity: 70,
+    });
+    await modelContext.callTool("canvas.style", {
+      backgroundColor: "#fafaf9",
+    });
+    const edges = await modelContext.callTool("edges.list", {});
+
+    expect(edges).toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          id: "e-orders",
+          style: expect.objectContaining({
+            strokeColor: "#ea580c",
+            textColor: "#9a3412",
+            strokeStyle: "dashed",
+            strokeWidth: 3,
+            opacity: 70,
+          }),
+        }),
+      ]),
+    });
+    expect(sceneState.getSnapshot().appState.viewBackgroundColor).toBe("#fafaf9");
+  });
+
+  it("fits the current view through the live Excalidraw api", async () => {
+    const scrollToContent = vi.fn();
+    const refresh = vi.fn();
+    const modelContext = ensureModelContext(globalThis);
+    const sceneState = await BoardSceneState.load();
+
+    await registerBoardTools(modelContext, sceneState, () => ({
+      getSceneElements: () => sceneState.getSnapshot().elements,
+      scrollToContent,
+      refresh,
+    }));
+    const result = await modelContext.callTool("view.fit", {
+      animate: true,
+      viewportZoomFactor: 0.8,
+    });
+
+    expect(scrollToContent).toHaveBeenCalledTimes(1);
+    expect(scrollToContent).toHaveBeenCalledWith(sceneState.getSnapshot().elements, {
+      fitToViewport: true,
+      viewportZoomFactor: 0.8,
+      animate: true,
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      ok: true,
+      summary: expect.objectContaining({ nodeCount: 3, edgeCount: 1 }),
     });
   });
 });

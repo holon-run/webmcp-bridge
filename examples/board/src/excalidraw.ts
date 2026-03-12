@@ -18,16 +18,22 @@ import {
 import type {
   BoardSceneAppState,
   BoardSceneSnapshot,
+  CanvasStylePatch,
   DiagramDocument,
   DiagramEdge,
+  DiagramEdgeStyle,
   DiagramNode,
+  DiagramNodeStyle,
   DiagramSelection,
   DiagramSummary,
+  EdgeStylePatch,
   ExcalidrawCustomData,
   ExcalidrawEdgeCustomData,
   ExcalidrawNodeCustomData,
   LayoutMode,
   LayoutScope,
+  NodeStylePatch,
+  ResizeNodeInput,
   UpsertEdgeInput,
   UpsertNodeInput,
 } from "./types.js";
@@ -203,7 +209,14 @@ function createNodeStyle(node: DiagramNode): Record<string, unknown> {
     cache: { strokeColor: "#be123c", backgroundColor: "#ffe4e6" },
     external: { strokeColor: "#475569", backgroundColor: "#e2e8f0" },
   };
-  return palette[node.kind];
+  return {
+    ...palette[node.kind],
+    ...(node.style?.strokeColor ? { strokeColor: node.style.strokeColor } : {}),
+    ...(node.style?.backgroundColor ? { backgroundColor: node.style.backgroundColor } : {}),
+    ...(node.style?.fillStyle ? { fillStyle: node.style.fillStyle } : {}),
+    ...(typeof node.style?.roughness === "number" ? { roughness: node.style.roughness } : {}),
+    ...(typeof node.style?.opacity === "number" ? { opacity: node.style.opacity } : {}),
+  };
 }
 
 function formatEdgeText(edge: DiagramEdge): string | undefined {
@@ -260,7 +273,7 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
         fontFamily: 5,
         textAlign: "center",
         verticalAlign: "middle",
-        strokeColor: "#0f172a",
+        strokeColor: node.style?.textColor ?? "#0f172a",
       },
       customData: createNodeCustomData(node),
       ...createNodeStyle(node),
@@ -295,10 +308,13 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
             fontFamily: 5,
             textAlign: "center",
             verticalAlign: "middle",
-            strokeColor: "#334155",
+            strokeColor: edge.style?.textColor ?? "#334155",
           }
         : undefined,
-      strokeColor: "#0f172a",
+      strokeColor: edge.style?.strokeColor ?? "#0f172a",
+      ...(edge.style?.strokeStyle ? { strokeStyle: edge.style.strokeStyle } : {}),
+      ...(typeof edge.style?.strokeWidth === "number" ? { strokeWidth: edge.style.strokeWidth } : {}),
+      ...(typeof edge.style?.opacity === "number" ? { opacity: edge.style.opacity } : {}),
       customData: createEdgeCustomData(edge),
     });
   }
@@ -434,8 +450,90 @@ function getTextForContainer(elements: readonly unknown[]): Map<string, string> 
   return labels;
 }
 
+function getElementsByContainerId(elements: readonly unknown[]): Map<string, RawElement[]> {
+  const grouped = new Map<string, RawElement[]>();
+  for (const element of elements) {
+    if (!isRecord(element) || isDeleted(element)) {
+      continue;
+    }
+    const containerId = readContainerId(element);
+    if (!containerId) {
+      continue;
+    }
+    const current = grouped.get(containerId) ?? [];
+    current.push(element);
+    grouped.set(containerId, current);
+  }
+  return grouped;
+}
+
+function readOptionalStringField(element: RawElement, field: string): string | undefined {
+  return typeof element[field] === "string" ? element[field] : undefined;
+}
+
+function readOptionalNumberField(element: RawElement, field: string): number | undefined {
+  return typeof element[field] === "number" && Number.isFinite(element[field] as number) ? (element[field] as number) : undefined;
+}
+
+function deriveNodeStyle(shape: RawElement, children: readonly RawElement[]): DiagramNodeStyle | undefined {
+  const labelElement = children.find((element) => element.type === "text");
+  const style: DiagramNodeStyle = {};
+  const strokeColor = readOptionalStringField(shape, "strokeColor");
+  const backgroundColor = readOptionalStringField(shape, "backgroundColor");
+  const textColor = labelElement ? readOptionalStringField(labelElement, "strokeColor") : undefined;
+  const fillStyle = readOptionalStringField(shape, "fillStyle");
+  const roughness = readOptionalNumberField(shape, "roughness");
+  const opacity = readOptionalNumberField(shape, "opacity");
+  if (strokeColor !== undefined) {
+    style.strokeColor = strokeColor;
+  }
+  if (backgroundColor !== undefined) {
+    style.backgroundColor = backgroundColor;
+  }
+  if (textColor !== undefined) {
+    style.textColor = textColor;
+  }
+  if (fillStyle !== undefined) {
+    style.fillStyle = fillStyle === "solid" || fillStyle === "hachure" || fillStyle === "cross-hatch" ? fillStyle : "solid";
+  }
+  if (roughness !== undefined) {
+    style.roughness = roughness;
+  }
+  if (opacity !== undefined) {
+    style.opacity = opacity;
+  }
+  return Object.keys(style).length > 0 ? style : undefined;
+}
+
+function deriveEdgeStyle(shape: RawElement, children: readonly RawElement[]): DiagramEdgeStyle | undefined {
+  const labelElement = children.find((element) => element.type === "text");
+  const style: DiagramEdgeStyle = {};
+  const strokeColor = readOptionalStringField(shape, "strokeColor");
+  const textColor = labelElement ? readOptionalStringField(labelElement, "strokeColor") : undefined;
+  const strokeStyle = readOptionalStringField(shape, "strokeStyle");
+  const strokeWidth = readOptionalNumberField(shape, "strokeWidth");
+  const opacity = readOptionalNumberField(shape, "opacity");
+  if (strokeColor !== undefined) {
+    style.strokeColor = strokeColor;
+  }
+  if (textColor !== undefined) {
+    style.textColor = textColor;
+  }
+  if (strokeStyle !== undefined) {
+    style.strokeStyle = strokeStyle === "solid" || strokeStyle === "dashed" || strokeStyle === "dotted" ? strokeStyle : "solid";
+  }
+  if (strokeWidth !== undefined) {
+    style.strokeWidth = strokeWidth;
+  }
+  if (opacity !== undefined) {
+    style.opacity = opacity;
+  }
+  return Object.keys(style).length > 0 ? style : undefined;
+}
+
 export function deriveDocumentFromScene(snapshot: BoardSceneSnapshot): DiagramDocument {
   const labelsByContainerId = getTextForContainer(snapshot.elements);
+  const childrenByContainerId = getElementsByContainerId(snapshot.elements);
   const nodes: DiagramNode[] = [];
   for (const element of snapshot.elements) {
     if (!isRecord(element) || isDeleted(element) || element.type !== "rectangle") {
@@ -454,6 +552,7 @@ export function deriveDocumentFromScene(snapshot: BoardSceneSnapshot): DiagramDo
       continue;
     }
     const label = labelsByContainerId.get(readElementId(element) ?? "") ?? "Untitled";
+    const style = deriveNodeStyle(element, childrenByContainerId.get(readElementId(element) ?? "") ?? []);
     nodes.push({
       id: bridgeData.bridgeId,
       label,
@@ -463,6 +562,7 @@ export function deriveDocumentFromScene(snapshot: BoardSceneSnapshot): DiagramDo
       y: element.y,
       width: element.width,
       height: element.height,
+      ...(style ? { style } : {}),
     });
   }
 
@@ -479,12 +579,14 @@ export function deriveDocumentFromScene(snapshot: BoardSceneSnapshot): DiagramDo
     if (!nodeIds.has(bridgeData.sourceNodeId) || !nodeIds.has(bridgeData.targetNodeId)) {
       continue;
     }
+    const style = deriveEdgeStyle(element, childrenByContainerId.get(readElementId(element) ?? "") ?? []);
     edges.push({
       id: bridgeData.bridgeId,
       sourceNodeId: bridgeData.sourceNodeId,
       targetNodeId: bridgeData.targetNodeId,
       ...(bridgeData.label !== undefined ? { label: bridgeData.label } : {}),
       ...(bridgeData.protocol !== undefined ? { protocol: bridgeData.protocol } : {}),
+      ...(style ? { style } : {}),
     });
   }
 
@@ -493,6 +595,32 @@ export function deriveDocumentFromScene(snapshot: BoardSceneSnapshot): DiagramDo
     nodes,
     edges,
   });
+}
+
+function patchTextChildren(elements: unknown[], containerId: string, patch: Record<string, unknown>): void {
+  for (const element of elements) {
+    if (!isRecord(element) || readContainerId(element) !== containerId || element.type !== "text") {
+      continue;
+    }
+    Object.assign(element, patch);
+  }
+}
+
+function patchBridgeElements(
+  snapshot: BoardSceneSnapshot,
+  mutate: (elements: unknown[]) => void,
+  appStatePatch?: Partial<BoardSceneAppState>,
+): BoardSceneSnapshot {
+  const nextElements = normalizeElements(snapshot.elements);
+  mutate(nextElements);
+  return {
+    version: 1,
+    elements: nextElements,
+    appState: {
+      ...snapshot.appState,
+      ...appStatePatch,
+    },
+  };
 }
 
 export function deriveSummaryFromScene(snapshot: BoardSceneSnapshot): DiagramSummary {
@@ -582,6 +710,98 @@ export async function removeNodesFromScene(snapshot: BoardSceneSnapshot, nodeIds
 export async function removeEdgesFromScene(snapshot: BoardSceneSnapshot, edgeIds: readonly string[]): Promise<BoardSceneSnapshot> {
   const nextDocument = removeEdgesById(deriveDocumentFromScene(snapshot), edgeIds);
   return await replaceBridgeElements(snapshot, nextDocument);
+}
+
+export function styleNodesInScene(snapshot: BoardSceneSnapshot, patch: NodeStylePatch): BoardSceneSnapshot {
+  const nodeIds = new Set(patch.nodeIds);
+  return patchBridgeElements(snapshot, (elements) => {
+    for (const element of elements) {
+      if (!isRecord(element) || isDeleted(element) || element.type !== "rectangle") {
+        continue;
+      }
+      const bridgeData = readBridgeData(element);
+      if (!bridgeData || bridgeData.bridgeType !== "node" || !nodeIds.has(bridgeData.bridgeId)) {
+        continue;
+      }
+      if (patch.strokeColor !== undefined) {
+        element.strokeColor = patch.strokeColor;
+      }
+      if (patch.backgroundColor !== undefined) {
+        element.backgroundColor = patch.backgroundColor;
+      }
+      if (patch.fillStyle !== undefined) {
+        element.fillStyle = patch.fillStyle;
+      }
+      if (patch.roughness !== undefined) {
+        element.roughness = patch.roughness;
+      }
+      if (patch.opacity !== undefined) {
+        element.opacity = patch.opacity;
+      }
+      const elementId = readElementId(element);
+      if (elementId && patch.textColor !== undefined) {
+        patchTextChildren(elements, elementId, { strokeColor: patch.textColor });
+      }
+    }
+  });
+}
+
+export function styleEdgesInScene(snapshot: BoardSceneSnapshot, patch: EdgeStylePatch): BoardSceneSnapshot {
+  const edgeIds = new Set(patch.edgeIds);
+  return patchBridgeElements(snapshot, (elements) => {
+    for (const element of elements) {
+      if (!isRecord(element) || isDeleted(element) || element.type !== "arrow") {
+        continue;
+      }
+      const bridgeData = readBridgeData(element);
+      if (!bridgeData || bridgeData.bridgeType !== "edge" || !edgeIds.has(bridgeData.bridgeId)) {
+        continue;
+      }
+      if (patch.strokeColor !== undefined) {
+        element.strokeColor = patch.strokeColor;
+      }
+      if (patch.strokeStyle !== undefined) {
+        element.strokeStyle = patch.strokeStyle;
+      }
+      if (patch.strokeWidth !== undefined) {
+        element.strokeWidth = patch.strokeWidth;
+      }
+      if (patch.opacity !== undefined) {
+        element.opacity = patch.opacity;
+      }
+      const elementId = readElementId(element);
+      if (elementId && patch.textColor !== undefined) {
+        patchTextChildren(elements, elementId, { strokeColor: patch.textColor });
+      }
+    }
+  });
+}
+
+export function resizeNodesInScene(snapshot: BoardSceneSnapshot, input: ResizeNodeInput): BoardSceneSnapshot {
+  const nodeIds = new Set(input.nodeIds);
+  return patchBridgeElements(snapshot, (elements) => {
+    for (const element of elements) {
+      if (!isRecord(element) || isDeleted(element) || element.type !== "rectangle") {
+        continue;
+      }
+      const bridgeData = readBridgeData(element);
+      if (!bridgeData || bridgeData.bridgeType !== "node" || !nodeIds.has(bridgeData.bridgeId)) {
+        continue;
+      }
+      if (input.width !== undefined) {
+        element.width = input.width;
+      }
+      if (input.height !== undefined) {
+        element.height = input.height;
+      }
+    }
+  });
+}
+
+export function styleCanvasInScene(snapshot: BoardSceneSnapshot, patch: CanvasStylePatch): BoardSceneSnapshot {
+  return patchBridgeElements(snapshot, () => {}, {
+    ...(patch.backgroundColor !== undefined ? { viewBackgroundColor: patch.backgroundColor } : {}),
+  });
 }
 
 export async function applyLayoutToScene(

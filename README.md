@@ -89,6 +89,8 @@ Recommended order:
 
 ## Runtime model
 
+![Bridge architecture](docs/images/bridge-architecture.png)
+
 1. A local MCP host launches `webmcp-local-mcp` for one site session.
 2. `local-mcp` starts a Playwright persistent context and opens the target URL.
 3. `local-mcp` creates a page gateway and proxies MCP `tools/list` and `tools/call`.

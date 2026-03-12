@@ -64,6 +64,7 @@ export function App(): React.ReactElement {
   const [modelContextReady, setModelContextReady] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Loading board state...");
   const [debugTick, setDebugTick] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const sceneApiRef = useRef<SceneApi | undefined>(undefined);
   const lastAppliedSnapshotRef = useRef("");
 
@@ -175,7 +176,7 @@ export function App(): React.ReactElement {
     return (
       <div style={styles.loadingShell}>
         <div style={styles.loadingCard}>
-          <p style={styles.eyebrow}>Native WebMCP Example</p>
+          <p style={styles.eyebrow}>Excalidraw + WebMCP Demo</p>
           <h1 style={styles.title}>Board</h1>
           <p style={styles.subtitle}>Loading scene snapshot…</p>
         </div>
@@ -187,11 +188,24 @@ export function App(): React.ReactElement {
     <div style={styles.shell}>
       <header style={styles.header}>
         <div>
-          <p style={styles.eyebrow}>Native WebMCP Example</p>
+          <p style={styles.eyebrow}>Excalidraw + WebMCP Demo</p>
           <h1 style={styles.title}>Board</h1>
-          <p style={styles.subtitle}>Human tweaks the board in the browser while AI edits the same diagram through WebMCP tools.</p>
+          <p style={styles.subtitle}>Built on Excalidraw. Human tweaks the board in the browser while AI edits the same diagram through WebMCP tools.</p>
+          <div style={styles.statusRow}>
+            <span style={styles.statusLabel}>WebMCP</span>
+            <span style={modelContextReady ? styles.goodStatusBadge : styles.badStatusBadge}>{statusMessage}</span>
+            <span style={styles.statusHint}>`webmcp-local-mcp --url http://127.0.0.1:4173`</span>
+          </div>
         </div>
         <div style={styles.actions}>
+          <button
+            style={styles.secondaryButton}
+            onClick={() => {
+              setSidebarOpen((value) => !value);
+            }}
+          >
+            {sidebarOpen ? "Hide Panel" : "Show Panel"}
+          </button>
           <button
             style={styles.primaryButton}
             onClick={() => {
@@ -263,13 +277,7 @@ export function App(): React.ReactElement {
             />
           </div>
         </section>
-        <aside style={styles.sidebar}>
-          <section style={styles.card}>
-            <p style={styles.cardEyebrow}>Session</p>
-            <h2 style={styles.cardTitle}>WebMCP Status</h2>
-            <p style={modelContextReady ? styles.goodStatus : styles.badStatus}>{statusMessage}</p>
-            <p style={styles.helperText}>Use `webmcp-local-mcp --url http://127.0.0.1:4173` to connect from the CLI.</p>
-          </section>
+        <aside style={sidebarOpen ? styles.sidebar : styles.sidebarHidden}>
           <section style={styles.card}>
             <p style={styles.cardEyebrow}>Diagram</p>
             <h2 style={styles.cardTitle}>Summary</h2>
@@ -296,15 +304,20 @@ export function App(): React.ReactElement {
           </section>
           <section style={styles.card}>
             <p style={styles.cardEyebrow}>Tools</p>
-            <h2 style={styles.cardTitle}>MVP Contract</h2>
+            <h2 style={styles.cardTitle}>WebMCP Tools</h2>
             <ul style={styles.toolList}>
               <li>`nodes.list`</li>
               <li>`nodes.upsert`</li>
+              <li>`nodes.style`</li>
+              <li>`nodes.resize`</li>
               <li>`nodes.remove`</li>
               <li>`edges.list`</li>
               <li>`edges.upsert`</li>
+              <li>`edges.style`</li>
               <li>`edges.remove`</li>
               <li>`layout.apply`</li>
+              <li>`canvas.style`</li>
+              <li>`view.fit`</li>
               <li>`diagram.reset`</li>
               <li>`diagram.export`</li>
             </ul>
@@ -425,6 +438,20 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: "720px",
     color: "#334155",
   },
+  statusRow: {
+    display: "flex",
+    gap: "10px",
+    alignItems: "center",
+    flexWrap: "wrap",
+    marginTop: "14px",
+  },
+  statusLabel: {
+    fontSize: "11px",
+    textTransform: "uppercase",
+    letterSpacing: "0.12em",
+    color: "#64748b",
+    fontWeight: 700,
+  },
   actions: {
     display: "flex",
     gap: "12px",
@@ -450,7 +477,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   main: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) 320px",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
     gap: "24px",
     flex: 1,
     minHeight: 0,
@@ -472,8 +499,12 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: "16px",
+    width: "320px",
     minHeight: 0,
     overflow: "auto",
+  },
+  sidebarHidden: {
+    display: "none",
   },
   card: {
     borderRadius: "24px",
@@ -503,6 +534,30 @@ const styles: Record<string, React.CSSProperties> = {
     margin: 0,
     color: "#b91c1c",
     fontWeight: 700,
+  },
+  goodStatusBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    borderRadius: "999px",
+    background: "rgba(4, 120, 87, 0.12)",
+    color: "#047857",
+    padding: "6px 10px",
+    fontWeight: 700,
+    fontSize: "13px",
+  },
+  badStatusBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    borderRadius: "999px",
+    background: "rgba(185, 28, 28, 0.12)",
+    color: "#b91c1c",
+    padding: "6px 10px",
+    fontWeight: 700,
+    fontSize: "13px",
+  },
+  statusHint: {
+    color: "#475569",
+    fontSize: "13px",
   },
   helperText: {
     margin: "8px 0 0",
