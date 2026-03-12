@@ -73,6 +73,20 @@ External adapter module mode:
 webmcp-local-mcp --adapter-module @your-scope/webmcp-adapter --headless
 ```
 
+## Skills
+
+This repository includes three Codex skills with distinct responsibilities:
+
+- `webmcp-bridge`: general bridge operations for existing sites. Use it to decide between `--url`, `--site`, and `--adapter-module`, create fixed `uxc` links, manage per-site profiles, and switch between headless and UI bridge modes.
+- `board-webmcp`: site wrapper for the public native demo at `https://board.holon.run`. Use it when the task is specifically about the shared board example.
+- `webmcp-adapter-creator`: adapter creation workflow for sites that do not expose native WebMCP. Use it to scaffold a new adapter package, design tool schemas, and implement browser-side request-template execution.
+
+Recommended order:
+
+1. Use `webmcp-bridge` when a site already exposes native WebMCP or already has an adapter.
+2. Use `board-webmcp` when the task is specifically about the board demo.
+3. Use `webmcp-adapter-creator` when the site has no native WebMCP and no existing fallback adapter.
+
 ## Runtime model
 
 1. A local MCP host launches `webmcp-local-mcp` for one site session.
