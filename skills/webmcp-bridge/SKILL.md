@@ -7,6 +7,8 @@ description: Connect a website to the local-mcp browser bridge through fixed UXC
 
 Use this skill to operate `@webmcp-bridge/local-mcp` through `uxc` shortcut commands.
 
+If the target site does not expose native WebMCP and does not already have a fallback adapter, switch to `$webmcp-adapter-creator`.
+
 ## Prerequisites
 
 - `uxc` is installed and available in `PATH`.

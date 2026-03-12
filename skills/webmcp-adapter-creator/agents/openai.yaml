@@ -1,0 +1,7 @@
+interface:
+  display_name: "WebMCP Adapter Creator"
+  short_description: "Create fallback adapters for non-WebMCP sites"
+  default_prompt: "Use $webmcp-adapter-creator to scaffold a new site adapter, discover browser-side requests, and design stable tool contracts for local-mcp fallback mode."
+
+policy:
+  allow_implicit_invocation: true
