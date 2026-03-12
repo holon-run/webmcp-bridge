@@ -16,6 +16,7 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @webmcp-bridge/example-board exec playwright install chromium
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm lint
