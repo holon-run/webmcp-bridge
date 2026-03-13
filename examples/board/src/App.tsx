@@ -8,6 +8,7 @@ import * as React from "react";
 import * as ExcalidrawLib from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import {
+  createRawSceneSnapshot,
   createSceneSnapshot,
   deriveDocumentFromScene,
   deriveSelection,
@@ -265,9 +266,20 @@ export function App(): React.ReactElement {
               onChange={(elements: unknown[], nextAppState: unknown) => {
                 const nextSelectionIds = selectedElementIdsFromAppState(nextAppState);
                 sceneState.setSelectedElementIds(nextSelectionIds);
+                const rawSnapshot = createRawSceneSnapshot(elements, nextAppState);
                 const nextSnapshot = createSceneSnapshot(elements, nextAppState);
-                lastAppliedSnapshotRef.current = JSON.stringify(nextSnapshot);
+                const rawSerializedSnapshot = JSON.stringify(rawSnapshot);
+                const normalizedSerializedSnapshot = JSON.stringify(nextSnapshot);
                 sceneState.setSnapshot(nextSnapshot, "canvas");
+                if (rawSerializedSnapshot !== normalizedSerializedSnapshot) {
+                  sceneApiRef.current?.updateScene({
+                    elements: nextSnapshot.elements,
+                    appState: toExcalidrawAppState(nextSnapshot.appState),
+                    captureUpdate: CaptureUpdateAction?.NEVER ?? "NEVER",
+                  });
+                  sceneApiRef.current?.refresh?.();
+                }
+                lastAppliedSnapshotRef.current = normalizedSerializedSnapshot;
               }}
               initialData={{
                 elements: snapshot.elements,

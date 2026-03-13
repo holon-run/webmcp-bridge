@@ -3,7 +3,7 @@
  * It depends on the scene conversion helpers so bridge-managed edges keep native editor attachment behavior.
  */
 
-import { documentToSceneElements } from "../src/excalidraw.js";
+import { documentToSceneElements, normalizeSceneSnapshot } from "../src/excalidraw.js";
 
 describe("excalidraw bindings", () => {
   it("creates arrow bindings for bridge-managed edges", async () => {
@@ -51,5 +51,136 @@ describe("excalidraw bindings", () => {
     expect(arrow).toBeDefined();
     expect(arrow?.startBinding?.elementId).toBe("node-shape-source");
     expect(arrow?.endBinding?.elementId).toBe("node-shape-target");
+  });
+
+  it("attaches arrow bindings using runtime element ids instead of bridge ids", () => {
+    const normalized = normalizeSceneSnapshot({
+      version: 1,
+      elements: [
+        {
+          id: "runtime-source",
+          type: "rectangle",
+          x: 80,
+          y: 120,
+          width: 260,
+          height: 120,
+          customData: {
+            bridgeType: "node",
+            bridgeId: "source",
+            nodeKind: "service",
+          },
+        },
+        {
+          id: "runtime-target",
+          type: "rectangle",
+          x: 480,
+          y: 120,
+          width: 260,
+          height: 120,
+          customData: {
+            bridgeType: "node",
+            bridgeId: "target",
+            nodeKind: "service",
+          },
+        },
+        {
+          id: "runtime-edge",
+          type: "arrow",
+          x: 340,
+          y: 180,
+          points: [
+            [0, 0],
+            [140, 0],
+          ],
+          customData: {
+            bridgeType: "edge",
+            bridgeId: "edge-1",
+            sourceNodeId: "source",
+            targetNodeId: "target",
+          },
+        },
+      ],
+      appState: {},
+    });
+
+    const arrow = normalized.elements.find((element) => {
+      return Boolean(element) && typeof element === "object" && (element as { id?: string }).id === "runtime-edge";
+    }) as
+      | {
+          startBinding?: { elementId?: string } | null;
+          endBinding?: { elementId?: string } | null;
+        }
+      | undefined;
+
+    expect(arrow?.startBinding?.elementId).toBe("runtime-source");
+    expect(arrow?.endBinding?.elementId).toBe("runtime-target");
+  });
+
+  it("reprojects bridge-managed arrows to node boundaries during scene normalization", () => {
+    const normalized = normalizeSceneSnapshot({
+      version: 1,
+      elements: [
+        {
+          id: "runtime-source",
+          type: "rectangle",
+          x: 100,
+          y: 100,
+          width: 200,
+          height: 100,
+          customData: {
+            bridgeType: "node",
+            bridgeId: "source",
+            nodeKind: "service",
+          },
+        },
+        {
+          id: "runtime-target",
+          type: "rectangle",
+          x: 500,
+          y: 300,
+          width: 200,
+          height: 100,
+          customData: {
+            bridgeType: "node",
+            bridgeId: "target",
+            nodeKind: "service",
+          },
+        },
+        {
+          id: "runtime-edge",
+          type: "arrow",
+          x: 200,
+          y: 150,
+          points: [
+            [0, 0],
+            [400, 200],
+          ],
+          customData: {
+            bridgeType: "edge",
+            bridgeId: "edge-1",
+            sourceNodeId: "source",
+            targetNodeId: "target",
+          },
+        },
+      ],
+      appState: {},
+    });
+
+    const arrow = normalized.elements.find((element) => {
+      return Boolean(element) && typeof element === "object" && (element as { id?: string }).id === "runtime-edge";
+    }) as
+      | {
+          x?: number;
+          y?: number;
+          points?: unknown;
+        }
+      | undefined;
+
+    expect(arrow?.x).toBeCloseTo(300, 6);
+    expect(arrow?.y).toBeCloseTo(200, 6);
+    expect(arrow?.points).toEqual([
+      [0, 0],
+      [200, 100],
+    ]);
   });
 });

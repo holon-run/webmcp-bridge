@@ -147,13 +147,200 @@ function normalizeLabelText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function attachArrowBindings(elements: unknown[]): unknown[] {
+function positionTextInContainer(container: RawElement, text: RawElement): void {
+  if (
+    typeof container.x !== "number" ||
+    typeof container.y !== "number" ||
+    typeof container.width !== "number" ||
+    typeof container.height !== "number" ||
+    typeof text.width !== "number" ||
+    typeof text.height !== "number"
+  ) {
+    return;
+  }
+  text.x = container.x + (container.width - text.width) / 2;
+  text.y = container.y + (container.height - text.height) / 2;
+}
+
+function readArrowLineEndpoints(arrow: RawElement): { start: { x: number; y: number }; end: { x: number; y: number } } | undefined {
+  if (typeof arrow.x !== "number" || typeof arrow.y !== "number" || !Array.isArray(arrow.points) || arrow.points.length === 0) {
+    return undefined;
+  }
+  const firstPoint = readLocalPoint(arrow.points[0]);
+  const lastPoint = readLocalPoint(arrow.points[arrow.points.length - 1]);
+  if (!firstPoint || !lastPoint) {
+    return undefined;
+  }
+  return {
+    start: {
+      x: arrow.x + firstPoint[0],
+      y: arrow.y + firstPoint[1],
+    },
+    end: {
+      x: arrow.x + lastPoint[0],
+      y: arrow.y + lastPoint[1],
+    },
+  };
+}
+
+function readContainerCenter(element: RawElement): { x: number; y: number } | undefined {
+  if (
+    typeof element.x !== "number" ||
+    typeof element.y !== "number" ||
+    typeof element.width !== "number" ||
+    typeof element.height !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    x: element.x + element.width / 2,
+    y: element.y + element.height / 2,
+  };
+}
+
+function positionArrowLabel(arrow: RawElement, text: RawElement, byId: ReadonlyMap<string, RawElement>): void {
+  if (typeof text.width !== "number" || typeof text.height !== "number") {
+    return;
+  }
+  const startContainerId =
+    isRecord(arrow.startBinding) && typeof arrow.startBinding.elementId === "string"
+      ? arrow.startBinding.elementId
+      : undefined;
+  const endContainerId =
+    isRecord(arrow.endBinding) && typeof arrow.endBinding.elementId === "string"
+      ? arrow.endBinding.elementId
+      : undefined;
+  const boundStart = startContainerId ? byId.get(startContainerId) : undefined;
+  const boundEnd = endContainerId ? byId.get(endContainerId) : undefined;
+  const startCenter = boundStart ? readContainerCenter(boundStart) : undefined;
+  const endCenter = boundEnd ? readContainerCenter(boundEnd) : undefined;
+  const endpoints =
+    startCenter && endCenter
+      ? { start: startCenter, end: endCenter }
+      : readArrowLineEndpoints(arrow);
+  if (!endpoints) {
+    return;
+  }
+  const dx = endpoints.end.x - endpoints.start.x;
+  const dy = endpoints.end.y - endpoints.start.y;
+  const length = Math.hypot(dx, dy);
+  const normalX = length === 0 ? 0 : -dy / length;
+  const normalY = length === 0 ? -1 : dx / length;
+  const offset = Math.max(14, text.height * 0.8);
+  const centerX = (endpoints.start.x + endpoints.end.x) / 2;
+  const centerY = (endpoints.start.y + endpoints.end.y) / 2;
+  text.x = centerX - text.width / 2 + normalX * offset;
+  text.y = centerY - text.height / 2 + normalY * offset;
+}
+
+function layoutConvertedTextElements(elements: unknown[]): unknown[] {
   const byId = new Map<string, RawElement>();
   for (const element of elements) {
     if (!isRecord(element) || typeof element.id !== "string" || isDeleted(element)) {
       continue;
     }
     byId.set(element.id, element);
+  }
+  for (const element of elements) {
+    if (!isRecord(element) || element.type !== "text" || isDeleted(element) || typeof element.containerId !== "string") {
+      continue;
+    }
+    const container = byId.get(element.containerId);
+    if (!container) {
+      continue;
+    }
+    if (container.type === "rectangle") {
+      positionTextInContainer(container, element);
+      continue;
+    }
+    if (container.type === "arrow") {
+      positionArrowLabel(container, element, byId);
+    }
+  }
+  return elements;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function readLocalPoint(value: unknown): [number, number] | undefined {
+  if (!Array.isArray(value) || value.length < 2) {
+    return undefined;
+  }
+  const [x, y] = value;
+  if (typeof x !== "number" || typeof y !== "number") {
+    return undefined;
+  }
+  return [x, y];
+}
+
+function readArrowEndpoint(element: RawElement, side: "start" | "end"): { x: number; y: number } | undefined {
+  if (typeof element.x !== "number" || typeof element.y !== "number" || !Array.isArray(element.points) || element.points.length === 0) {
+    return undefined;
+  }
+  const firstPoint = readLocalPoint(element.points[0]);
+  const lastPoint = readLocalPoint(element.points[element.points.length - 1]);
+  if (!firstPoint || !lastPoint) {
+    return undefined;
+  }
+  const localPoint = side === "start" ? firstPoint : lastPoint;
+  return {
+    x: element.x + localPoint[0],
+    y: element.y + localPoint[1],
+  };
+}
+
+function createPointBindingForNode(
+  nodeElementId: string,
+  nodeElement: RawElement,
+  point: { x: number; y: number },
+): { elementId: string; focus: number; gap: number } | undefined {
+  if (
+    typeof nodeElement.x !== "number" ||
+    typeof nodeElement.y !== "number" ||
+    typeof nodeElement.width !== "number" ||
+    typeof nodeElement.height !== "number"
+  ) {
+    return undefined;
+  }
+
+  const centerX = nodeElement.x + nodeElement.width / 2;
+  const centerY = nodeElement.y + nodeElement.height / 2;
+  const halfWidth = nodeElement.width / 2;
+  const halfHeight = nodeElement.height / 2;
+  const dx = point.x - centerX;
+  const dy = point.y - centerY;
+
+  const normalizedX = halfWidth === 0 ? 0 : Math.abs(dx) / halfWidth;
+  const normalizedY = halfHeight === 0 ? 0 : Math.abs(dy) / halfHeight;
+  const onVerticalSide = normalizedX >= normalizedY;
+  const focus = onVerticalSide
+    ? clamp(halfHeight === 0 ? 0 : dy / halfHeight, -1, 1)
+    : clamp(halfWidth === 0 ? 0 : dx / halfWidth, -1, 1);
+
+  return {
+    elementId: nodeElementId,
+    focus,
+    gap: 0,
+  };
+}
+
+function attachArrowBindings(elements: unknown[]): unknown[] {
+  const byId = new Map<string, RawElement>();
+  const nodeElementsByBridgeId = new Map<string, { elementId: string; element: RawElement }>();
+  for (const element of elements) {
+    if (!isRecord(element) || typeof element.id !== "string" || isDeleted(element)) {
+      continue;
+    }
+    byId.set(element.id, element);
+    const bridgeData = readBridgeData(element);
+    if (bridgeData?.bridgeType === "node") {
+      nodeElementsByBridgeId.set(bridgeData.bridgeId, {
+        elementId: element.id,
+        element,
+      });
+    }
   }
 
   for (const element of elements) {
@@ -164,24 +351,27 @@ function attachArrowBindings(elements: unknown[]): unknown[] {
     if (!bridgeData || bridgeData.bridgeType !== "edge") {
       continue;
     }
-    const sourceId = `${NODE_SHAPE_PREFIX}${bridgeData.sourceNodeId}`;
-    const targetId = `${NODE_SHAPE_PREFIX}${bridgeData.targetNodeId}`;
-    const source = byId.get(sourceId);
-    const target = byId.get(targetId);
-    if (!source || !target || typeof element.id !== "string") {
+    const sourceEntry = nodeElementsByBridgeId.get(bridgeData.sourceNodeId);
+    const targetEntry = nodeElementsByBridgeId.get(bridgeData.targetNodeId);
+    if (!sourceEntry || !targetEntry || typeof element.id !== "string") {
+      continue;
+    }
+    const source = sourceEntry.element;
+    const target = targetEntry.element;
+    const startPoint = readArrowEndpoint(element, "start");
+    const endPoint = readArrowEndpoint(element, "end");
+    const startBinding = startPoint
+      ? createPointBindingForNode(sourceEntry.elementId, source, startPoint)
+      : undefined;
+    const endBinding = endPoint
+      ? createPointBindingForNode(targetEntry.elementId, target, endPoint)
+      : undefined;
+    if (!startBinding || !endBinding) {
       continue;
     }
 
-    element.startBinding = {
-      elementId: sourceId,
-      focus: 0,
-      gap: 0,
-    };
-    element.endBinding = {
-      elementId: targetId,
-      focus: 0,
-      gap: 0,
-    };
+    element.startBinding = startBinding;
+    element.endBinding = endBinding;
 
     const arrowRef = { id: element.id, type: "arrow" as const };
     const sourceBound = readBoundElements(source);
@@ -197,10 +387,100 @@ function attachArrowBindings(elements: unknown[]): unknown[] {
   return elements;
 }
 
+function readRectangleCenter(element: RawElement): { x: number; y: number } | undefined {
+  if (
+    typeof element.x !== "number" ||
+    typeof element.y !== "number" ||
+    typeof element.width !== "number" ||
+    typeof element.height !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    x: element.x + element.width / 2,
+    y: element.y + element.height / 2,
+  };
+}
+
+function projectToRectangleBoundary(
+  element: RawElement,
+  toward: { x: number; y: number },
+): { x: number; y: number } | undefined {
+  const center = readRectangleCenter(element);
+  if (!center || typeof element.width !== "number" || typeof element.height !== "number") {
+    return undefined;
+  }
+  const dx = toward.x - center.x;
+  const dy = toward.y - center.y;
+  const halfWidth = element.width / 2;
+  const halfHeight = element.height / 2;
+
+  if (dx === 0 && dy === 0) {
+    return center;
+  }
+
+  const scaleX = dx === 0 ? Number.POSITIVE_INFINITY : halfWidth / Math.abs(dx);
+  const scaleY = dy === 0 ? Number.POSITIVE_INFINITY : halfHeight / Math.abs(dy);
+  const scale = Math.min(scaleX, scaleY);
+
+  return {
+    x: center.x + dx * scale,
+    y: center.y + dy * scale,
+  };
+}
+
+function normalizeBridgeArrowGeometry(elements: unknown[]): unknown[] {
+  const nodeElementsByBridgeId = new Map<string, RawElement>();
+  for (const element of elements) {
+    if (!isRecord(element) || isDeleted(element)) {
+      continue;
+    }
+    const bridgeData = readBridgeData(element);
+    if (bridgeData?.bridgeType === "node" && element.type === "rectangle") {
+      nodeElementsByBridgeId.set(bridgeData.bridgeId, element);
+    }
+  }
+
+  for (const element of elements) {
+    if (!isRecord(element) || isDeleted(element) || element.type !== "arrow") {
+      continue;
+    }
+    const bridgeData = readBridgeData(element);
+    if (!bridgeData || bridgeData.bridgeType !== "edge") {
+      continue;
+    }
+    const source = nodeElementsByBridgeId.get(bridgeData.sourceNodeId);
+    const target = nodeElementsByBridgeId.get(bridgeData.targetNodeId);
+    if (!source || !target) {
+      continue;
+    }
+    const sourceCenter = readRectangleCenter(source);
+    const targetCenter = readRectangleCenter(target);
+    if (!sourceCenter || !targetCenter) {
+      continue;
+    }
+    const from = projectToRectangleBoundary(source, targetCenter);
+    const to = projectToRectangleBoundary(target, sourceCenter);
+    if (!from || !to) {
+      continue;
+    }
+    element.x = from.x;
+    element.y = from.y;
+    element.points = [
+      [0, 0],
+      [to.x - from.x, to.y - from.y],
+    ];
+  }
+
+  return elements;
+}
+
 export function normalizeSceneSnapshot(snapshot: BoardSceneSnapshot): BoardSceneSnapshot {
   return {
     version: 1,
-    elements: attachArrowBindings(normalizeElements(snapshot.elements)),
+    elements: layoutConvertedTextElements(
+      attachArrowBindings(normalizeBridgeArrowGeometry(normalizeElements(snapshot.elements))),
+    ),
     appState: sanitizeAppState(snapshot.appState),
   };
 }
@@ -242,12 +522,16 @@ export function toExcalidrawAppState(appState: BoardSceneAppState): Record<strin
   return next;
 }
 
-export function createSceneSnapshot(elements: readonly unknown[], appState?: unknown): BoardSceneSnapshot {
-  return normalizeSceneSnapshot({
+export function createRawSceneSnapshot(elements: readonly unknown[], appState?: unknown): BoardSceneSnapshot {
+  return {
     version: 1,
     elements: normalizeElements(elements),
     appState: sanitizeAppState(appState),
-  });
+  };
+}
+
+export function createSceneSnapshot(elements: readonly unknown[], appState?: unknown): BoardSceneSnapshot {
+  return normalizeSceneSnapshot(createRawSceneSnapshot(elements, appState));
 }
 
 export function createEmptySceneSnapshot(): BoardSceneSnapshot {
@@ -313,6 +597,30 @@ function getNodeCenter(node: DiagramNode): { x: number; y: number } {
   };
 }
 
+function projectToNodeBoundary(
+  node: DiagramNode,
+  toward: { x: number; y: number },
+): { x: number; y: number } {
+  const center = getNodeCenter(node);
+  const dx = toward.x - center.x;
+  const dy = toward.y - center.y;
+  const halfWidth = node.width / 2;
+  const halfHeight = node.height / 2;
+
+  if (dx === 0 && dy === 0) {
+    return center;
+  }
+
+  const scaleX = dx === 0 ? Number.POSITIVE_INFINITY : halfWidth / Math.abs(dx);
+  const scaleY = dy === 0 ? Number.POSITIVE_INFINITY : halfHeight / Math.abs(dy);
+  const scale = Math.min(scaleX, scaleY);
+
+  return {
+    x: center.x + dx * scale,
+    y: center.y + dy * scale,
+  };
+}
+
 export async function documentToSceneElements(document: DiagramDocument): Promise<unknown[]> {
   const convertToExcalidrawElements = await loadConvertToExcalidrawElements();
 
@@ -347,23 +655,17 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
     }
     const sourceCenter = getNodeCenter(source);
     const targetCenter = getNodeCenter(target);
+    const from = projectToNodeBoundary(source, targetCenter);
+    const to = projectToNodeBoundary(target, sourceCenter);
     skeletons.push({
       type: "arrow",
       id: `${EDGE_LINE_PREFIX}${edge.id}`,
-      x: sourceCenter.x,
-      y: sourceCenter.y,
-      start: {
-        id: `${NODE_SHAPE_PREFIX}${source.id}`,
-        type: "rectangle",
-        x: sourceCenter.x,
-        y: sourceCenter.y,
-      },
-      end: {
-        id: `${NODE_SHAPE_PREFIX}${target.id}`,
-        type: "rectangle",
-        x: targetCenter.x,
-        y: targetCenter.y,
-      },
+      x: from.x,
+      y: from.y,
+      points: [
+        [0, 0],
+        [to.x - from.x, to.y - from.y],
+      ],
       startArrowhead: null,
       endArrowhead: "arrow",
       label: formatEdgeText(edge)
@@ -384,7 +686,7 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
     });
   }
 
-  return attachArrowBindings(convertToExcalidrawElements(skeletons));
+  return layoutConvertedTextElements(attachArrowBindings(convertToExcalidrawElements(skeletons)));
 }
 
 export async function createDemoSceneSnapshot(): Promise<BoardSceneSnapshot> {
