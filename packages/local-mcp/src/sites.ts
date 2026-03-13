@@ -209,7 +209,7 @@ export function createNativeSiteDefinition(url: string): SiteDefinition {
     manifest: {
       id,
       displayName: "Native WebMCP Site",
-      version: "0.1.0",
+      version: "0.4.0",
       bridgeApiVersion: "1.0.0",
       defaultUrl: parsed.href,
       hostPatterns,

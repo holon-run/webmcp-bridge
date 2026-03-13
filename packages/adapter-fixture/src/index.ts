@@ -9,7 +9,7 @@ import { createFixtureAdapter } from "./adapter.js";
 export const manifest: AdapterManifest = {
   id: "fixture",
   displayName: "Fixture",
-  version: "0.1.0",
+  version: "0.4.0",
   bridgeApiVersion: "1.0.0",
   defaultUrl: "about:blank",
   hostPatterns: ["about:blank"],

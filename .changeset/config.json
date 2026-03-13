@@ -2,7 +2,16 @@
   "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
+  "fixed": [
+    [
+      "@webmcp-bridge/core",
+      "@webmcp-bridge/playwright",
+      "@webmcp-bridge/local-mcp",
+      "@webmcp-bridge/adapter-x",
+      "@webmcp-bridge/adapter-fixture",
+      "@webmcp-bridge/testkit"
+    ]
+  ],
   "linked": [],
   "access": "public",
   "baseBranch": "main",
