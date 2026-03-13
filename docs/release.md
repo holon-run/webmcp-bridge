@@ -26,3 +26,11 @@ Public packages:
 - `@webmcp-bridge/local-mcp` is published as beta.
 - Breaking changes are allowed while APIs are still stabilizing.
 - Every breaking change must be recorded in changesets/changelog.
+
+## Current release prep
+
+`@webmcp-bridge/local-mcp@0.1.2` includes:
+
+- `bridge.open` / `bridge.close` built-in MCP tools for headed bridge session control
+- faster failure with explicit navigation errors for unreachable targets
+- the latest board demo / skill docs aligned to the new session-control workflow
