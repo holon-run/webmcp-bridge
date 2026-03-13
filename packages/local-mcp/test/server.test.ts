@@ -42,7 +42,7 @@ describe("createLocalMcpStdioServer", () => {
       mode: "native" as const,
       headless: false,
     })),
-    openWindow: vi.fn(async () => "focused" as const),
+    openWindow: vi.fn<() => Promise<"focused" | "opened">>(async () => "focused" as const),
     closeBridge: vi.fn(async () => {}),
   };
 
@@ -168,6 +168,26 @@ describe("createLocalMcpStdioServer", () => {
         mode: "native",
         headless: false,
         windowState: "focused",
+      },
+    });
+  });
+
+  it("passes through bridge.open reopened state", async () => {
+    bridgeControl.openWindow.mockResolvedValueOnce("opened");
+
+    const response = await request({
+      jsonrpc: "2bb",
+      method: "tools/call",
+      params: {
+        name: "bridge.open",
+        arguments: {},
+      },
+    });
+
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        windowState: "opened",
       },
     });
   });

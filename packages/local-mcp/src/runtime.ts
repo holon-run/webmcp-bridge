@@ -55,7 +55,7 @@ export type LocalMcpRuntime = {
   headless: boolean;
   page: Page;
   gateway: LocalMcpGateway;
-  openWindow: () => Promise<"focused">;
+  openWindow: () => Promise<"focused" | "opened">;
   close: () => Promise<void>;
 };
 
@@ -177,10 +177,12 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   }
 
   let context: BrowserContext | undefined;
-  let gatewaySession: WebMcpPageGateway | undefined;
+  let currentPage: Page | undefined;
+  let currentGatewaySession: WebMcpPageGateway | undefined;
+  let currentMode: "native" | "polyfill" | "adapter-shim" = "native";
 
   const cleanup = async (): Promise<void> => {
-    await gatewaySession?.close().catch(() => {
+    await currentGatewaySession?.close().catch(() => {
       // Cleanup should be best-effort when process is terminating.
     });
     await context?.close().catch(() => {
@@ -191,6 +193,49 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         // Cleanup should be best-effort when process is terminating.
       });
     }
+  };
+
+  const gatewayOptions: CreateWebMcpPageGatewayOptions = {
+    preferNative: options.preferNative ?? true,
+  };
+  const fallbackAdapterFactory = site.createFallbackAdapter;
+  if (fallbackAdapterFactory) {
+    gatewayOptions.fallbackAdapter = fallbackAdapterFactory();
+  }
+
+  const initializePageSession = async (): Promise<void> => {
+    if (!context) {
+      throw new Error("SESSION_NOT_AVAILABLE: browser context is unavailable");
+    }
+    await currentGatewaySession?.close().catch(() => {
+      // Session replacement should be best-effort.
+    });
+    currentGatewaySession = undefined;
+
+    const reusablePage = context.pages().find((entry) => !entry.isClosed());
+    currentPage = reusablePage ?? (await context.newPage());
+    try {
+      await currentPage.goto(targetUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: NAVIGATION_TIMEOUT_MS,
+      });
+    } catch (error) {
+      throw mapNavigationError(error, targetUrl, "goto");
+    }
+
+    currentGatewaySession = await createWebMcpPageGateway(currentPage, gatewayOptions);
+    if (currentGatewaySession.mode === "polyfill") {
+      try {
+        await currentPage.reload({
+          waitUntil: "domcontentloaded",
+          timeout: NAVIGATION_TIMEOUT_MS,
+        });
+      } catch (error) {
+        throw mapNavigationError(error, targetUrl, "reload");
+      }
+      await waitForPolyfillTools(currentGatewaySession);
+    }
+    currentMode = currentGatewaySession.mode;
   };
 
   try {
@@ -206,38 +251,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       launchOptions.channel = browserChannel;
     }
     context = await browserType.launchPersistentContext(userDataDir, launchOptions);
-
-    const page = context.pages()[0] ?? (await context.newPage());
-    try {
-      await page.goto(targetUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT_MS,
-      });
-    } catch (error) {
-      throw mapNavigationError(error, targetUrl, "goto");
-    }
-
-    const gatewayOptions: CreateWebMcpPageGatewayOptions = {
-      preferNative: options.preferNative ?? true,
-    };
-    const fallbackAdapterFactory = site.createFallbackAdapter;
-    if (fallbackAdapterFactory) {
-      gatewayOptions.fallbackAdapter = fallbackAdapterFactory();
-    }
-    gatewaySession = await createWebMcpPageGateway(page, gatewayOptions);
-    const pageGateway = gatewaySession;
-    if (pageGateway.mode === "polyfill") {
-      // Ensure page scripts run after modelContext polyfill injection so site tools can register.
-      try {
-        await page.reload({
-          waitUntil: "domcontentloaded",
-          timeout: NAVIGATION_TIMEOUT_MS,
-        });
-      } catch (error) {
-        throw mapNavigationError(error, targetUrl, "reload");
-      }
-      await waitForPolyfillTools(pageGateway);
-    }
+    await initializePageSession();
 
     let closed = false;
     const close = async (): Promise<void> => {
@@ -248,35 +262,54 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       await cleanup();
     };
 
-    const openWindow = async (): Promise<"focused"> => {
+    const openWindow = async (): Promise<"focused" | "opened"> => {
       if (headless) {
         throw new Error(
           "UNSUPPORTED_IN_HEADLESS_SESSION: bridge.open requires a headed local-mcp session. Start the bridge with --no-headless.",
         );
       }
-      if (page.isClosed()) {
-        throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+      if (!currentPage || currentPage.isClosed()) {
+        await initializePageSession();
+        if (!currentPage || currentPage.isClosed()) {
+          throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        await currentPage.bringToFront();
+        return "opened";
       }
-      await page.bringToFront();
+      await currentPage.bringToFront();
       return "focused";
     };
 
     const gateway: LocalMcpGateway = {
       listTools: async (): Promise<ReadonlyArray<WebMcpToolDefinition>> => {
-        return await pageGateway.listTools();
+        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+          throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        return await currentGatewaySession.listTools();
       },
       callTool: async (name: string, input: Record<string, unknown>): Promise<JsonValue> => {
-        return await pageGateway.callTool(name, input as JsonValue);
+        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+          throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        return await currentGatewaySession.callTool(name, input as JsonValue);
       },
     };
 
     return {
-      site: site.id,
+      get site() {
+        return site.id;
+      },
       siteDefinition: site,
-      targetUrl,
-      mode: gatewaySession.mode,
+      get targetUrl() {
+        return targetUrl;
+      },
+      get mode() {
+        return currentMode;
+      },
       headless,
-      page,
+      get page() {
+        return currentPage as Page;
+      },
       gateway,
       openWindow,
       close,

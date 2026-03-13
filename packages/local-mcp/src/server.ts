@@ -27,7 +27,7 @@ export type LocalBridgeControl = {
     mode: "native" | "polyfill" | "adapter-shim";
     headless: boolean;
   };
-  openWindow: () => Promise<"focused">;
+  openWindow: () => Promise<"focused" | "opened">;
   closeBridge: () => Promise<void>;
 };
 
