@@ -21,6 +21,7 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 
 - `--url <url>`: target URL in url mode; otherwise overrides adapter default URL (`manifest.defaultUrl`).
 - `--browser <name>`: `chromium` | `firefox` | `webkit`.
+- `--browser-channel <name>`: Chromium distribution channel override, such as `chrome`, `chrome-beta`, `chrome-dev`, `chrome-canary`, `msedge`, `msedge-beta`, `msedge-dev`, or `msedge-canary`.
 - `--headless`: launch browser in headless mode.
 - `--no-headless`: force headed mode.
 - `--auto-login-fallback`: auto-switch to headed mode when adapter auth probe reports auth required in headless mode (default: true).
@@ -40,6 +41,7 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
   - `bridge.open`: focus the current headed browser session
   - `bridge.close`: close the current bridge session
 - `bridge.open` returns `UNSUPPORTED_IN_HEADLESS_SESSION` when invoked through a headless link.
+- If `--browser-channel` is set, `--browser` must remain `chromium`; other engines reject channel overrides.
 
 ## `uxc` demo shortcut
 

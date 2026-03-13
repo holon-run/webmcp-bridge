@@ -70,9 +70,21 @@ describe("parseCliArgs", () => {
     expect(parsed.autoLoginFallback).toBe(false);
   });
 
+  it("parses a chromium browser channel override", () => {
+    const parsed = parseCliArgs(["--url", "https://board.holon.run", "--browser-channel", "chrome"]);
+    expect(parsed.browser).toBe("chromium");
+    expect(parsed.browserChannel).toBe("chrome");
+  });
+
   it("throws on unsupported browser", () => {
     expect(() => parseCliArgs(["--site", "x", "--browser", "edge"])).toThrow(
       "unsupported browser: edge",
+    );
+  });
+
+  it("throws on unsupported browser channel", () => {
+    expect(() => parseCliArgs(["--url", "https://board.holon.run", "--browser-channel", "safari"])).toThrow(
+      "unsupported browser channel: safari",
     );
   });
 });

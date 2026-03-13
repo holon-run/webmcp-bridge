@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { isUrlAllowed, mapNavigationError, resolveTargetUrl } from "../src/runtime.js";
+import { isUrlAllowed, mapNavigationError, resolveTargetUrl, startLocalMcpRuntime } from "../src/runtime.js";
 
 describe("resolveTargetUrl", () => {
   it("prefers explicit override", () => {
@@ -67,5 +67,29 @@ describe("mapNavigationError", () => {
     );
 
     expect(error.message).toContain("NAVIGATION_TIMEOUT");
+  });
+});
+
+describe("startLocalMcpRuntime", () => {
+  it("rejects browser channels for non-chromium engines", async () => {
+    await expect(
+      startLocalMcpRuntime({
+        siteDefinition: {
+          id: "test",
+          source: "native",
+          manifest: {
+            id: "test",
+            displayName: "Test",
+            version: "0.1.0",
+            bridgeApiVersion: "0.1.0",
+            defaultUrl: "https://example.com",
+            hostPatterns: ["example.com"],
+          },
+        },
+        url: "https://example.com",
+        browser: "firefox",
+        browserChannel: "chrome",
+      }),
+    ).rejects.toThrow("CONFIG_ERROR: --browser-channel requires --browser chromium");
   });
 });

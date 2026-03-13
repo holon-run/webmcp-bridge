@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startLocalMcpBridge } from "./bridge.js";
 import { resolveSiteDefinition, type BuiltinSite } from "./sites.js";
-import type { BrowserEngine } from "./runtime.js";
+import type { BrowserChannel, BrowserEngine } from "./runtime.js";
 
 const USAGE = `Usage:
   webmcp-local-mcp [--site <site> | --adapter-module <specifier>] [options]
@@ -22,6 +22,7 @@ Source:
 Optional:
   --url <url>                  Target URL (required when no source is set; otherwise overrides adapter default URL)
   --browser <name>             chromium | firefox | webkit (default: chromium)
+  --browser-channel <name>     chromium channel: chrome | chrome-beta | chrome-dev | chrome-canary | msedge | msedge-beta | msedge-dev | msedge-canary
   --headless                   Run browser in headless mode (default: false)
   --no-headless                Force headed mode
   --auto-login-fallback        Auto-switch to headed mode when auth is required in headless mode (default: true)
@@ -36,6 +37,7 @@ export type LocalMcpCliOptions = {
   adapterModule?: string;
   url?: string;
   browser: BrowserEngine;
+  browserChannel?: BrowserChannel;
   headless: boolean;
   autoLoginFallback: boolean;
   userDataDir?: string;
@@ -55,6 +57,7 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
   let adapterModule: string | undefined;
   let url: string | undefined;
   let browser: BrowserEngine = "chromium";
+  let browserChannel: BrowserChannel | undefined;
   let headless = false;
   let autoLoginFallback = true;
   let userDataDir: string | undefined;
@@ -88,6 +91,25 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
         throw new Error(`unsupported browser: ${value}`);
       }
       browser = value;
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--browser-channel") {
+      const value = parseFlagValue(args, i, "--browser-channel");
+      if (
+        value !== "chrome" &&
+        value !== "chrome-beta" &&
+        value !== "chrome-dev" &&
+        value !== "chrome-canary" &&
+        value !== "msedge" &&
+        value !== "msedge-beta" &&
+        value !== "msedge-dev" &&
+        value !== "msedge-canary"
+      ) {
+        throw new Error(`unsupported browser channel: ${value}`);
+      }
+      browserChannel = value;
       i += 1;
       continue;
     }
@@ -141,6 +163,9 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
     autoLoginFallback,
     serviceVersion,
   };
+  if (browserChannel !== undefined) {
+    options.browserChannel = browserChannel;
+  }
 
   if (site !== undefined) {
     options.site = site;

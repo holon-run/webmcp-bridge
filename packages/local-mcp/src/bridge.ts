@@ -13,6 +13,7 @@ import {
   startLocalMcpRuntime,
   type LocalMcpRuntime,
   type BrowserEngine,
+  type BrowserChannel,
 } from "./runtime.js";
 import {
   createNativeSiteDefinition,
@@ -27,6 +28,7 @@ export type StartLocalMcpBridgeOptions = {
   moduleBaseDir?: string;
   url?: string;
   browser?: BrowserEngine;
+  browserChannel?: BrowserChannel;
   headless?: boolean;
   userDataDir?: string;
   preferNative?: boolean;
@@ -71,6 +73,7 @@ async function startRuntime(
     headless: boolean;
     url?: string;
     browser?: BrowserEngine;
+    browserChannel?: BrowserChannel;
     userDataDir?: string;
     preferNative?: boolean;
   };
@@ -82,6 +85,9 @@ async function startRuntime(
   }
   if (options.userDataDir !== undefined) {
     runtimeOptions.userDataDir = options.userDataDir;
+  }
+  if (options.browserChannel !== undefined) {
+    runtimeOptions.browserChannel = options.browserChannel;
   }
   if (options.preferNative !== undefined) {
     runtimeOptions.preferNative = options.preferNative;

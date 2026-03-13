@@ -27,11 +27,21 @@ import type { SiteDefinition } from "./sites.js";
 const NAVIGATION_TIMEOUT_MS = 5_000;
 
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
+export type BrowserChannel =
+  | "chrome"
+  | "chrome-beta"
+  | "chrome-dev"
+  | "chrome-canary"
+  | "msedge"
+  | "msedge-beta"
+  | "msedge-dev"
+  | "msedge-canary";
 
 export type LocalMcpRuntimeOptions = {
   siteDefinition: SiteDefinition;
   url?: string;
   browser?: BrowserEngine;
+  browserChannel?: BrowserChannel;
   headless?: boolean;
   userDataDir?: string;
   preferNative?: boolean;
@@ -149,7 +159,11 @@ async function waitForPolyfillTools(
 export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Promise<LocalMcpRuntime> {
   const site = options.siteDefinition;
   const browserEngine = options.browser ?? "chromium";
+  const browserChannel = options.browserChannel;
   const headless = options.headless ?? false;
+  if (browserChannel && browserEngine !== "chromium") {
+    throw new Error(`CONFIG_ERROR: --browser-channel requires --browser chromium (received ${browserEngine})`);
+  }
   const browserType = resolveBrowserType(browserEngine);
   const targetUrl = resolveTargetUrl(options.url, site.manifest.defaultUrl);
   if (!isUrlAllowed(targetUrl, site.manifest.hostPatterns)) {
@@ -180,10 +194,18 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   };
 
   try {
-    context = await browserType.launchPersistentContext(userDataDir, {
+    const launchOptions = {
       headless,
       viewport: null,
-    });
+    } as {
+      headless: boolean;
+      viewport: null;
+      channel?: string;
+    };
+    if (browserChannel) {
+      launchOptions.channel = browserChannel;
+    }
+    context = await browserType.launchPersistentContext(userDataDir, launchOptions);
 
     const page = context.pages()[0] ?? (await context.newPage());
     try {
