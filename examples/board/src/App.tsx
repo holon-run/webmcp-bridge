@@ -169,6 +169,12 @@ export function App(): React.ReactElement {
     [snapshot],
   );
   const derivedDocument = useMemo(() => (snapshot ? deriveDocumentFromScene(snapshot) : { version: 1 as const, nodes: [], edges: [] }), [snapshot]);
+  const bridgeTargetUrl = useMemo(() => {
+    if (typeof globalThis.location === "undefined") {
+      return "http://127.0.0.1:4173";
+    }
+    return `${globalThis.location.origin}${globalThis.location.pathname}`;
+  }, []);
   const sceneElements = sceneApiRef.current?.getSceneElements?.() ?? snapshot?.elements ?? [];
   const appState = sceneApiRef.current?.getAppState?.();
   void debugTick;
@@ -202,7 +208,7 @@ export function App(): React.ReactElement {
           <div style={styles.statusRow}>
             <span style={styles.statusLabel}>WebMCP</span>
             <span style={modelContextReady ? styles.goodStatusBadge : styles.badStatusBadge}>{statusMessage}</span>
-            <span style={styles.statusHint}>`webmcp-local-mcp --url http://127.0.0.1:4173`</span>
+            <span style={styles.statusHint}>{`webmcp-local-mcp --url ${bridgeTargetUrl}`}</span>
           </div>
         </div>
         <div style={styles.actions}>
