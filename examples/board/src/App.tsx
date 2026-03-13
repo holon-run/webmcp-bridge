@@ -327,9 +327,13 @@ export function App(): React.ReactElement {
               <li>`edges.upsert`</li>
               <li>`edges.style`</li>
               <li>`edges.remove`</li>
+              <li>`selection.get`</li>
+              <li>`selection.remove`</li>
               <li>`layout.apply`</li>
               <li>`canvas.style`</li>
               <li>`view.fit`</li>
+              <li>`diagram.get`</li>
+              <li>`diagram.loadDemo`</li>
               <li>`diagram.reset`</li>
               <li>`diagram.export`</li>
             </ul>

@@ -113,6 +113,8 @@ describe("board tools", () => {
 
     const tools = await modelContext.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
+      "diagram.get",
+      "diagram.loadDemo",
       "nodes.list",
       "nodes.upsert",
       "nodes.style",
@@ -122,6 +124,8 @@ describe("board tools", () => {
       "edges.upsert",
       "edges.style",
       "edges.remove",
+      "selection.get",
+      "selection.remove",
       "layout.apply",
       "canvas.style",
       "view.fit",
@@ -141,6 +145,30 @@ describe("board tools", () => {
       items: expect.arrayContaining([
         expect.objectContaining({ id: "orders", label: "Orders Service", kind: "service" }),
       ]),
+      summary: {
+        nodeCount: 3,
+        edgeCount: 1,
+      },
+    });
+  });
+
+  it("returns the full structured document from diagram.get", async () => {
+    const modelContext = ensureModelContext(globalThis);
+    const sceneState = await BoardSceneState.load();
+
+    await registerBoardTools(modelContext, sceneState, () => undefined);
+    const result = await modelContext.callTool("diagram.get", {});
+
+    expect(result).toMatchObject({
+      document: {
+        version: 1,
+        nodes: expect.arrayContaining([
+          expect.objectContaining({ id: "gateway", label: "API Gateway" }),
+        ]),
+        edges: expect.arrayContaining([
+          expect.objectContaining({ id: "e-orders", sourceNodeId: "gateway", targetNodeId: "orders" }),
+        ]),
+      },
       summary: {
         nodeCount: 3,
         edgeCount: 1,
@@ -247,6 +275,66 @@ describe("board tools", () => {
       ]),
     });
     expect(sceneState.getSnapshot().appState.viewBackgroundColor).toBe("#fafaf9");
+  });
+
+  it("returns and removes the current structured selection", async () => {
+    const modelContext = ensureModelContext(globalThis);
+    const sceneState = await BoardSceneState.load();
+    sceneState.setSelectedElementIds(["node-shape-orders", "edge-line-orders"]);
+
+    await registerBoardTools(modelContext, sceneState, () => undefined);
+
+    const selection = await modelContext.callTool("selection.get", {});
+    expect(selection).toMatchObject({
+      selection: {
+        nodeIds: ["orders"],
+        edgeIds: ["e-orders"],
+      },
+      summary: {
+        nodeCount: 3,
+        edgeCount: 1,
+      },
+    });
+
+    const removed = await modelContext.callTool("selection.remove", {});
+    expect(removed).toMatchObject({
+      document: {
+        nodes: expect.not.arrayContaining([expect.objectContaining({ id: "orders" })]),
+        edges: [],
+      },
+      summary: {
+        nodeCount: 2,
+        edgeCount: 0,
+      },
+    });
+    expect(sceneState.getSelectedElementIds().size).toBe(0);
+  });
+
+  it("loads the built-in demo scene through diagram.loadDemo", async () => {
+    vi.doMock("@excalidraw/excalidraw", () => ({
+      convertToExcalidrawElements: (elements: unknown[]) => elements,
+    }));
+    const modelContext = ensureModelContext(globalThis);
+    const sceneState = await BoardSceneState.load();
+
+    await registerBoardTools(modelContext, sceneState, () => undefined);
+    const result = await modelContext.callTool("diagram.loadDemo", {});
+
+    expect(result).toMatchObject({
+      document: {
+        nodes: expect.arrayContaining([
+          expect.objectContaining({ id: "agent", kind: "actor" }),
+          expect.objectContaining({ id: "website", kind: "external" }),
+        ]),
+        edges: expect.arrayContaining([
+          expect.objectContaining({ id: "e-playwright-native", sourceNodeId: "playwright", targetNodeId: "model-context" }),
+        ]),
+      },
+      summary: {
+        nodeCount: 7,
+        edgeCount: 7,
+      },
+    });
   });
 
   it("fits the current view through the live Excalidraw api", async () => {

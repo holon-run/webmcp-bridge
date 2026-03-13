@@ -183,4 +183,43 @@ describe("excalidraw bindings", () => {
       [200, 100],
     ]);
   });
+
+  it("does not relayout text for non-bridge containers during scene normalization", () => {
+    const normalized = normalizeSceneSnapshot({
+      version: 1,
+      elements: [
+        {
+          id: "user-rect",
+          type: "rectangle",
+          x: 100,
+          y: 100,
+          width: 200,
+          height: 100,
+        },
+        {
+          id: "user-text",
+          type: "text",
+          text: "Free text",
+          containerId: "user-rect",
+          width: 80,
+          height: 20,
+          x: 111,
+          y: 222,
+        },
+      ],
+      appState: {},
+    });
+
+    const text = normalized.elements.find((element) => {
+      return Boolean(element) && typeof element === "object" && (element as { id?: string }).id === "user-text";
+    }) as
+      | {
+          x?: number;
+          y?: number;
+        }
+      | undefined;
+
+    expect(text?.x).toBe(111);
+    expect(text?.y).toBe(222);
+  });
 });

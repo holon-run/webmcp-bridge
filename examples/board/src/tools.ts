@@ -7,9 +7,11 @@ import type { BoardSceneState } from "./scene-state.js";
 import {
   applyLayoutToScene,
   deriveDocumentFromScene,
+  deriveSelection,
   deriveSummaryFromScene,
   removeEdgesFromScene,
   removeNodesFromScene,
+  removeSelectionFromScene,
   resizeNodesInScene,
   styleCanvasInScene,
   styleEdgesInScene,
@@ -47,6 +49,8 @@ type ExportApi = {
 };
 
 const TOOL_NAMES = [
+  "diagram.get",
+  "diagram.loadDemo",
   "nodes.list",
   "nodes.upsert",
   "nodes.style",
@@ -56,6 +60,8 @@ const TOOL_NAMES = [
   "edges.upsert",
   "edges.style",
   "edges.remove",
+  "selection.get",
+  "selection.remove",
   "layout.apply",
   "canvas.style",
   "view.fit",
@@ -77,6 +83,38 @@ async function loadExportToBlob(): Promise<((opts: unknown) => Promise<Blob>) | 
 
 function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => ExportApi | undefined): Record<ToolName, WebMcpToolDefinition> {
   return {
+    "diagram.get": {
+      name: "diagram.get",
+      description: "Get the current structured diagram snapshot derived from the authoritative Excalidraw scene.",
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+      },
+      execute: async () => {
+        const scene = sceneState.getSnapshot();
+        return {
+          document: deriveDocumentFromScene(scene),
+          summary: deriveSummaryFromScene(scene),
+        };
+      },
+    },
+    "diagram.loadDemo": {
+      name: "diagram.loadDemo",
+      description: "Replace the current diagram with the built-in bridge architecture demo scene.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+      },
+      execute: async () => {
+        await sceneState.resetToDemo();
+        const nextScene = sceneState.getSnapshot();
+        return {
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
+        };
+      },
+    },
     "nodes.list": {
       name: "nodes.list",
       description: "List all structured diagram nodes with positions and kinds.",
@@ -322,6 +360,39 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
       execute: async (input) => {
         const edgeIds = readStringArrayField(input, "edgeIds");
         const nextScene = await removeEdgesFromScene(sceneState.getSnapshot(), edgeIds);
+        sceneState.setSnapshot(nextScene);
+        return {
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
+        };
+      },
+    },
+    "selection.get": {
+      name: "selection.get",
+      description: "Get the current user selection mapped to structured node and edge ids.",
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+      },
+      execute: async () => {
+        const scene = sceneState.getSnapshot();
+        return {
+          selection: deriveSelection(scene, sceneState.getSelectedElementIds()),
+          summary: deriveSummaryFromScene(scene),
+        };
+      },
+    },
+    "selection.remove": {
+      name: "selection.remove",
+      description: "Delete the currently selected nodes, edges, and attached external elements.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+      },
+      execute: async () => {
+        const nextScene = await removeSelectionFromScene(sceneState.getSnapshot(), sceneState.getSelectedElementIds());
+        sceneState.setSelectedElementIds([]);
         sceneState.setSnapshot(nextScene);
         return {
           document: deriveDocumentFromScene(nextScene),

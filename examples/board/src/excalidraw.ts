@@ -233,7 +233,20 @@ function positionArrowLabel(arrow: RawElement, text: RawElement, byId: ReadonlyM
   text.y = centerY - text.height / 2 + normalY * offset;
 }
 
-function layoutConvertedTextElements(elements: unknown[]): unknown[] {
+function isBridgeManagedContainerElement(element: RawElement | undefined): boolean {
+  if (!element || isDeleted(element)) {
+    return false;
+  }
+  if (readBridgeData(element)) {
+    return true;
+  }
+  if (typeof element.id !== "string") {
+    return false;
+  }
+  return element.id.startsWith(NODE_SHAPE_PREFIX) || element.id.startsWith(EDGE_LINE_PREFIX);
+}
+
+function layoutBridgeManagedTextElements(elements: unknown[]): unknown[] {
   const byId = new Map<string, RawElement>();
   for (const element of elements) {
     if (!isRecord(element) || typeof element.id !== "string" || isDeleted(element)) {
@@ -247,6 +260,9 @@ function layoutConvertedTextElements(elements: unknown[]): unknown[] {
     }
     const container = byId.get(element.containerId);
     if (!container) {
+      continue;
+    }
+    if (!isBridgeManagedContainerElement(container)) {
       continue;
     }
     if (container.type === "rectangle") {
@@ -478,7 +494,7 @@ function normalizeBridgeArrowGeometry(elements: unknown[]): unknown[] {
 export function normalizeSceneSnapshot(snapshot: BoardSceneSnapshot): BoardSceneSnapshot {
   return {
     version: 1,
-    elements: layoutConvertedTextElements(
+    elements: layoutBridgeManagedTextElements(
       attachArrowBindings(normalizeBridgeArrowGeometry(normalizeElements(snapshot.elements))),
     ),
     appState: sanitizeAppState(snapshot.appState),
@@ -686,7 +702,7 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
     });
   }
 
-  return layoutConvertedTextElements(attachArrowBindings(convertToExcalidrawElements(skeletons)));
+  return layoutBridgeManagedTextElements(attachArrowBindings(convertToExcalidrawElements(skeletons)));
 }
 
 export async function createDemoSceneSnapshot(): Promise<BoardSceneSnapshot> {
