@@ -145,6 +145,19 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
   try {
     const serverOptions: LocalMcpStdioServerOptions = {
       gateway: runtime.gateway,
+      bridgeControl: {
+        getState: () => ({
+          site: runtime.site,
+          targetUrl: runtime.targetUrl,
+          mode: runtime.mode,
+          headless: runtime.headless,
+        }),
+        openWindow: runtime.openWindow,
+        closeBridge: async () => {
+          await server?.close();
+          await runtime.close();
+        },
+      },
       serviceVersion: options.serviceVersion,
     };
     if (options.input !== undefined) {

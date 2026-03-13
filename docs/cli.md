@@ -36,6 +36,10 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 - Adapter-shim mode: when adapter source is configured and native is unavailable, fallback adapter logic handles tools.
 - URL selection is `--url` first, otherwise adapter `manifest.defaultUrl`; startup fails closed if target host is outside adapter `hostPatterns`.
 - Stdio transport only in MVP.
+- local-mcp always exposes two bridge control tools in addition to page tools:
+  - `bridge.open`: focus the current headed browser session
+  - `bridge.close`: close the current bridge session
+- `bridge.open` returns `UNSUPPORTED_IN_HEADLESS_SESSION` when invoked through a headless link.
 
 ## `uxc` demo shortcut
 

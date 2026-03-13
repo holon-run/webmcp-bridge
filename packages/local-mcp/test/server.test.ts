@@ -35,6 +35,16 @@ describe("createLocalMcpStdioServer", () => {
     ]),
     callTool: vi.fn(async (name: string): Promise<JsonValue> => ({ ok: true, name })),
   };
+  const bridgeControl = {
+    getState: vi.fn(() => ({
+      site: "board",
+      targetUrl: "http://127.0.0.1:4173",
+      mode: "native" as const,
+      headless: false,
+    })),
+    openWindow: vi.fn(async () => "focused" as const),
+    closeBridge: vi.fn(async () => {}),
+  };
 
   beforeEach(async () => {
     input = new PassThrough();
@@ -43,6 +53,9 @@ describe("createLocalMcpStdioServer", () => {
     outputBuffer = "";
     gateway.listTools.mockClear();
     gateway.callTool.mockClear();
+    bridgeControl.getState.mockClear();
+    bridgeControl.openWindow.mockClear();
+    bridgeControl.closeBridge.mockClear();
 
     output.on("data", (chunk: Buffer | string) => {
       outputBuffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
@@ -59,6 +72,7 @@ describe("createLocalMcpStdioServer", () => {
 
     server = createLocalMcpStdioServer({
       gateway,
+      bridgeControl,
       serviceVersion: "0.1.0-test",
       input,
       output,
@@ -129,8 +143,84 @@ describe("createLocalMcpStdioServer", () => {
 
     expect(gateway.listTools).toHaveBeenCalledOnce();
     expect("result" in response ? response.result : undefined).toMatchObject({
-      tools: [{ name: "ping" }],
+      tools: [{ name: "bridge.open" }, { name: "bridge.close" }, { name: "ping" }],
     });
+  });
+
+  it("handles bridge.open locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2b",
+      method: "tools/call",
+      params: {
+        name: "bridge.open",
+        arguments: {},
+      },
+    });
+
+    expect(bridgeControl.openWindow).toHaveBeenCalledOnce();
+    expect(gateway.callTool).not.toHaveBeenCalled();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        site: "board",
+        targetUrl: "http://127.0.0.1:4173",
+        mode: "native",
+        headless: false,
+        windowState: "focused",
+      },
+    });
+  });
+
+  it("maps bridge.open headless failures to structured errors", async () => {
+    bridgeControl.openWindow.mockRejectedValueOnce(
+      new Error(
+        "UNSUPPORTED_IN_HEADLESS_SESSION: bridge.open requires a headed local-mcp session. Start the bridge with --no-headless.",
+      ),
+    );
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2c",
+      method: "tools/call",
+      params: {
+        name: "bridge.open",
+        arguments: {},
+      },
+    });
+
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      content: [],
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "UNSUPPORTED_IN_HEADLESS_SESSION",
+        },
+      },
+      isError: true,
+    });
+  });
+
+  it("handles bridge.close locally and closes asynchronously", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2d",
+      method: "tools/call",
+      params: {
+        name: "bridge.close",
+        arguments: {},
+      },
+    });
+
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        site: "board",
+        closing: true,
+      },
+    });
+    await waitFor(() => bridgeControl.closeBridge.mock.calls.length === 1);
+    expect(gateway.callTool).not.toHaveBeenCalled();
   });
 
   it("proxies tools/call to gateway", async () => {

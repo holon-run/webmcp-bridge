@@ -26,6 +26,7 @@ Use this skill to operate the native board demo through `@webmcp-bridge/local-mc
    - `board-webmcp-cli nodes.list -h`
    - `board-webmcp-cli nodes.upsert -h`
 3. Read current board state:
+   - `board-webmcp-ui bridge.open`
    - `board-webmcp-cli nodes.list`
    - `board-webmcp-cli edges.list`
 4. Apply updates with structured inputs:
@@ -34,7 +35,9 @@ Use this skill to operate the native board demo through `@webmcp-bridge/local-mc
    - `board-webmcp-cli layout.apply mode=layered`
    - `board-webmcp-cli diagram.export format=json`
 5. Switch to the UI link when a human is editing or reviewing the same board live:
-   - `board-webmcp-ui -h`
+   - `board-webmcp-ui bridge.open`
+   - `board-webmcp-ui selection.get`
+   - `board-webmcp-ui bridge.close`
 
 ## Default Target
 
@@ -72,6 +75,7 @@ npx playwright install
 
 - `board.holon.run` is a shared demo. Writes are visible on the board surface and persisted in browser storage for that profile.
 - Prefer `board-webmcp-ui` when a human and AI need to inspect the same diagram state together.
+- Use `board-webmcp-ui bridge.open` to reveal the current headed browser session before collaborative editing.
 - Keep the board profile isolated from other sites.
 - Use JSON output for automation. Do not depend on human-formatted text output.
 

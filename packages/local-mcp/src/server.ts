@@ -20,8 +20,20 @@ export type LocalMcpGateway = {
   callTool: (name: string, input: Record<string, unknown>) => Promise<JsonValue>;
 };
 
+export type LocalBridgeControl = {
+  getState: () => {
+    site: string;
+    targetUrl: string;
+    mode: "native" | "polyfill" | "adapter-shim";
+    headless: boolean;
+  };
+  openWindow: () => Promise<"focused">;
+  closeBridge: () => Promise<void>;
+};
+
 export type LocalMcpStdioServerOptions = {
   gateway: LocalMcpGateway;
+  bridgeControl: LocalBridgeControl;
   serviceVersion: string;
   input?: Readable;
   output?: Writable;
@@ -34,6 +46,7 @@ export type LocalMcpStdioServer = {
 };
 
 class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
+  private static readonly BRIDGE_CLOSE_DELAY_MS = 100;
   private readonly server: Server;
   private readonly transport: StdioServerTransport;
   private started = false;
@@ -61,7 +74,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     );
 
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const tools = await options.gateway.listTools();
+      const tools = await this.listAllTools(options);
       this.lastToolsSignature = this.computeToolsSignature(tools);
       return {
         tools: tools.map((tool) => this.toMcpToolDefinition(tool)),
@@ -71,7 +84,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     this.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
       const previousSignature = await this.ensureToolsSignature(options.gateway);
       const args = this.normalizeToolArguments(request.params.arguments);
-      const toolResult = await options.gateway.callTool(request.params.name, args);
+      const toolResult = this.isBridgeToolName(request.params.name)
+        ? await this.callBridgeTool(options, request.params.name)
+        : await options.gateway.callTool(request.params.name, args);
       await this.notifyIfToolsChanged(options.gateway, previousSignature);
       return this.toCallToolResult(toolResult);
     });
@@ -188,7 +203,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     if (this.lastToolsSignature !== undefined) {
       return this.lastToolsSignature;
     }
-    const tools = await gateway.listTools();
+    const tools = [...this.bridgeTools(), ...(await gateway.listTools())];
     const signature = this.computeToolsSignature(tools);
     this.lastToolsSignature = signature;
     return signature;
@@ -196,7 +211,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
 
   private async notifyIfToolsChanged(gateway: LocalMcpGateway, previousSignature: string): Promise<void> {
     const tools = await gateway.listTools();
-    const nextSignature = this.computeToolsSignature(tools);
+    const nextTools = [...this.bridgeTools(), ...tools];
+    const nextSignature = this.computeToolsSignature(nextTools);
     this.lastToolsSignature = nextSignature;
     if (nextSignature === previousSignature) {
       return;
@@ -204,6 +220,69 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     await this.server.sendToolListChanged().catch(() => {
       // Ignore when client does not advertise listChanged support or session is not notification-ready.
     });
+  }
+
+  private bridgeTools(): ReadonlyArray<WebMcpToolDefinition> {
+    return [
+      {
+        name: "bridge.open",
+        description: "Open or focus the browser window for the current headed local-mcp session.",
+        inputSchema: { type: "object", additionalProperties: false },
+      },
+      {
+        name: "bridge.close",
+        description: "Close the current local-mcp browser session and end the bridge process.",
+        inputSchema: { type: "object", additionalProperties: false },
+      },
+    ];
+  }
+
+  private async listAllTools(options: LocalMcpStdioServerOptions): Promise<ReadonlyArray<WebMcpToolDefinition>> {
+    const pageTools = await options.gateway.listTools();
+    return [...this.bridgeTools(), ...pageTools];
+  }
+
+  private isBridgeToolName(name: string): boolean {
+    return name === "bridge.open" || name === "bridge.close";
+  }
+
+  private async callBridgeTool(options: LocalMcpStdioServerOptions, name: string): Promise<JsonValue> {
+    const state = options.bridgeControl.getState();
+    if (name === "bridge.open") {
+      try {
+        const windowState = await options.bridgeControl.openWindow();
+        return {
+          ok: true,
+          site: state.site,
+          targetUrl: state.targetUrl,
+          mode: state.mode,
+          headless: state.headless,
+          windowState,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const code = message.split(":")[0] || "BRIDGE_OPEN_FAILED";
+        return {
+          ok: false,
+          error: {
+            code,
+            message,
+          },
+        };
+      }
+    }
+
+    setTimeout(() => {
+      void options.bridgeControl.closeBridge().catch(options.onError);
+    }, LocalMcpStdioServerImpl.BRIDGE_CLOSE_DELAY_MS);
+    return {
+      ok: true,
+      site: state.site,
+      targetUrl: state.targetUrl,
+      mode: state.mode,
+      headless: state.headless,
+      closing: true,
+    };
   }
 
   private computeToolsSignature(tools: ReadonlyArray<WebMcpToolDefinition>): string {

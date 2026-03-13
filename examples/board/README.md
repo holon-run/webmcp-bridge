@@ -42,6 +42,12 @@ Local development:
 node packages/local-mcp/dist/cli.js --url http://127.0.0.1:4173 --headless
 ```
 
+Reveal the shared headed browser session before live collaboration:
+
+```bash
+board-webmcp-ui bridge.open
+```
+
 ## WebMCP Tools
 
 - `nodes.list`
@@ -56,8 +62,12 @@ node packages/local-mcp/dist/cli.js --url http://127.0.0.1:4173 --headless
 - `layout.apply`
 - `canvas.style`
 - `view.fit`
+- `diagram.get`
+- `diagram.loadDemo`
 - `diagram.reset`
 - `diagram.export`
+- `selection.get`
+- `selection.remove`
 
 ## Notes
 

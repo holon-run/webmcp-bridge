@@ -45,6 +45,7 @@ export type LocalMcpRuntime = {
   headless: boolean;
   page: Page;
   gateway: LocalMcpGateway;
+  openWindow: () => Promise<"focused">;
   close: () => Promise<void>;
 };
 
@@ -225,6 +226,19 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       await cleanup();
     };
 
+    const openWindow = async (): Promise<"focused"> => {
+      if (headless) {
+        throw new Error(
+          "UNSUPPORTED_IN_HEADLESS_SESSION: bridge.open requires a headed local-mcp session. Start the bridge with --no-headless.",
+        );
+      }
+      if (page.isClosed()) {
+        throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+      }
+      await page.bringToFront();
+      return "focused";
+    };
+
     const gateway: LocalMcpGateway = {
       listTools: async (): Promise<ReadonlyArray<WebMcpToolDefinition>> => {
         return await pageGateway.listTools();
@@ -242,6 +256,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       headless,
       page,
       gateway,
+      openWindow,
       close,
     };
   } catch (error) {

@@ -39,6 +39,8 @@ If the target site does not expose native WebMCP and does not already have a fal
    - login or MFA challenge
    - visual confirmation
    - human and AI editing the same page together
+   - start the visible session explicitly with `<site>-webmcp-ui bridge.open`
+   - close the visible session with `<site>-webmcp-ui bridge.close`
 6. Parse JSON output only:
    - success path: `.ok == true`, consume `.data`
    - failure path: `.ok == false`, inspect `.error.code` and `.error.message`
