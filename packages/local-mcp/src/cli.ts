@@ -5,11 +5,27 @@
  */
 
 import { realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startLocalMcpBridge } from "./bridge.js";
 import { resolveSiteDefinition, type BuiltinSite } from "./sites.js";
 import type { BrowserChannel, BrowserEngine } from "./runtime.js";
+
+function readPackageVersion(): string {
+  try {
+    const packageJsonUrl = new URL("../package.json", import.meta.url);
+    const parsed = JSON.parse(readFileSync(packageJsonUrl, "utf8")) as { version?: unknown };
+    if (typeof parsed.version === "string" && parsed.version.trim()) {
+      return parsed.version;
+    }
+  } catch {
+    // Fall through to the static fallback so CLI startup never depends on metadata IO.
+  }
+  return "0.1.0";
+}
+
+const DEFAULT_SERVICE_VERSION = readPackageVersion();
 
 const USAGE = `Usage:
   webmcp-local-mcp [--site <site> | --adapter-module <specifier>] [options]
@@ -28,7 +44,7 @@ Optional:
   --auto-login-fallback        Auto-switch to headed mode when auth is required in headless mode (default: true)
   --no-auto-login-fallback     Disable auto-switch login fallback
   --user-data-dir <path>       Playwright persistent profile directory
-  --service-version <value>    MCP server version string (default: 0.1.0)
+  --service-version <value>    MCP server version string (default: ${DEFAULT_SERVICE_VERSION})
   --help                       Show this help message
 `;
 
@@ -61,7 +77,7 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
   let headless = false;
   let autoLoginFallback = true;
   let userDataDir: string | undefined;
-  let serviceVersion = "0.1.0";
+  let serviceVersion = DEFAULT_SERVICE_VERSION;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];

@@ -48,6 +48,11 @@ describe("parseCliArgs", () => {
     expect(parsed.url).toBe("https://www.meetcursive.com");
   });
 
+  it("defaults serviceVersion to the package version", () => {
+    const parsed = parseCliArgs(["--url", "https://board.holon.run"]);
+    expect(parsed.serviceVersion).toBe("0.4.0");
+  });
+
   it("throws on missing required source and url", () => {
     expect(() => parseCliArgs([])).toThrow("missing required --url or one of --site/--adapter-module");
   });
