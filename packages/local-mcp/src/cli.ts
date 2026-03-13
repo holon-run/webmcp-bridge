@@ -191,14 +191,21 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
     return 1;
   }
 
-  const handle = await startLocalMcpBridge({
-    ...options,
-    moduleBaseDir: process.cwd(),
-    onError: (error) => {
-      const message = error instanceof Error ? error.stack ?? error.message : String(error);
-      process.stderr.write(`${message}\n`);
-    },
-  });
+  let handle;
+  try {
+    handle = await startLocalMcpBridge({
+      ...options,
+      moduleBaseDir: process.cwd(),
+      onError: (error) => {
+        const message = error instanceof Error ? error.stack ?? error.message : String(error);
+        process.stderr.write(`${message}\n`);
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    return 1;
+  }
 
   process.stderr.write(
     `[local-mcp] site=${handle.site} mode=${handle.mode} headless=${String(handle.headless)} url=${handle.targetUrl} transport=stdio\n`,
@@ -234,5 +241,9 @@ if (isMainModule(import.meta.url)) {
     if (code !== 0) {
       process.exit(code);
     }
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    process.exit(1);
   });
 }

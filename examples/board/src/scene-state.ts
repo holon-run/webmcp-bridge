@@ -3,7 +3,7 @@
  * It depends on scene helpers for migration/demo creation and is used by both the React UI and WebMCP tools.
  */
 
-import { createDemoSceneSnapshot, createEmptySceneSnapshot, migrateLegacyDocumentToSceneSnapshot } from "./excalidraw.js";
+import { createDemoSceneSnapshot, createEmptySceneSnapshot, migrateLegacyDocumentToSceneSnapshot, normalizeSceneSnapshot } from "./excalidraw.js";
 import type { BoardSceneSnapshot } from "./types.js";
 
 const SCENE_STORAGE_KEY = "webmcp-bridge.board.scene";
@@ -56,7 +56,12 @@ export class BoardSceneState {
     const rawScene = globalThis.localStorage?.getItem(SCENE_STORAGE_KEY);
     const parsedScene = rawScene ? parseSceneSnapshot(rawScene) : undefined;
     if (parsedScene) {
-      return new BoardSceneState(parsedScene);
+      const normalizedScene = normalizeSceneSnapshot(parsedScene);
+      const state = new BoardSceneState(normalizedScene);
+      if (!snapshotsEqual(parsedScene, normalizedScene)) {
+        state.persist();
+      }
+      return state;
     }
 
     const rawLegacyDocument = globalThis.localStorage?.getItem(LEGACY_DOCUMENT_STORAGE_KEY);

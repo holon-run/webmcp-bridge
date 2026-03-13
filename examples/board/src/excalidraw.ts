@@ -55,6 +55,8 @@ type ExcalidrawSkeleton = {
   width?: number;
   height?: number;
   label?: ExcalidrawSkeletonLabel;
+  start?: Record<string, unknown>;
+  end?: Record<string, unknown>;
   [key: string]: unknown;
 };
 
@@ -77,6 +79,18 @@ function fallbackConvertToExcalidrawElements(elements: unknown[]): unknown[] {
     const labelText = typeof skeleton.label?.text === "string" ? skeleton.label.text : undefined;
     const shape = { ...skeleton };
     delete shape.label;
+    if (shape.type === "arrow" && isRecord(shape.start) && isRecord(shape.end)) {
+      const startX = typeof shape.x === "number" ? shape.x : 0;
+      const startY = typeof shape.y === "number" ? shape.y : 0;
+      const endX = typeof shape.end.x === "number" ? shape.end.x : startX;
+      const endY = typeof shape.end.y === "number" ? shape.end.y : startY;
+      shape.points = [
+        [0, 0],
+        [endX - startX, endY - startY],
+      ];
+    }
+    delete shape.start;
+    delete shape.end;
     converted.push(shape);
     if (labelText && typeof skeleton.id === "string") {
       converted.push({
@@ -113,8 +127,82 @@ function normalizeElements(elements: readonly unknown[]): unknown[] {
   return elements.filter((element) => !isDeleted(element)).map((element) => cloneElement(element));
 }
 
+function readBoundElements(element: unknown): Array<{ id: string; type: "arrow" | "text" }> {
+  if (!isRecord(element) || !Array.isArray(element.boundElements)) {
+    return [];
+  }
+  return element.boundElements.flatMap((value) => {
+    if (
+      isRecord(value) &&
+      typeof value.id === "string" &&
+      (value.type === "arrow" || value.type === "text")
+    ) {
+      return [{ id: value.id, type: value.type }];
+    }
+    return [];
+  });
+}
+
 function normalizeLabelText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function attachArrowBindings(elements: unknown[]): unknown[] {
+  const byId = new Map<string, RawElement>();
+  for (const element of elements) {
+    if (!isRecord(element) || typeof element.id !== "string" || isDeleted(element)) {
+      continue;
+    }
+    byId.set(element.id, element);
+  }
+
+  for (const element of elements) {
+    if (!isRecord(element) || element.type !== "arrow" || isDeleted(element)) {
+      continue;
+    }
+    const bridgeData = readBridgeData(element);
+    if (!bridgeData || bridgeData.bridgeType !== "edge") {
+      continue;
+    }
+    const sourceId = `${NODE_SHAPE_PREFIX}${bridgeData.sourceNodeId}`;
+    const targetId = `${NODE_SHAPE_PREFIX}${bridgeData.targetNodeId}`;
+    const source = byId.get(sourceId);
+    const target = byId.get(targetId);
+    if (!source || !target || typeof element.id !== "string") {
+      continue;
+    }
+
+    element.startBinding = {
+      elementId: sourceId,
+      focus: 0,
+      gap: 0,
+    };
+    element.endBinding = {
+      elementId: targetId,
+      focus: 0,
+      gap: 0,
+    };
+
+    const arrowRef = { id: element.id, type: "arrow" as const };
+    const sourceBound = readBoundElements(source);
+    if (!sourceBound.some((bound) => bound.id === arrowRef.id && bound.type === arrowRef.type)) {
+      source.boundElements = [...sourceBound, arrowRef];
+    }
+    const targetBound = readBoundElements(target);
+    if (!targetBound.some((bound) => bound.id === arrowRef.id && bound.type === arrowRef.type)) {
+      target.boundElements = [...targetBound, arrowRef];
+    }
+  }
+
+  return elements;
+}
+
+export function normalizeSceneSnapshot(snapshot: BoardSceneSnapshot): BoardSceneSnapshot {
+  return {
+    version: 1,
+    elements: attachArrowBindings(normalizeElements(snapshot.elements)),
+    appState: sanitizeAppState(snapshot.appState),
+  };
 }
 
 function sanitizeAppState(appState: unknown): BoardSceneAppState {
@@ -155,11 +243,11 @@ export function toExcalidrawAppState(appState: BoardSceneAppState): Record<strin
 }
 
 export function createSceneSnapshot(elements: readonly unknown[], appState?: unknown): BoardSceneSnapshot {
-  return {
+  return normalizeSceneSnapshot({
     version: 1,
     elements: normalizeElements(elements),
     appState: sanitizeAppState(appState),
-  };
+  });
 }
 
 export function createEmptySceneSnapshot(): BoardSceneSnapshot {
@@ -225,27 +313,6 @@ function getNodeCenter(node: DiagramNode): { x: number; y: number } {
   };
 }
 
-function projectToNodeBoundary(node: DiagramNode, toward: { x: number; y: number }): { x: number; y: number } {
-  const center = getNodeCenter(node);
-  const dx = toward.x - center.x;
-  const dy = toward.y - center.y;
-
-  if (dx === 0 && dy === 0) {
-    return center;
-  }
-
-  const halfWidth = node.width / 2;
-  const halfHeight = node.height / 2;
-  const scaleX = dx === 0 ? Number.POSITIVE_INFINITY : halfWidth / Math.abs(dx);
-  const scaleY = dy === 0 ? Number.POSITIVE_INFINITY : halfHeight / Math.abs(dy);
-  const scale = Math.min(scaleX, scaleY);
-
-  return {
-    x: center.x + dx * scale,
-    y: center.y + dy * scale,
-  };
-}
-
 export async function documentToSceneElements(document: DiagramDocument): Promise<unknown[]> {
   const convertToExcalidrawElements = await loadConvertToExcalidrawElements();
 
@@ -280,17 +347,23 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
     }
     const sourceCenter = getNodeCenter(source);
     const targetCenter = getNodeCenter(target);
-    const from = projectToNodeBoundary(source, targetCenter);
-    const to = projectToNodeBoundary(target, sourceCenter);
     skeletons.push({
       type: "arrow",
       id: `${EDGE_LINE_PREFIX}${edge.id}`,
-      x: from.x,
-      y: from.y,
-      points: [
-        [0, 0],
-        [to.x - from.x, to.y - from.y],
-      ],
+      x: sourceCenter.x,
+      y: sourceCenter.y,
+      start: {
+        id: `${NODE_SHAPE_PREFIX}${source.id}`,
+        type: "rectangle",
+        x: sourceCenter.x,
+        y: sourceCenter.y,
+      },
+      end: {
+        id: `${NODE_SHAPE_PREFIX}${target.id}`,
+        type: "rectangle",
+        x: targetCenter.x,
+        y: targetCenter.y,
+      },
       startArrowhead: null,
       endArrowhead: "arrow",
       label: formatEdgeText(edge)
@@ -311,7 +384,7 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
     });
   }
 
-  return convertToExcalidrawElements(skeletons);
+  return attachArrowBindings(convertToExcalidrawElements(skeletons));
 }
 
 export async function createDemoSceneSnapshot(): Promise<BoardSceneSnapshot> {

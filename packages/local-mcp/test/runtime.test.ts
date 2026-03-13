@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { isUrlAllowed, resolveTargetUrl } from "../src/runtime.js";
+import { isUrlAllowed, mapNavigationError, resolveTargetUrl } from "../src/runtime.js";
 
 describe("resolveTargetUrl", () => {
   it("prefers explicit override", () => {
@@ -44,5 +44,28 @@ describe("isUrlAllowed", () => {
   it("allows about:blank only when declared", () => {
     expect(isUrlAllowed("about:blank", ["about:blank"])).toBe(true);
     expect(isUrlAllowed("about:blank", ["x.com"])).toBe(false);
+  });
+});
+
+describe("mapNavigationError", () => {
+  it("maps connection errors to TARGET_UNREACHABLE", () => {
+    const error = mapNavigationError(
+      new Error("page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:4173/"),
+      "http://127.0.0.1:4173",
+      "goto",
+    );
+
+    expect(error.message).toContain("TARGET_UNREACHABLE");
+    expect(error.message).toContain("http://127.0.0.1:4173");
+  });
+
+  it("maps timeout errors to NAVIGATION_TIMEOUT", () => {
+    const error = mapNavigationError(
+      new Error("page.goto: Timeout 5000ms exceeded."),
+      "http://127.0.0.1:4173",
+      "goto",
+    );
+
+    expect(error.message).toContain("NAVIGATION_TIMEOUT");
   });
 });

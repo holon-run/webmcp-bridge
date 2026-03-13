@@ -24,6 +24,8 @@ import {
 import type { LocalMcpGateway } from "./server.js";
 import type { SiteDefinition } from "./sites.js";
 
+const NAVIGATION_TIMEOUT_MS = 5_000;
+
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
 
 export type LocalMcpRuntimeOptions = {
@@ -103,6 +105,31 @@ function resolveBrowserType(browser: BrowserEngine): BrowserType {
   return chromium;
 }
 
+function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+export function mapNavigationError(error: unknown, targetUrl: string, phase: "goto" | "reload"): Error {
+  const message = extractErrorMessage(error);
+  const normalizedPhase = phase === "goto" ? "open" : "reload";
+  if (
+    message.includes("ERR_CONNECTION_REFUSED") ||
+    message.includes("ERR_NAME_NOT_RESOLVED") ||
+    message.includes("ERR_CONNECTION_TIMED_OUT") ||
+    message.includes("ERR_INTERNET_DISCONNECTED") ||
+    message.includes("Couldn't connect to server")
+  ) {
+    return new Error(`TARGET_UNREACHABLE: failed to ${normalizedPhase} ${targetUrl}: ${message}`);
+  }
+  if (message.toLowerCase().includes("timeout")) {
+    return new Error(`NAVIGATION_TIMEOUT: timed out trying to ${normalizedPhase} ${targetUrl}: ${message}`);
+  }
+  return new Error(`NAVIGATION_FAILED: failed to ${normalizedPhase} ${targetUrl}: ${message}`);
+}
+
 async function waitForPolyfillTools(
   pageGateway: Pick<WebMcpPageGateway, "listTools">,
   timeoutMs = 5000,
@@ -158,7 +185,14 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     });
 
     const page = context.pages()[0] ?? (await context.newPage());
-    await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+    try {
+      await page.goto(targetUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: NAVIGATION_TIMEOUT_MS,
+      });
+    } catch (error) {
+      throw mapNavigationError(error, targetUrl, "goto");
+    }
 
     const gatewayOptions: CreateWebMcpPageGatewayOptions = {
       preferNative: options.preferNative ?? true,
@@ -171,7 +205,14 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     const pageGateway = gatewaySession;
     if (pageGateway.mode === "polyfill") {
       // Ensure page scripts run after modelContext polyfill injection so site tools can register.
-      await page.reload({ waitUntil: "domcontentloaded" });
+      try {
+        await page.reload({
+          waitUntil: "domcontentloaded",
+          timeout: NAVIGATION_TIMEOUT_MS,
+        });
+      } catch (error) {
+        throw mapNavigationError(error, targetUrl, "reload");
+      }
       await waitForPolyfillTools(pageGateway);
     }
 
