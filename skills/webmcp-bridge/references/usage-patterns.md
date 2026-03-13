@@ -40,5 +40,7 @@ custom-site-webmcp-cli -h
 ## UI collaboration pattern
 
 ```bash
-<site>-webmcp-ui -h
+<site>-webmcp-ui bridge.open
+<site>-webmcp-ui <operation>
+<site>-webmcp-ui bridge.close
 ```

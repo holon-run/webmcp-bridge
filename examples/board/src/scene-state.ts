@@ -25,6 +25,9 @@ function parseSceneSnapshot(raw: string): BoardSceneSnapshot | undefined {
     const appState = candidate.appState && typeof candidate.appState === "object" ? candidate.appState as Record<string, unknown> : {};
     return {
       version: 1,
+      title: typeof (candidate as { title?: unknown }).title === "string" && (candidate as { title?: string }).title?.trim()
+        ? (candidate as { title: string }).title.trim()
+        : "Board WebMCP Demo",
       elements: candidate.elements,
       appState: {
         ...(typeof appState.viewBackgroundColor === "string" ? { viewBackgroundColor: appState.viewBackgroundColor } : {}),
@@ -96,6 +99,10 @@ export class BoardSceneState {
     return this.snapshot;
   }
 
+  getTitle(): string {
+    return this.snapshot.title;
+  }
+
   setSnapshot(snapshot: BoardSceneSnapshot, source: SnapshotSource = "external"): boolean {
     const serializedSnapshot = JSON.stringify(snapshot);
     if (source === "canvas" && this.pendingCanvasSnapshotJson && serializedSnapshot !== this.pendingCanvasSnapshotJson) {
@@ -136,6 +143,14 @@ export class BoardSceneState {
   async resetToDemo(): Promise<void> {
     this.selectedElementIds.clear();
     this.setSnapshot(await createDemoSceneSnapshot());
+  }
+
+  setTitle(title: string): void {
+    const trimmed = title.trim();
+    this.setSnapshot({
+      ...this.snapshot,
+      title: trimmed || "Board WebMCP Demo",
+    });
   }
 
   clear(): void {

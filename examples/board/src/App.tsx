@@ -173,6 +173,13 @@ export function App(): React.ReactElement {
   const appState = sceneApiRef.current?.getAppState?.();
   void debugTick;
 
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+    globalThis.document.title = snapshot.title;
+  }, [snapshot]);
+
   if (!sceneState || !snapshot) {
     return (
       <div style={styles.loadingShell}>
@@ -190,7 +197,7 @@ export function App(): React.ReactElement {
       <header style={styles.header}>
         <div>
           <p style={styles.eyebrow}>Excalidraw + WebMCP Demo</p>
-          <h1 style={styles.title}>Board</h1>
+          <h1 style={styles.title}>{snapshot.title}</h1>
           <p style={styles.subtitle}>Built on Excalidraw. Human tweaks the board in the browser while AI edits the same diagram through WebMCP tools.</p>
           <div style={styles.statusRow}>
             <span style={styles.statusLabel}>WebMCP</span>

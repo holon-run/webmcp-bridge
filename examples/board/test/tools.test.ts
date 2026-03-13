@@ -10,6 +10,7 @@ import { registerBoardTools } from "../src/tools.js";
 
 const SEEDED_SCENE = {
   version: 1,
+  title: "Board WebMCP Demo",
   elements: [
     {
       id: "node-shape-client",
@@ -115,6 +116,7 @@ describe("board tools", () => {
     expect(tools.map((tool) => tool.name)).toEqual([
       "diagram.get",
       "diagram.loadDemo",
+      "diagram.setTitle",
       "nodes.list",
       "nodes.upsert",
       "nodes.style",
@@ -160,6 +162,7 @@ describe("board tools", () => {
     const result = await modelContext.callTool("diagram.get", {});
 
     expect(result).toMatchObject({
+      title: "Board WebMCP Demo",
       document: {
         version: 1,
         nodes: expect.arrayContaining([
@@ -174,6 +177,27 @@ describe("board tools", () => {
         edgeCount: 1,
       },
     });
+  });
+
+  it("updates the diagram title through diagram.setTitle", async () => {
+    const modelContext = ensureModelContext(globalThis);
+    const sceneState = await BoardSceneState.load();
+
+    await registerBoardTools(modelContext, sceneState, () => undefined);
+    const result = await modelContext.callTool("diagram.setTitle", {
+      title: "Board WebMCP Showcase",
+    });
+
+    expect(result).toMatchObject({
+      title: "Board WebMCP Showcase",
+      summary: {
+        nodeCount: 3,
+        edgeCount: 1,
+      },
+    });
+
+    const snapshot = sceneState.getSnapshot();
+    expect(snapshot.title).toBe("Board WebMCP Showcase");
   });
 
   it("removes nodes and dangling edges", async () => {

@@ -38,6 +38,7 @@ Use this skill to operate the native board demo through `@webmcp-bridge/local-mc
    - `board-webmcp-ui bridge.open`
    - `board-webmcp-ui selection.get`
    - `board-webmcp-ui bridge.close`
+   - if the window flashes open and immediately disappears in an automated or one-shot execution environment, ask the user to run `board-webmcp-ui bridge.open` in their own interactive terminal first
 
 ## Default Target
 
@@ -76,6 +77,7 @@ npx playwright install
 - `board.holon.run` is a shared demo. Writes are visible on the board surface and persisted in browser storage for that profile.
 - Prefer `board-webmcp-ui` when a human and AI need to inspect the same diagram state together.
 - Use `board-webmcp-ui bridge.open` to reveal the current headed browser session before collaborative editing.
+- In constrained execution environments, `bridge.open` may not keep the UI session alive after the command exits. In that case, the user should run `board-webmcp-ui bridge.open` directly in their local terminal and keep that session open.
 - Keep the board profile isolated from other sites.
 - Use JSON output for automation. Do not depend on human-formatted text output.
 

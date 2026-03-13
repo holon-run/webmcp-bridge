@@ -51,6 +51,7 @@ type ExportApi = {
 const TOOL_NAMES = [
   "diagram.get",
   "diagram.loadDemo",
+  "diagram.setTitle",
   "nodes.list",
   "nodes.upsert",
   "nodes.style",
@@ -94,6 +95,7 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
       execute: async () => {
         const scene = sceneState.getSnapshot();
         return {
+          title: scene.title,
           document: deriveDocumentFromScene(scene),
           summary: deriveSummaryFromScene(scene),
         };
@@ -110,6 +112,32 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
         await sceneState.resetToDemo();
         const nextScene = sceneState.getSnapshot();
         return {
+          title: nextScene.title,
+          document: deriveDocumentFromScene(nextScene),
+          summary: deriveSummaryFromScene(nextScene),
+        };
+      },
+    },
+    "diagram.setTitle": {
+      name: "diagram.setTitle",
+      description: "Set the current diagram title used by the board UI and export file names.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title"],
+        properties: {
+          title: {
+            type: "string",
+            description: "Diagram title to persist with the current scene.",
+          },
+        },
+      },
+      execute: async (input) => {
+        const title = readRequiredStringField(input, "title");
+        sceneState.setTitle(title);
+        const nextScene = sceneState.getSnapshot();
+        return {
+          title: nextScene.title,
           document: deriveDocumentFromScene(nextScene),
           summary: deriveSummaryFromScene(nextScene),
         };
@@ -489,6 +517,7 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
         sceneState.clear();
         const nextScene = sceneState.getSnapshot();
         return {
+          title: nextScene.title,
           document: deriveDocumentFromScene(nextScene),
           summary: deriveSummaryFromScene(nextScene),
         };
@@ -510,6 +539,7 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
         const scene = sceneState.getSnapshot();
         if (format === "json") {
           return {
+            title: scene.title,
             format,
             data: deriveDocumentFromScene(scene),
           };
@@ -520,15 +550,19 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
           throw new Error("png export requires an active Excalidraw API");
         }
         const blob = await exportToBlob({
+          name: scene.title,
           mimeType: "image/png",
           elements: api?.getSceneElements?.() ?? scene.elements,
           appState: {
             exportBackground: true,
             viewBackgroundColor: scene.appState.viewBackgroundColor,
+            name: scene.title,
           },
           files: {},
         });
         return {
+          title: scene.title,
+          filename: toExportFilename(scene.title, "png"),
           format,
           data: await blobToDataUrl(blob),
         };
@@ -560,6 +594,24 @@ function readStringArrayField(value: JsonValue, field: string): string[] {
     }
     return item;
   });
+}
+
+function readRequiredStringField(value: JsonValue, field: string): string {
+  const record = readRecord(value);
+  const current = record[field];
+  if (typeof current !== "string" || !current.trim()) {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+  return current.trim();
+}
+
+function toExportFilename(title: string, format: string): string {
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${slug || "board-webmcp-demo"}.${format}`;
 }
 
 function readRequiredString(value: JsonValue, field: string): string {

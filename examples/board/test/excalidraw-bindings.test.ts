@@ -56,6 +56,7 @@ describe("excalidraw bindings", () => {
   it("attaches arrow bindings using runtime element ids instead of bridge ids", () => {
     const normalized = normalizeSceneSnapshot({
       version: 1,
+      title: "Board WebMCP Demo",
       elements: [
         {
           id: "runtime-source",
@@ -119,6 +120,7 @@ describe("excalidraw bindings", () => {
   it("reprojects bridge-managed arrows to node boundaries during scene normalization", () => {
     const normalized = normalizeSceneSnapshot({
       version: 1,
+      title: "Board WebMCP Demo",
       elements: [
         {
           id: "runtime-source",
@@ -187,6 +189,7 @@ describe("excalidraw bindings", () => {
   it("does not relayout text for non-bridge containers during scene normalization", () => {
     const normalized = normalizeSceneSnapshot({
       version: 1,
+      title: "Board WebMCP Demo",
       elements: [
         {
           id: "user-rect",

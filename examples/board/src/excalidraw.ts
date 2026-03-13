@@ -37,6 +37,7 @@ import type {
   UpsertNodeInput,
 } from "./types.js";
 
+const DEFAULT_DIAGRAM_TITLE = "Board WebMCP Demo";
 const DEFAULT_SCENE_BACKGROUND = "#f7fee7";
 const NODE_SHAPE_PREFIX = "node-shape-";
 const EDGE_LINE_PREFIX = "edge-line-";
@@ -494,11 +495,20 @@ function normalizeBridgeArrowGeometry(elements: unknown[]): unknown[] {
 export function normalizeSceneSnapshot(snapshot: BoardSceneSnapshot): BoardSceneSnapshot {
   return {
     version: 1,
+    title: normalizeDiagramTitle(snapshot.title),
     elements: layoutBridgeManagedTextElements(
       attachArrowBindings(normalizeBridgeArrowGeometry(normalizeElements(snapshot.elements))),
     ),
     appState: sanitizeAppState(snapshot.appState),
   };
+}
+
+function normalizeDiagramTitle(title: unknown): string {
+  if (typeof title !== "string") {
+    return DEFAULT_DIAGRAM_TITLE;
+  }
+  const trimmed = title.trim();
+  return trimmed || DEFAULT_DIAGRAM_TITLE;
 }
 
 function sanitizeAppState(appState: unknown): BoardSceneAppState {
@@ -541,6 +551,7 @@ export function toExcalidrawAppState(appState: BoardSceneAppState): Record<strin
 export function createRawSceneSnapshot(elements: readonly unknown[], appState?: unknown): BoardSceneSnapshot {
   return {
     version: 1,
+    title: DEFAULT_DIAGRAM_TITLE,
     elements: normalizeElements(elements),
     appState: sanitizeAppState(appState),
   };
@@ -553,6 +564,7 @@ export function createSceneSnapshot(elements: readonly unknown[], appState?: unk
 export function createEmptySceneSnapshot(): BoardSceneSnapshot {
   return {
     version: 1,
+    title: DEFAULT_DIAGRAM_TITLE,
     elements: [],
     appState: {
       viewBackgroundColor: DEFAULT_SCENE_BACKGROUND,
@@ -708,6 +720,7 @@ export async function documentToSceneElements(document: DiagramDocument): Promis
 export async function createDemoSceneSnapshot(): Promise<BoardSceneSnapshot> {
   return {
     version: 1,
+    title: DEFAULT_DIAGRAM_TITLE,
     elements: await documentToSceneElements(createDemoDocument()),
     appState: {
       viewBackgroundColor: DEFAULT_SCENE_BACKGROUND,
@@ -721,6 +734,7 @@ export async function migrateLegacyDocumentToSceneSnapshot(rawDocument: string):
     if (parsed && parsed.version === 1 && Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
       return {
         version: 1,
+        title: DEFAULT_DIAGRAM_TITLE,
         elements: await documentToSceneElements(removeDanglingEdges(parsed)),
         appState: {
           viewBackgroundColor: DEFAULT_SCENE_BACKGROUND,
@@ -998,6 +1012,7 @@ function patchBridgeElements(
   mutate(nextElements);
   return {
     version: 1,
+    title: snapshot.title,
     elements: nextElements,
     appState: {
       ...snapshot.appState,
@@ -1070,6 +1085,7 @@ async function replaceBridgeElements(snapshot: BoardSceneSnapshot, document: Dia
   const bridgeElements = await documentToSceneElements(document);
   return {
     version: 1,
+    title: snapshot.title,
     elements: [...nextExternalElements, ...bridgeElements],
     appState: snapshot.appState,
   };

@@ -63,6 +63,7 @@ board-webmcp-ui bridge.open
 - `canvas.style`
 - `view.fit`
 - `diagram.get`
+- `diagram.setTitle`
 - `diagram.loadDemo`
 - `diagram.reset`
 - `diagram.export`
@@ -72,5 +73,6 @@ board-webmcp-ui bridge.open
 ## Notes
 
 - Diagram state persists in browser `localStorage`.
+- The default diagram title is `Board WebMCP Demo`, and `diagram.setTitle` updates the exported filename/title metadata.
 - The page provides its own `navigator.modelContext` implementation so it also works in standard browsers.
 - This example demonstrates a native WebMCP provider; it does not use `adapter-*`.

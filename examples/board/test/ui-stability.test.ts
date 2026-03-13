@@ -37,7 +37,7 @@ async function startExampleServer(): Promise<{ server: ViteDevServer; url: strin
 async function waitForBoardReady(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const heading = document.querySelector("h1");
-    return heading?.textContent === "Board";
+    return typeof heading?.textContent === "string" && heading.textContent.includes("Board");
   });
   await page.waitForFunction(() => {
     const anyNavigator = navigator as Navigator & {

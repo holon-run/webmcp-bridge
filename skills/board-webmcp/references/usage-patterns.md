@@ -55,3 +55,11 @@ board-webmcp-cli diagram.export format=json
 ```bash
 skills/board-webmcp/scripts/ensure-links.sh --url http://127.0.0.1:4173
 ```
+
+## UI collaboration session
+
+```bash
+board-webmcp-ui bridge.open
+board-webmcp-ui selection.get
+board-webmcp-ui bridge.close
+```

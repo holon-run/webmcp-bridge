@@ -15,10 +15,22 @@ The script always refreshes both links.
 Use the UI link so the user can log in directly in the visible browser session:
 
 ```bash
-<site>-webmcp-ui -h
+<site>-webmcp-ui bridge.open
 ```
 
 After login, switch back to the CLI link for normal automation.
+
+## UI window flashes open and closes immediately
+
+This usually means the current execution environment did not keep the `uxc` stdio MCP session alive after the command returned.
+
+Use the same command in the user's own interactive terminal instead:
+
+```bash
+<site>-webmcp-ui bridge.open
+```
+
+Once that headed session stays open, subsequent `<site>-webmcp-ui <tool>` calls can reuse it.
 
 ## Fresh machine or isolated HOME cannot start Chromium
 

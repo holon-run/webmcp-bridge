@@ -123,6 +123,7 @@ export type BoardSceneAppState = {
 
 export type BoardSceneSnapshot = {
   version: 1;
+  title: string;
   elements: unknown[];
   appState: BoardSceneAppState;
 };
