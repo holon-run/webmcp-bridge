@@ -1,5 +1,15 @@
 # @webmcp-bridge/local-mcp
 
+## 0.4.2
+
+### Patch Changes
+
+- Rebuild the published local-mcp package so the distributed CLI reports the package version correctly and `bridge.open` can reopen a closed headed browser page.
+  - @webmcp-bridge/core@0.4.2
+  - @webmcp-bridge/playwright@0.4.2
+  - @webmcp-bridge/adapter-x@0.4.2
+  - @webmcp-bridge/adapter-fixture@0.4.2
+
 ## 0.4.1
 
 ### Patch Changes
