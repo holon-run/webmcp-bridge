@@ -1,5 +1,15 @@
 # @webmcp-bridge/local-mcp
 
+## 0.4.1
+
+### Patch Changes
+
+- Reopen the browser page when `bridge.open` is called after the user manually closes the window, instead of leaving the MCP session in a dead headed state.
+  - @webmcp-bridge/core@0.4.1
+  - @webmcp-bridge/playwright@0.4.1
+  - @webmcp-bridge/adapter-x@0.4.1
+  - @webmcp-bridge/adapter-fixture@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes

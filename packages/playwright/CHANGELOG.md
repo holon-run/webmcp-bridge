@@ -1,5 +1,11 @@
 # @webmcp-bridge/playwright
 
+## 0.4.1
+
+### Patch Changes
+
+- @webmcp-bridge/core@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes
