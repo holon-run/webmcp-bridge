@@ -48,6 +48,8 @@ Reveal the shared headed browser session before live collaboration:
 board-webmcp-ui bridge.open
 ```
 
+If the user closes that window manually, run `board-webmcp-ui bridge.open` again to reopen the page in the same headed session.
+
 ## WebMCP Tools
 
 - `nodes.list`

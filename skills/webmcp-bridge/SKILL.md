@@ -40,6 +40,7 @@ If the target site does not expose native WebMCP and does not already have a fal
    - visual confirmation
    - human and AI editing the same page together
    - start the visible session explicitly with `<site>-webmcp-ui bridge.open`
+   - if the user manually closes that window, run `<site>-webmcp-ui bridge.open` again to recreate the headed page in the same bridge session
    - close the visible session with `<site>-webmcp-ui bridge.close`
 6. Parse JSON output only:
    - success path: `.ok == true`, consume `.data`

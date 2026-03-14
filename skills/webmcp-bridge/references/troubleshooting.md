@@ -32,6 +32,16 @@ Use the same command in the user's own interactive terminal instead:
 
 Once that headed session stays open, subsequent `<site>-webmcp-ui <tool>` calls can reuse it.
 
+## The user closed the headed browser window manually
+
+Run the same open command again:
+
+```bash
+<site>-webmcp-ui bridge.open
+```
+
+The bridge should recreate the page inside the existing headed session instead of requiring a full daemon reset.
+
 ## Fresh machine or isolated HOME cannot start Chromium
 
 If `local-mcp` fails with an error that the Playwright browser executable does not exist, the current environment does not have Playwright browsers installed yet.
