@@ -274,18 +274,22 @@ export function upsertNodes(document: DiagramDocument, inputs: UpsertNodeInput[]
       }
       const updated: DiagramNode = {
         ...current,
-        label: input.label,
-        kind: input.kind,
+        label: input.label ?? current.label,
+        kind: input.kind ?? current.kind,
         x: input.x ?? current.x,
         y: input.y ?? current.y,
       };
       if (input.description !== undefined) {
         updated.description = input.description;
-      } else {
-        delete updated.description;
       }
       nextNodes[index] = updated;
       continue;
+    }
+    if (!input.label) {
+      throw new Error(`node label is required when creating a new node${input.id ? ` (${input.id})` : ""}`);
+    }
+    if (!input.kind) {
+      throw new Error(`node kind is required when creating a new node${input.id ? ` (${input.id})` : ""}`);
     }
     const created: DiagramNode = {
       id: input.id ?? createId("node"),
@@ -311,32 +315,36 @@ export function upsertEdges(document: DiagramDocument, inputs: UpsertEdgeInput[]
   const nodeIds = new Set(document.nodes.map((node) => node.id));
   const nextEdges = [...document.edges];
   for (const input of inputs) {
-    if (!nodeIds.has(input.sourceNodeId) || !nodeIds.has(input.targetNodeId)) {
-      throw new Error(`edge references missing node: ${input.sourceNodeId} -> ${input.targetNodeId}`);
-    }
     const index = nextEdges.findIndex((edge) => edge.id === input.id);
     if (index >= 0) {
       const current = nextEdges[index];
       if (!current) {
         continue;
       }
+      const sourceNodeId = input.sourceNodeId ?? current.sourceNodeId;
+      const targetNodeId = input.targetNodeId ?? current.targetNodeId;
+      if (!nodeIds.has(sourceNodeId) || !nodeIds.has(targetNodeId)) {
+        throw new Error(`edge references missing node: ${sourceNodeId} -> ${targetNodeId}`);
+      }
       const updated: DiagramEdge = {
         ...current,
-        sourceNodeId: input.sourceNodeId,
-        targetNodeId: input.targetNodeId,
+        sourceNodeId,
+        targetNodeId,
       };
       if (input.label !== undefined) {
         updated.label = input.label;
-      } else {
-        delete updated.label;
       }
       if (input.protocol !== undefined) {
         updated.protocol = input.protocol;
-      } else {
-        delete updated.protocol;
       }
       nextEdges[index] = updated;
       continue;
+    }
+    if (!input.sourceNodeId || !input.targetNodeId) {
+      throw new Error(`sourceNodeId and targetNodeId are required when creating a new edge${input.id ? ` (${input.id})` : ""}`);
+    }
+    if (!nodeIds.has(input.sourceNodeId) || !nodeIds.has(input.targetNodeId)) {
+      throw new Error(`edge references missing node: ${input.sourceNodeId} -> ${input.targetNodeId}`);
     }
     const created: DiagramEdge = {
       id: input.id ?? createId("edge"),

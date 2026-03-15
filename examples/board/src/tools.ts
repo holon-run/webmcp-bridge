@@ -161,7 +161,7 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
     },
     "nodes.upsert": {
       name: "nodes.upsert",
-      description: "Create or update one or more architecture nodes.",
+      description: "Create or update one or more architecture nodes. New nodes require label and kind. Existing nodes can be patched by id.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -173,14 +173,13 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
             items: {
               type: "object",
               additionalProperties: false,
-              required: ["label", "kind"],
               properties: {
                 id: { type: "string", description: "Stable node id for updates." },
-                label: { type: "string", description: "Visible node label." },
-                kind: { type: "string", description: "Node category." },
+                label: { type: "string", description: "Visible node label. Required when creating a new node." },
+                kind: { type: "string", description: "Node category. Required when creating a new node." },
                 description: { type: "string", description: "Optional node details." },
-                x: { type: "number", description: "Optional x coordinate." },
-                y: { type: "number", description: "Optional y coordinate." },
+                x: { type: "number", description: "Optional x coordinate for creates or position patches." },
+                y: { type: "number", description: "Optional y coordinate for creates or position patches." },
               },
             },
           },
@@ -301,7 +300,7 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
     },
     "edges.upsert": {
       name: "edges.upsert",
-      description: "Create or update one or more architecture edges.",
+      description: "Create or update one or more architecture edges. New edges require sourceNodeId and targetNodeId. Existing edges can be patched by id.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -313,11 +312,10 @@ function createToolRegistry(sceneState: BoardSceneState, getExportApi: () => Exp
             items: {
               type: "object",
               additionalProperties: false,
-              required: ["sourceNodeId", "targetNodeId"],
               properties: {
                 id: { type: "string", description: "Stable edge id for updates." },
-                sourceNodeId: { type: "string", description: "Source node id." },
-                targetNodeId: { type: "string", description: "Target node id." },
+                sourceNodeId: { type: "string", description: "Source node id. Required when creating a new edge." },
+                targetNodeId: { type: "string", description: "Target node id. Required when creating a new edge." },
                 label: { type: "string", description: "Optional visible edge label." },
                 protocol: { type: "string", description: "Optional protocol hint." },
               },
@@ -659,8 +657,11 @@ function readOptionalBoolean(value: JsonValue, field: string): boolean | undefin
   return current;
 }
 
-function readNodeKind(value: JsonValue, field: string): NodeKind {
-  const current = readRequiredString(value, field);
+function readOptionalNodeKind(value: JsonValue, field: string): NodeKind | undefined {
+  const current = readOptionalString(value, field);
+  if (current === undefined) {
+    return undefined;
+  }
   if (
     current !== "actor" &&
     current !== "service" &&
@@ -724,16 +725,21 @@ function readStrokeStyle(value: JsonValue, field: string): "solid" | "dashed" | 
 }
 
 function toUpsertNodeInput(value: JsonValue): UpsertNodeInput {
-  const input: UpsertNodeInput = {
-    label: readRequiredString(value, "label"),
-    kind: readNodeKind(value, "kind"),
-  };
+  const input: UpsertNodeInput = {};
   const id = readOptionalString(value, "id");
   const description = readOptionalString(value, "description");
+  const label = readOptionalString(value, "label");
+  const kind = readOptionalNodeKind(value, "kind");
   const x = readOptionalNumber(value, "x");
   const y = readOptionalNumber(value, "y");
   if (id !== undefined) {
     input.id = id;
+  }
+  if (label !== undefined) {
+    input.label = label;
+  }
+  if (kind !== undefined) {
+    input.kind = kind;
   }
   if (description !== undefined) {
     input.description = description;
@@ -748,15 +754,20 @@ function toUpsertNodeInput(value: JsonValue): UpsertNodeInput {
 }
 
 function toUpsertEdgeInput(value: JsonValue): UpsertEdgeInput {
-  const input: UpsertEdgeInput = {
-    sourceNodeId: readRequiredString(value, "sourceNodeId"),
-    targetNodeId: readRequiredString(value, "targetNodeId"),
-  };
+  const input: UpsertEdgeInput = {};
   const id = readOptionalString(value, "id");
   const label = readOptionalString(value, "label");
   const protocol = readOptionalString(value, "protocol");
+  const sourceNodeId = readOptionalString(value, "sourceNodeId");
+  const targetNodeId = readOptionalString(value, "targetNodeId");
   if (id !== undefined) {
     input.id = id;
+  }
+  if (sourceNodeId !== undefined) {
+    input.sourceNodeId = sourceNodeId;
+  }
+  if (targetNodeId !== undefined) {
+    input.targetNodeId = targetNodeId;
   }
   if (label !== undefined) {
     input.label = label;

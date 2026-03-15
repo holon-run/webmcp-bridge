@@ -6,6 +6,7 @@
 import { vi } from "vitest";
 import { createDemoDocument } from "../src/model.js";
 import { BoardSceneState } from "../src/scene-state.js";
+import type { BoardSceneSnapshot } from "../src/types.js";
 
 type MemoryStorage = {
   getItem: (key: string) => string | null;
@@ -52,5 +53,27 @@ describe("board scene state", () => {
     expect(state.getSnapshot().elements.length).toBeGreaterThan(0);
     expect(storage.getItem("webmcp-bridge.board.scene")).toContain("elements");
     expect(storage.getItem("webmcp-bridge.board.document")).toBeNull();
+  });
+
+  it("accepts canvas edits after pending external sync expires", async () => {
+    vi.useFakeTimers();
+    const state = await BoardSceneState.load();
+    const externalSnapshot = {
+      ...state.getSnapshot(),
+      elements: [{ id: "external-node" }],
+    } as BoardSceneSnapshot;
+    const canvasSnapshot = {
+      ...externalSnapshot,
+      elements: [{ id: "dragged-node" }],
+    } as BoardSceneSnapshot;
+
+    expect(state.setSnapshot(externalSnapshot, "external")).toBe(true);
+    expect(state.setSnapshot(canvasSnapshot, "canvas")).toBe(false);
+
+    vi.advanceTimersByTime(1_001);
+
+    expect(state.setSnapshot(canvasSnapshot, "canvas")).toBe(true);
+    expect(state.getSnapshot().elements).toEqual([{ id: "dragged-node" }]);
+    vi.useRealTimers();
   });
 });

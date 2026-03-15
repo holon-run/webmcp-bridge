@@ -76,8 +76,8 @@ export type LayoutScope = "all" | "selection";
 
 export type UpsertNodeInput = {
   id?: string;
-  label: string;
-  kind: NodeKind;
+  label?: string;
+  kind?: NodeKind;
   description?: string;
   x?: number;
   y?: number;
@@ -85,8 +85,8 @@ export type UpsertNodeInput = {
 
 export type UpsertEdgeInput = {
   id?: string;
-  sourceNodeId: string;
-  targetNodeId: string;
+  sourceNodeId?: string;
+  targetNodeId?: string;
   label?: string;
   protocol?: string;
 };

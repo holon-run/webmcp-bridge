@@ -8,6 +8,7 @@ import type { BoardSceneSnapshot } from "./types.js";
 
 const SCENE_STORAGE_KEY = "webmcp-bridge.board.scene";
 const LEGACY_DOCUMENT_STORAGE_KEY = "webmcp-bridge.board.document";
+const PENDING_CANVAS_SYNC_TTL_MS = 1_000;
 
 type Listener = () => void;
 type SnapshotSource = "external" | "canvas";
@@ -50,6 +51,7 @@ export class BoardSceneState {
   private selectedElementIds = new Set<string>();
   private listeners = new Set<Listener>();
   private pendingCanvasSnapshotJson: string | undefined;
+  private pendingCanvasSnapshotSetAt: number | undefined;
 
   private constructor(snapshot: BoardSceneSnapshot) {
     this.snapshot = snapshot;
@@ -105,14 +107,21 @@ export class BoardSceneState {
 
   setSnapshot(snapshot: BoardSceneSnapshot, source: SnapshotSource = "external"): boolean {
     const serializedSnapshot = JSON.stringify(snapshot);
-    if (source === "canvas" && this.pendingCanvasSnapshotJson && serializedSnapshot !== this.pendingCanvasSnapshotJson) {
-      return false;
-    }
-    if (source === "canvas" && this.pendingCanvasSnapshotJson === serializedSnapshot) {
-      this.pendingCanvasSnapshotJson = undefined;
+    if (source === "canvas" && this.pendingCanvasSnapshotJson) {
+      const pendingAge = this.pendingCanvasSnapshotSetAt === undefined ? 0 : Date.now() - this.pendingCanvasSnapshotSetAt;
+      if (serializedSnapshot === this.pendingCanvasSnapshotJson) {
+        this.pendingCanvasSnapshotJson = undefined;
+        this.pendingCanvasSnapshotSetAt = undefined;
+      } else if (pendingAge < PENDING_CANVAS_SYNC_TTL_MS) {
+        return false;
+      } else {
+        this.pendingCanvasSnapshotJson = undefined;
+        this.pendingCanvasSnapshotSetAt = undefined;
+      }
     }
     if (source === "external") {
       this.pendingCanvasSnapshotJson = serializedSnapshot;
+      this.pendingCanvasSnapshotSetAt = Date.now();
     }
     if (snapshotsEqual(this.snapshot, snapshot)) {
       return true;

@@ -33,4 +33,32 @@ describe("board model", () => {
     expect(laidOut.nodes.map((node) => node.x)).toContain(80);
     expect(laidOut.nodes.every((node) => Number.isFinite(node.y))).toBe(true);
   });
+
+  it("supports partial patch updates for existing nodes and edges", () => {
+    const document = upsertEdges(
+      upsertNodes(createEmptyDocument(), [
+        { id: "a", label: "Gateway", kind: "service", x: 10, y: 20 },
+        { id: "b", label: "DB", kind: "database", x: 20, y: 40 },
+      ]),
+      [{ id: "edge1", sourceNodeId: "a", targetNodeId: "b", protocol: "sql" }],
+    );
+
+    const patchedNodes = upsertNodes(document, [{ id: "a", x: 120, y: 180 }]);
+    expect(patchedNodes.nodes.find((node) => node.id === "a")).toMatchObject({
+      id: "a",
+      label: "Gateway",
+      kind: "service",
+      x: 120,
+      y: 180,
+    });
+
+    const patchedEdges = upsertEdges(patchedNodes, [{ id: "edge1", label: "primary path" }]);
+    expect(patchedEdges.edges.find((edge) => edge.id === "edge1")).toMatchObject({
+      id: "edge1",
+      sourceNodeId: "a",
+      targetNodeId: "b",
+      label: "primary path",
+      protocol: "sql",
+    });
+  });
 });

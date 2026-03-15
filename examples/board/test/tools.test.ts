@@ -263,6 +263,47 @@ describe("board tools", () => {
     });
   });
 
+  it("supports partial node and edge updates through upsert tools", async () => {
+    vi.doMock("@excalidraw/excalidraw", () => ({
+      convertToExcalidrawElements: (elements: unknown[]) => elements,
+    }));
+    const modelContext = ensureModelContext(globalThis);
+    const sceneState = await BoardSceneState.load();
+
+    await registerBoardTools(modelContext, sceneState, () => undefined);
+    await modelContext.callTool("nodes.upsert", {
+      nodes: [{ id: "orders", x: 920, y: 120 }],
+    });
+    await modelContext.callTool("edges.upsert", {
+      edges: [{ id: "e-orders", label: "critical path" }],
+    });
+    const nodes = await modelContext.callTool("nodes.list", {});
+    const edges = await modelContext.callTool("edges.list", {});
+
+    expect(nodes).toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          id: "orders",
+          kind: "service",
+          x: 920,
+          y: 120,
+        }),
+      ]),
+    });
+    expect(edges).toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          id: "e-orders",
+          sourceNodeId: "gateway",
+          targetNodeId: "orders",
+          label: "critical path",
+          protocol: "grpc",
+        }),
+      ]),
+    });
+    expect(sceneState.getSnapshot().elements.length).toBeGreaterThan(0);
+  });
+
   it("patches edge style and canvas style", async () => {
     vi.doMock("@excalidraw/excalidraw", () => ({
       convertToExcalidrawElements: (elements: unknown[]) => elements,
