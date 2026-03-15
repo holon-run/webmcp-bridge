@@ -22,6 +22,37 @@ import { BoardSceneState } from "./scene-state.js";
 import { registerBoardTools } from "./tools.js";
 
 const Excalidraw = (ExcalidrawLib as unknown as { Excalidraw: React.ComponentType<Record<string, unknown>> }).Excalidraw;
+const MainMenu = (ExcalidrawLib as unknown as {
+  MainMenu?: React.ComponentType<{ children?: React.ReactNode }> & {
+    Item: React.ComponentType<{
+      children?: React.ReactNode;
+      icon?: React.ReactElement;
+      onSelect?: () => void;
+    }>;
+    ItemLink: React.ComponentType<{
+      children?: React.ReactNode;
+      icon?: React.ReactElement;
+      href: string;
+      target?: string;
+      rel?: string;
+    }>;
+    Group: React.ComponentType<{
+      children?: React.ReactNode;
+      title?: string;
+    }>;
+    Separator: React.ComponentType<Record<string, never>>;
+    DefaultItems: {
+      LoadScene: React.ComponentType<Record<string, never>>;
+      Export: React.ComponentType<Record<string, never>>;
+      SaveAsImage: React.ComponentType<Record<string, never>>;
+      CommandPalette: React.ComponentType<Record<string, never>>;
+      SearchMenu: React.ComponentType<Record<string, never>>;
+      ClearCanvas: React.ComponentType<Record<string, never>>;
+      ToggleTheme: React.ComponentType<Record<string, never>>;
+      Help: React.ComponentType<Record<string, never>>;
+    };
+  };
+}).MainMenu;
 const CaptureUpdateAction = (
   ExcalidrawLib as unknown as {
     CaptureUpdateAction?: {
@@ -29,6 +60,21 @@ const CaptureUpdateAction = (
     };
   }
 ).CaptureUpdateAction;
+
+function menuIcon(path: string): React.ReactElement {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d={path} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+const panelIcon = menuIcon("M4 5h16M4 12h10M4 19h16");
+const demoIcon = menuIcon("M5 19V5l14 7-14 7Z");
+const clearIcon = menuIcon("M4 7h16M9 7V5h6v2M8 7l1 12h6l1-12");
+const deleteIcon = menuIcon("M4 7h16M9 7V5h6v2M8 7l1 12h6l1-12");
+const fitIcon = menuIcon("M8 4H4v4M16 4h4v4M8 20H4v-4M20 20h-4v-4");
+const repoIcon = menuIcon("M9 19c-4 1.5-4-2.5-6-3m12 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 19.5 4.77 5.07 5.07 0 0 0 19.41 1S18.23.65 15.5 2.48a13.38 13.38 0 0 0-7 0C5.77.65 4.59 1 4.59 1A5.07 5.07 0 0 0 4.5 4.77 5.44 5.44 0 0 0 3 8.52c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 8.5 18.13V22");
 
 type SceneApi = {
   updateScene: (scene: {
@@ -203,81 +249,18 @@ export function App(): React.ReactElement {
       <header style={styles.header}>
         <div>
           <p style={styles.eyebrow}>Excalidraw + WebMCP Demo</p>
-          <h1 style={styles.title}>{snapshot.title}</h1>
-          <p style={styles.subtitle}>Built on Excalidraw. Human tweaks the board in the browser while AI edits the same diagram through WebMCP tools.</p>
-          <div style={styles.infoCard}>
-            <p style={styles.infoTitle}>Collaborate with AI</p>
-            <p style={styles.infoText}>Open a visible bridge session with <code>board-webmcp-ui bridge.open</code>, then let your AI call <code>diagram.get</code>, <code>nodes.*</code>, <code>edges.*</code>, and <code>selection.*</code> against the same page.</p>
-            <div style={styles.infoLinks}>
-              <a href="https://github.com/holon-run/webmcp-bridge" target="_blank" rel="noreferrer" style={styles.infoLink}>
-                Repo
-              </a>
-              <a href="https://github.com/holon-run/webmcp-bridge/tree/main/examples/board" target="_blank" rel="noreferrer" style={styles.infoLink}>
-                Board README
-              </a>
-            </div>
-          </div>
+          <p style={styles.subtitle}>
+            Built on Excalidraw. Open a visible session with <code>board-webmcp-ui bridge.open</code>, then let the human and AI edit the same diagram through WebMCP tools.
+            {" "}
+            <a href="https://github.com/holon-run/webmcp-bridge/tree/main/examples/board" target="_blank" rel="noreferrer" style={styles.inlineLink}>
+              README
+            </a>
+          </p>
           <div style={styles.statusRow}>
             <span style={styles.statusLabel}>WebMCP</span>
             <span style={modelContextReady ? styles.goodStatusBadge : styles.badStatusBadge}>{statusMessage}</span>
             <span style={styles.statusHint}>{`webmcp-local-mcp --url ${bridgeTargetUrl}`}</span>
           </div>
-        </div>
-        <div style={styles.actions}>
-          <button
-            style={styles.secondaryButton}
-            onClick={() => {
-              setSidebarOpen((value) => !value);
-            }}
-          >
-            {sidebarOpen ? "Hide Panel" : "Show Panel"}
-          </button>
-          <button
-            style={styles.primaryButton}
-            onClick={() => {
-              void sceneState.resetToDemo().then(() => {
-                lastAppliedSnapshotRef.current = "";
-                setRenderTick((value) => value + 1);
-              });
-            }}
-          >
-            Load Demo
-          </button>
-          <button
-            style={styles.secondaryButton}
-            onClick={() => {
-              sceneState.clear();
-              lastAppliedSnapshotRef.current = "";
-              setRenderTick((value) => value + 1);
-            }}
-          >
-            Clear
-          </button>
-          <button
-            style={styles.secondaryButton}
-            onClick={() => {
-              void removeSelectionFromScene(sceneState.getSnapshot(), sceneState.getSelectedElementIds()).then((nextSnapshot) => {
-                sceneState.setSelectedElementIds([]);
-                sceneState.setSnapshot(nextSnapshot);
-              });
-            }}
-          >
-            Delete Selection
-          </button>
-          <button
-            style={styles.secondaryButton}
-            onClick={() => {
-              const elements = sceneApiRef.current?.getSceneElements?.() ?? snapshot.elements;
-              sceneApiRef.current?.scrollToContent?.(elements, {
-                fitToViewport: true,
-                viewportZoomFactor: 0.9,
-                animate: false,
-              });
-              sceneApiRef.current?.refresh?.();
-            }}
-          >
-            Fit View
-          </button>
         </div>
       </header>
       <main style={styles.main}>
@@ -311,7 +294,85 @@ export function App(): React.ReactElement {
                 appState: toExcalidrawAppState(snapshot.appState),
               }}
               theme="light"
-            />
+            >
+              {MainMenu ? (
+                <MainMenu>
+                  <MainMenu.DefaultItems.LoadScene />
+                  <MainMenu.DefaultItems.Export />
+                  <MainMenu.DefaultItems.SaveAsImage />
+                  <MainMenu.DefaultItems.CommandPalette />
+                  <MainMenu.DefaultItems.SearchMenu />
+                  <MainMenu.DefaultItems.ClearCanvas />
+                  <MainMenu.DefaultItems.ToggleTheme />
+                  <MainMenu.DefaultItems.Help />
+                  <MainMenu.Separator />
+                  <MainMenu.Group title="Board">
+                    <MainMenu.Item
+                      icon={panelIcon}
+                      onSelect={() => {
+                        setSidebarOpen((value) => !value);
+                      }}
+                    >
+                      {sidebarOpen ? "Hide Panel" : "Show Panel"}
+                    </MainMenu.Item>
+                    <MainMenu.Item
+                      icon={demoIcon}
+                      onSelect={() => {
+                        void sceneState.resetToDemo().then(() => {
+                          lastAppliedSnapshotRef.current = "";
+                          setRenderTick((value) => value + 1);
+                        });
+                      }}
+                    >
+                      Load Demo
+                    </MainMenu.Item>
+                    <MainMenu.Item
+                      icon={clearIcon}
+                      onSelect={() => {
+                        sceneState.clear();
+                        lastAppliedSnapshotRef.current = "";
+                        setRenderTick((value) => value + 1);
+                      }}
+                    >
+                      Clear
+                    </MainMenu.Item>
+                    <MainMenu.Item
+                      icon={deleteIcon}
+                      onSelect={() => {
+                        void removeSelectionFromScene(sceneState.getSnapshot(), sceneState.getSelectedElementIds()).then((nextSnapshot) => {
+                          sceneState.setSelectedElementIds([]);
+                          sceneState.setSnapshot(nextSnapshot);
+                        });
+                      }}
+                    >
+                      Delete Selection
+                    </MainMenu.Item>
+                    <MainMenu.Item
+                      icon={fitIcon}
+                      onSelect={() => {
+                        const elements = sceneApiRef.current?.getSceneElements?.() ?? snapshot.elements;
+                        sceneApiRef.current?.scrollToContent?.(elements, {
+                          fitToViewport: true,
+                          viewportZoomFactor: 0.9,
+                          animate: false,
+                        });
+                        sceneApiRef.current?.refresh?.();
+                      }}
+                    >
+                      Fit View
+                    </MainMenu.Item>
+                    <MainMenu.ItemLink
+                      icon={repoIcon}
+                      href="https://github.com/holon-run/webmcp-bridge"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open Repository
+                    </MainMenu.ItemLink>
+                  </MainMenu.Group>
+                </MainMenu>
+              ) : null}
+            </Excalidraw>
           </div>
         </section>
         <aside style={sidebarOpen ? styles.sidebar : styles.sidebarHidden}>
@@ -456,9 +517,9 @@ const styles: Record<string, React.CSSProperties> = {
   header: {
     display: "flex",
     justifyContent: "space-between",
-    gap: "24px",
+    gap: "16px",
     alignItems: "flex-start",
-    marginBottom: "24px",
+    marginBottom: "16px",
     flexWrap: "wrap",
   },
   eyebrow: {
@@ -469,45 +530,19 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#0f766e",
     fontWeight: 700,
   },
-  title: {
-    margin: "8px 0 12px",
-    fontSize: "40px",
-    lineHeight: 1.05,
-  },
   subtitle: {
-    margin: 0,
-    maxWidth: "720px",
-    color: "#334155",
-  },
-  infoCard: {
-    marginTop: "16px",
-    maxWidth: "760px",
-    borderRadius: "18px",
-    background: "rgba(255,255,255,0.72)",
-    border: "1px solid rgba(15, 23, 42, 0.08)",
-    padding: "14px 16px",
-    boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)",
-  },
-  infoTitle: {
-    margin: 0,
-    fontSize: "12px",
-    letterSpacing: "0.12em",
-    textTransform: "uppercase",
-    color: "#475569",
-    fontWeight: 700,
-  },
-  infoText: {
     margin: "8px 0 0",
+    maxWidth: "760px",
     color: "#334155",
+    fontSize: "15px",
     lineHeight: 1.5,
   },
-  infoLinks: {
-    display: "flex",
-    gap: "14px",
-    marginTop: "10px",
-    flexWrap: "wrap",
-  },
   infoLink: {
+    color: "#0f766e",
+    fontWeight: 700,
+    textDecoration: "none",
+  },
+  inlineLink: {
     color: "#0f766e",
     fontWeight: 700,
     textDecoration: "none",
@@ -524,29 +559,6 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     letterSpacing: "0.12em",
     color: "#64748b",
-    fontWeight: 700,
-  },
-  actions: {
-    display: "flex",
-    gap: "12px",
-    flexWrap: "wrap",
-  },
-  primaryButton: {
-    background: "#0f766e",
-    color: "#ffffff",
-    border: "none",
-    borderRadius: "999px",
-    padding: "12px 18px",
-    cursor: "pointer",
-    fontWeight: 700,
-  },
-  secondaryButton: {
-    background: "rgba(255,255,255,0.78)",
-    color: "#0f172a",
-    border: "1px solid rgba(15, 23, 42, 0.12)",
-    borderRadius: "999px",
-    padding: "12px 18px",
-    cursor: "pointer",
     fontWeight: 700,
   },
   main: {
@@ -575,7 +587,9 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "16px",
     width: "320px",
     minHeight: 0,
-    overflow: "auto",
+    overflowY: "auto",
+    overflowX: "hidden",
+    paddingRight: "4px",
   },
   sidebarHidden: {
     display: "none",
@@ -586,6 +600,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid rgba(15, 23, 42, 0.08)",
     padding: "18px",
     boxShadow: "0 16px 40px rgba(15, 23, 42, 0.08)",
+    flexShrink: 0,
   },
   cardEyebrow: {
     margin: 0,

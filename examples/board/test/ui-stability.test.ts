@@ -36,8 +36,7 @@ async function startExampleServer(): Promise<{ server: ViteDevServer; url: strin
 
 async function waitForBoardReady(page: Page): Promise<void> {
   await page.waitForFunction(() => {
-    const heading = document.querySelector("h1");
-    return typeof heading?.textContent === "string" && heading.textContent.includes("Board");
+    return typeof document.title === "string" && document.title.length > 0;
   });
   await page.waitForFunction(() => {
     const anyNavigator = navigator as Navigator & {
@@ -111,8 +110,8 @@ describe("board ui stability", () => {
       await waitForBoardReady(page!);
 
       const summaryText = await page!.locator("body").innerText();
-      expect(summaryText).toContain("Board");
-      expect(summaryText).toContain("Show Panel");
+      expect(summaryText).toContain("EXCALIDRAW + WEBMCP DEMO");
+      expect(summaryText).toContain("README");
       expect(pageErrors).toEqual([]);
     },
     TEST_TIMEOUT_MS,
