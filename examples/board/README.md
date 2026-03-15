@@ -54,6 +54,8 @@ If the user closes that window manually, run `board-webmcp-ui bridge.open` again
 
 This demo is meant to be edited by a human in the browser while an AI edits the same board through `local-mcp`.
 
+When the human and the AI are sharing the same visible board session, use `board-webmcp-ui` for all MCP calls in that session. Do not mix `board-webmcp-cli` into the same profile at the same time.
+
 Typical flow in Codex / Claude Code:
 
 1. Open a visible board session:
@@ -65,9 +67,9 @@ Typical flow in Codex / Claude Code:
 2. Read the current board state:
 
    ```bash
-   board-webmcp-cli diagram.get
-   board-webmcp-cli nodes.list
-   board-webmcp-cli edges.list
+   board-webmcp-ui diagram.get
+   board-webmcp-ui nodes.list
+   board-webmcp-ui edges.list
    ```
 
 3. Let the human select or move content in the page, then let the AI inspect or update it:
@@ -75,9 +77,9 @@ Typical flow in Codex / Claude Code:
    ```bash
    board-webmcp-ui selection.get
    board-webmcp-ui selection.remove
-   board-webmcp-cli nodes.upsert '{"nodes":[{"id":"idea","label":"New Idea","kind":"service","x":480,"y":220}]}'
-   board-webmcp-cli edges.upsert '{"edges":[{"id":"idea-link","sourceNodeId":"uxc","targetNodeId":"idea","label":"draft"}]}'
-   board-webmcp-cli layout.apply mode=layered
+   board-webmcp-ui nodes.upsert '{"nodes":[{"id":"idea","label":"New Idea","kind":"service","x":480,"y":220}]}'
+   board-webmcp-ui edges.upsert '{"edges":[{"id":"idea-link","sourceNodeId":"uxc","targetNodeId":"idea","label":"draft"}]}'
+   board-webmcp-ui layout.apply mode=layered
    ```
 
 4. When the user closes the visible window manually, reopen it:
