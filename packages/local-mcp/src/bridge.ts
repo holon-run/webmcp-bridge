@@ -148,6 +148,15 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
   const runtime = await resolveRuntime(options);
 
   let server: LocalMcpStdioServer | undefined;
+  let closed = false;
+  const closeResources = async (): Promise<void> => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    await server?.close();
+    await runtime.close();
+  };
   try {
     const serverOptions: LocalMcpStdioServerOptions = {
       gateway: runtime.gateway,
@@ -160,8 +169,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         }),
         openWindow: runtime.openWindow,
         closeBridge: async () => {
-          await server?.close();
-          await runtime.close();
+          await closeResources();
         },
       },
       serviceVersion: options.serviceVersion,
@@ -183,19 +191,20 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     throw error;
   }
 
-  let closed = false;
+  const input = options.input ?? process.stdin;
+  const handleInputEnded = (): void => {
+    void closeResources().catch(options.onError);
+  };
+  input.once("end", handleInputEnded);
+
   return {
     site: runtime.site,
     targetUrl: runtime.targetUrl,
     mode: runtime.mode,
     headless: runtime.headless,
     close: async (): Promise<void> => {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      await server?.close();
-      await runtime.close();
+      input.removeListener("end", handleInputEnded);
+      await closeResources();
     },
   };
 }

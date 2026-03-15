@@ -4,7 +4,13 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { isUrlAllowed, mapNavigationError, resolveTargetUrl, startLocalMcpRuntime } from "../src/runtime.js";
+import {
+  isRecoverableGatewayError,
+  isUrlAllowed,
+  mapNavigationError,
+  resolveTargetUrl,
+  startLocalMcpRuntime,
+} from "../src/runtime.js";
 
 describe("resolveTargetUrl", () => {
   it("prefers explicit override", () => {
@@ -67,6 +73,16 @@ describe("mapNavigationError", () => {
     );
 
     expect(error.message).toContain("NAVIGATION_TIMEOUT");
+  });
+});
+
+describe("isRecoverableGatewayError", () => {
+  it("accepts execution-context teardown errors", () => {
+    expect(isRecoverableGatewayError(new Error("Execution context was destroyed, most likely because of a navigation."))).toBe(true);
+  });
+
+  it("rejects unrelated gateway failures", () => {
+    expect(isRecoverableGatewayError(new Error("AUTH_REQUIRED: login required"))).toBe(false);
   });
 });
 
