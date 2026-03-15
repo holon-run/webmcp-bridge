@@ -140,6 +140,16 @@ The bridge is native-first:
 
 Both paths return standard JSON-serializable MCP payloads to the local caller.
 
+## Collaborative board demo
+
+The public demo at `https://board.holon.run` is the easiest way to see human + AI collaboration on the same WebMCP surface.
+
+- open a visible session with `board-webmcp-ui bridge.open`
+- read or edit the same board through `board-webmcp-cli` / `board-webmcp-ui`
+- keep the browser open while the human and the AI work on the same diagram
+
+See [examples/board/README.md](examples/board/README.md) for the full collaboration flow in Codex / Claude Code.
+
 ## Package status
 
 - `@webmcp-bridge/core`: shared bridge contracts and shim runtime.

@@ -205,6 +205,18 @@ export function App(): React.ReactElement {
           <p style={styles.eyebrow}>Excalidraw + WebMCP Demo</p>
           <h1 style={styles.title}>{snapshot.title}</h1>
           <p style={styles.subtitle}>Built on Excalidraw. Human tweaks the board in the browser while AI edits the same diagram through WebMCP tools.</p>
+          <div style={styles.infoCard}>
+            <p style={styles.infoTitle}>Collaborate with AI</p>
+            <p style={styles.infoText}>Open a visible bridge session with <code>board-webmcp-ui bridge.open</code>, then let your AI call <code>diagram.get</code>, <code>nodes.*</code>, <code>edges.*</code>, and <code>selection.*</code> against the same page.</p>
+            <div style={styles.infoLinks}>
+              <a href="https://github.com/holon-run/webmcp-bridge" target="_blank" rel="noreferrer" style={styles.infoLink}>
+                Repo
+              </a>
+              <a href="https://github.com/holon-run/webmcp-bridge/tree/main/examples/board" target="_blank" rel="noreferrer" style={styles.infoLink}>
+                Board README
+              </a>
+            </div>
+          </div>
           <div style={styles.statusRow}>
             <span style={styles.statusLabel}>WebMCP</span>
             <span style={modelContextReady ? styles.goodStatusBadge : styles.badStatusBadge}>{statusMessage}</span>
@@ -466,6 +478,39 @@ const styles: Record<string, React.CSSProperties> = {
     margin: 0,
     maxWidth: "720px",
     color: "#334155",
+  },
+  infoCard: {
+    marginTop: "16px",
+    maxWidth: "760px",
+    borderRadius: "18px",
+    background: "rgba(255,255,255,0.72)",
+    border: "1px solid rgba(15, 23, 42, 0.08)",
+    padding: "14px 16px",
+    boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)",
+  },
+  infoTitle: {
+    margin: 0,
+    fontSize: "12px",
+    letterSpacing: "0.12em",
+    textTransform: "uppercase",
+    color: "#475569",
+    fontWeight: 700,
+  },
+  infoText: {
+    margin: "8px 0 0",
+    color: "#334155",
+    lineHeight: 1.5,
+  },
+  infoLinks: {
+    display: "flex",
+    gap: "14px",
+    marginTop: "10px",
+    flexWrap: "wrap",
+  },
+  infoLink: {
+    color: "#0f766e",
+    fontWeight: 700,
+    textDecoration: "none",
   },
   statusRow: {
     display: "flex",

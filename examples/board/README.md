@@ -50,6 +50,52 @@ board-webmcp-ui bridge.open
 
 If the user closes that window manually, run `board-webmcp-ui bridge.open` again to reopen the page in the same headed session.
 
+## Collaborate With AI
+
+This demo is meant to be edited by a human in the browser while an AI edits the same board through `local-mcp`.
+
+Typical flow in Codex / Claude Code:
+
+1. Open a visible board session:
+
+   ```bash
+   board-webmcp-ui bridge.open
+   ```
+
+2. Read the current board state:
+
+   ```bash
+   board-webmcp-cli diagram.get
+   board-webmcp-cli nodes.list
+   board-webmcp-cli edges.list
+   ```
+
+3. Let the human select or move content in the page, then let the AI inspect or update it:
+
+   ```bash
+   board-webmcp-ui selection.get
+   board-webmcp-ui selection.remove
+   board-webmcp-cli nodes.upsert '{"nodes":[{"id":"idea","label":"New Idea","kind":"service","x":480,"y":220}]}'
+   board-webmcp-cli edges.upsert '{"edges":[{"id":"idea-link","sourceNodeId":"uxc","targetNodeId":"idea","label":"draft"}]}'
+   board-webmcp-cli layout.apply mode=layered
+   ```
+
+4. When the user closes the visible window manually, reopen it:
+
+   ```bash
+   board-webmcp-ui bridge.open
+   ```
+
+Useful collaboration tools:
+
+- `bridge.open` / `bridge.close`
+- `diagram.get` / `diagram.loadDemo` / `diagram.setTitle`
+- `selection.get` / `selection.remove`
+- `nodes.*`
+- `edges.*`
+- `layout.apply`
+- `view.fit`
+
 ## WebMCP Tools
 
 - `nodes.list`
