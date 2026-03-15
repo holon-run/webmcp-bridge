@@ -164,10 +164,10 @@ See [examples/board/README.md](examples/board/README.md) for the full collaborat
 If you use Codex, install the `uxc` skill first, then install the bridge skills from this repository:
 
 ```bash
-npx -y skills@latest add holon-run/uxc
-npx -y skills@latest add holon-run/webmcp-bridge/webmcp-bridge
-npx -y skills@latest add holon-run/webmcp-bridge/board-webmcp
-npx -y skills@latest add holon-run/webmcp-bridge/webmcp-adapter-creator
+npx -y skills@latest add https://github.com/holon-run/uxc/tree/main/skills/uxc
+npx -y skills@latest add https://github.com/holon-run/webmcp-bridge/tree/main/skills/webmcp-bridge
+npx -y skills@latest add https://github.com/holon-run/webmcp-bridge/tree/main/skills/board-webmcp
+npx -y skills@latest add https://github.com/holon-run/webmcp-bridge/tree/main/skills/webmcp-adapter-creator
 ```
 
 The bridge skills depend on `uxc` because they create and use stable `uxc link` commands such as:

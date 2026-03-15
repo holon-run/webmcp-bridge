@@ -4,6 +4,23 @@ Native WebMCP example app for `webmcp-bridge`.
 
 This example is not an adapter. It is a browser app that exposes `navigator.modelContext` directly and lets a human and an AI edit the same diagram together.
 
+## Codex Skills
+
+If you use Codex, install the required skills first:
+
+```bash
+npx -y skills@latest add https://github.com/holon-run/uxc/tree/main/skills/uxc
+npx -y skills@latest add https://github.com/holon-run/webmcp-bridge/tree/main/skills/board-webmcp
+```
+
+Recommended:
+
+```bash
+npx -y skills@latest add https://github.com/holon-run/webmcp-bridge/tree/main/skills/webmcp-bridge
+```
+
+`board-webmcp` depends on `uxc` because it creates and uses stable `uxc link` commands such as `board-webmcp-cli` and `board-webmcp-ui`.
+
 ## Run
 
 ```bash
