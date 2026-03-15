@@ -1,0 +1,63 @@
+{
+  "name": "holon-run/webmcp-bridge",
+  "description": "Bridge local MCP clients to browser WebMCP tools through Playwright, using native WebMCP when available and injected adapters when not.",
+  "accepts": [
+    {
+      "network": "eip155:8453",
+      "asset": "USDC",
+      "address": "YOUR_WALLET_ADDRESS"
+    }
+  ],
+  "resources": [
+    {
+      "path": "/bridge.open",
+      "price": "0.01",
+      "description": "Pay-per-call access to bridge.open"
+    },
+    {
+      "path": "/bridge.close",
+      "price": "0.01",
+      "description": "Pay-per-call access to bridge.close"
+    },
+    {
+      "path": "/diagram.get",
+      "price": "0.01",
+      "description": "Pay-per-call access to diagram.get"
+    },
+    {
+      "path": "/diagram.loadDemo",
+      "price": "0.01",
+      "description": "Pay-per-call access to diagram.loadDemo"
+    },
+    {
+      "path": "/diagram.setTitle",
+      "price": "0.01",
+      "description": "Pay-per-call access to diagram.setTitle"
+    },
+    {
+      "path": "/diagram.export",
+      "price": "0.01",
+      "description": "Pay-per-call access to diagram.export"
+    },
+    {
+      "path": "/nodes.*",
+      "price": "0.01",
+      "description": "Pay-per-call access to nodes.*"
+    },
+    {
+      "path": "/edges.*",
+      "price": "0.01",
+      "description": "Pay-per-call access to edges.*"
+    },
+    {
+      "path": "/selection.get",
+      "price": "0.01",
+      "description": "Pay-per-call access to selection.get"
+    },
+    {
+      "path": "/selection.remove",
+      "price": "0.01",
+      "description": "Pay-per-call access to selection.remove"
+    }
+  ]
+}
