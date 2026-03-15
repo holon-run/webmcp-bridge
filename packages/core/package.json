@@ -2,6 +2,7 @@
   "name": "@webmcp-bridge/core",
   "version": "0.4.2",
   "type": "module",
+  "description": "Shared WebMCP bridge contracts and shim runtime primitives for webmcp-bridge packages.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -12,6 +13,23 @@
   },
   "files": [
     "dist"
+  ],
+  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/core",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holon-run/webmcp-bridge.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/holon-run/webmcp-bridge/issues"
+  },
+  "keywords": [
+    "webmcp",
+    "mcp",
+    "model-context-protocol",
+    "browser",
+    "shim",
+    "contracts"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

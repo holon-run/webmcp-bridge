@@ -2,6 +2,7 @@
   "name": "@webmcp-bridge/testkit",
   "version": "0.4.2",
   "type": "module",
+  "description": "Shared contract test helpers for webmcp-bridge packages and adapters.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -12,6 +13,22 @@
   },
   "files": [
     "dist"
+  ],
+  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/testkit",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holon-run/webmcp-bridge.git",
+    "directory": "packages/testkit"
+  },
+  "bugs": {
+    "url": "https://github.com/holon-run/webmcp-bridge/issues"
+  },
+  "keywords": [
+    "webmcp",
+    "mcp",
+    "testing",
+    "contracts",
+    "vitest"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

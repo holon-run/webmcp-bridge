@@ -2,6 +2,7 @@
   "name": "@webmcp-bridge/playwright",
   "version": "0.4.2",
   "type": "module",
+  "description": "Playwright page gateway that uses native WebMCP when available and falls back to injected adapters.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -12,6 +13,23 @@
   },
   "files": [
     "dist"
+  ],
+  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/playwright",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holon-run/webmcp-bridge.git",
+    "directory": "packages/playwright"
+  },
+  "bugs": {
+    "url": "https://github.com/holon-run/webmcp-bridge/issues"
+  },
+  "keywords": [
+    "webmcp",
+    "mcp",
+    "playwright",
+    "browser",
+    "navigator.modelContext",
+    "automation"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

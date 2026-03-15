@@ -2,8 +2,26 @@
   "name": "webmcp-bridge-monorepo",
   "private": true,
   "version": "0.1.0",
+  "description": "Monorepo for bridging local MCP clients to browser WebMCP through Playwright, adapters, and native example apps.",
   "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/holon-run/webmcp-bridge#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holon-run/webmcp-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/holon-run/webmcp-bridge/issues"
+  },
+  "keywords": [
+    "webmcp",
+    "mcp",
+    "model-context-protocol",
+    "playwright",
+    "browser-tools",
+    "browser-automation",
+    "ai-agent"
+  ],
   "packageManager": "pnpm@10.6.5",
   "scripts": {
     "build": "pnpm -r --filter \"@webmcp-bridge/*\" run build && pnpm -r --filter \"@webmcp-bridge/example-*\" run build",

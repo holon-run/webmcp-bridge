@@ -5,7 +5,7 @@
 Primary runtime path:
 `local-mcp (stdio MCP) -> playwright -> browser navigator.modelContext`
 
-The bridge is native-first:
+The bridge uses native WebMCP when available, and falls back to injected adapters when not:
 
 - if the page exposes native WebMCP, calls go to browser `navigator.modelContext`
 - if the page does not, the bridge falls back to an injected adapter path
@@ -133,7 +133,7 @@ webmcp-local-mcp --adapter-module @your-scope/webmcp-adapter --headless
 
 `webmcp-local-mcp` owns one site session per process, drives a Playwright page, and proxies `tools/list` / `tools/call` into browser-side WebMCP execution.
 
-The bridge is native-first:
+The bridge uses native WebMCP when available, and falls back to injected adapters when not:
 
 - native sites execute through browser `navigator.modelContext`
 - non-native sites execute through injected WebMCP shim paths

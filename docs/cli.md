@@ -32,7 +32,7 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 
 ## Behavior
 
-- Native-first: if page has native `navigator.modelContext`, calls route to native WebMCP.
+- If the page exposes native `navigator.modelContext`, calls route to native WebMCP; otherwise the bridge falls back to injected adapters.
 - Polyfill mode: if native is unavailable, local-mcp injects `navigator.modelContext` compatibility APIs in-page.
 - Adapter-shim mode: when adapter source is configured and native is unavailable, fallback adapter logic handles tools.
 - URL selection is `--url` first, otherwise adapter `manifest.defaultUrl`; startup fails closed if target host is outside adapter `hostPatterns`.

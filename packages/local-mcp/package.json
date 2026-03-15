@@ -2,6 +2,7 @@
   "name": "@webmcp-bridge/local-mcp",
   "version": "0.4.2",
   "type": "module",
+  "description": "Local stdio MCP server that bridges local agents to browser WebMCP through Playwright.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -19,6 +20,24 @@
   },
   "files": [
     "dist"
+  ],
+  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/local-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holon-run/webmcp-bridge.git",
+    "directory": "packages/local-mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/holon-run/webmcp-bridge/issues"
+  },
+  "keywords": [
+    "webmcp",
+    "mcp",
+    "model-context-protocol",
+    "playwright",
+    "stdio",
+    "browser",
+    "ai-agent"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
