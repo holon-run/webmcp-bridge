@@ -5,11 +5,17 @@
 
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainModule, parseCliArgs } from "../src/cli.js";
 import { resolveSiteDefinition } from "../src/sites.js";
+
+const packageJsonPath = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+const packageVersion = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+  version: string;
+};
 
 describe("parseCliArgs", () => {
   it("parses built-in site with optional flags", () => {
@@ -50,7 +56,7 @@ describe("parseCliArgs", () => {
 
   it("defaults serviceVersion to the package version", () => {
     const parsed = parseCliArgs(["--url", "https://board.holon.run"]);
-    expect(parsed.serviceVersion).toBe("0.4.0");
+    expect(parsed.serviceVersion).toBe(packageVersion.version);
   });
 
   it("throws on missing required source and url", () => {

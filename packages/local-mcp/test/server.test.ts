@@ -176,7 +176,8 @@ describe("createLocalMcpStdioServer", () => {
     bridgeControl.openWindow.mockResolvedValueOnce("opened");
 
     const response = await request({
-      jsonrpc: "2bb",
+      jsonrpc: "2.0",
+      id: "2bb",
       method: "tools/call",
       params: {
         name: "bridge.open",
@@ -210,15 +211,15 @@ describe("createLocalMcpStdioServer", () => {
     });
 
     expect("result" in response ? response.result : undefined).toMatchObject({
-      content: [],
       structuredContent: {
         ok: false,
         error: {
           code: "UNSUPPORTED_IN_HEADLESS_SESSION",
         },
       },
-      isError: true,
     });
+    expect("result" in response ? response.result?.content : undefined).toEqual([]);
+    expect("result" in response ? response.result?.isError : undefined).toBe(true);
   });
 
   it("handles bridge.close locally and closes asynchronously", async () => {
