@@ -50,12 +50,35 @@ describe("startLocalMcpBridge", () => {
     });
 
     input.emit("end");
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await vi.waitFor(() => {
+      expect(serverHandle.close).toHaveBeenCalledOnce();
+      expect(runtimeHandle.close).toHaveBeenCalledOnce();
+    });
 
     expect(serverHandle.start).toHaveBeenCalledOnce();
-    expect(serverHandle.close).toHaveBeenCalledOnce();
-    expect(runtimeHandle.close).toHaveBeenCalledOnce();
 
     await handle.close();
+  });
+
+  it("still closes the runtime when server cleanup fails", async () => {
+    serverHandle.close.mockImplementationOnce(async () => {
+      throw new Error("server close failed");
+    });
+    const onError = vi.fn();
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    const input = new PassThrough();
+
+    await startLocalMcpBridge({
+      url: "http://127.0.0.1:4173",
+      serviceVersion: "0.1.0-test",
+      input,
+      onError,
+    });
+
+    input.emit("end");
+    await vi.waitFor(() => {
+      expect(runtimeHandle.close).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
   });
 });

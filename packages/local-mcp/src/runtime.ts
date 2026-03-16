@@ -19,6 +19,7 @@ import {
   webkit,
   type BrowserContext,
   type BrowserType,
+  type Frame,
   type Page,
 } from "playwright";
 import type { LocalMcpGateway } from "./server.js";
@@ -110,6 +111,17 @@ export function resolveTargetUrl(urlOverride: string | undefined, defaultUrl: st
     throw new Error("CONFIG_ERROR: no target url provided (missing --url and manifest.defaultUrl)");
   }
   return targetUrl;
+}
+
+export function resolveRecoveryNavigationUrl(
+  currentUrl: string | undefined,
+  targetUrl: string,
+  hostPatterns: string[],
+): string | undefined {
+  if (!currentUrl || !currentUrl.trim()) {
+    return targetUrl;
+  }
+  return isUrlAllowed(currentUrl, hostPatterns) ? undefined : targetUrl;
 }
 
 function resolveBrowserType(browser: BrowserEngine): BrowserType {
@@ -233,13 +245,21 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     const markGatewayStale = (): void => {
       gatewayStale = true;
     };
-    pageForEvents.on("framenavigated", markGatewayStale);
+    const handleFrameNavigation = (frame: Frame): void => {
+      if (frame === pageForEvents.mainFrame()) {
+        markGatewayStale();
+      }
+    };
+    pageForEvents.on("framenavigated", handleFrameNavigation);
     pageForEvents.on("close", markGatewayStale);
     pageLifecycleCleanup = (): void => {
       const pageEvents = pageForEvents as unknown as {
-        removeListener?: (event: string, listener: () => void) => unknown;
+        removeListener?: {
+          (event: "framenavigated", listener: (frame: Frame) => void): unknown;
+          (event: "close", listener: () => void): unknown;
+        };
       };
-      pageEvents.removeListener?.("framenavigated", markGatewayStale);
+      pageEvents.removeListener?.("framenavigated", handleFrameNavigation);
       pageEvents.removeListener?.("close", markGatewayStale);
     };
     if (navigate) {
@@ -277,6 +297,21 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     if (!currentPage || currentPage.isClosed()) {
       await initializePageSession(true);
       return;
+    }
+    const recoveryNavigationUrl = resolveRecoveryNavigationUrl(
+      currentPage.url(),
+      targetUrl,
+      site.manifest.hostPatterns,
+    );
+    if (recoveryNavigationUrl) {
+      try {
+        await currentPage.goto(recoveryNavigationUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: NAVIGATION_TIMEOUT_MS,
+        });
+      } catch (error) {
+        throw mapNavigationError(error, recoveryNavigationUrl, "goto");
+      }
     }
     await initializePageSession(false);
   };

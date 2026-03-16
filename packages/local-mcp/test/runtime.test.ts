@@ -8,6 +8,7 @@ import {
   isRecoverableGatewayError,
   isUrlAllowed,
   mapNavigationError,
+  resolveRecoveryNavigationUrl,
   resolveTargetUrl,
   startLocalMcpRuntime,
 } from "../src/runtime.js";
@@ -83,6 +84,24 @@ describe("isRecoverableGatewayError", () => {
 
   it("rejects unrelated gateway failures", () => {
     expect(isRecoverableGatewayError(new Error("AUTH_REQUIRED: login required"))).toBe(false);
+  });
+});
+
+describe("resolveRecoveryNavigationUrl", () => {
+  it("reuses the current page when the host remains allowed", () => {
+    expect(
+      resolveRecoveryNavigationUrl("https://board.mix.space/session/123", "https://board.mix.space", [
+        "board.mix.space",
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("navigates back to targetUrl when the current page is disallowed", () => {
+    expect(
+      resolveRecoveryNavigationUrl("https://example.com/other", "https://board.mix.space", [
+        "board.mix.space",
+      ]),
+    ).toBe("https://board.mix.space");
   });
 });
 

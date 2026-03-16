@@ -154,8 +154,11 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       return;
     }
     closed = true;
-    await server?.close();
-    await runtime.close();
+    const results = await Promise.allSettled([server?.close(), runtime.close()]);
+    const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (firstFailure) {
+      throw firstFailure.reason;
+    }
   };
   try {
     const serverOptions: LocalMcpStdioServerOptions = {
@@ -193,7 +196,9 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
 
   const input = options.input ?? process.stdin;
   const handleInputEnded = (): void => {
-    void closeResources().catch(options.onError);
+    void closeResources().catch((error) => {
+      options.onError?.(error);
+    });
   };
   input.once("end", handleInputEnded);
 
