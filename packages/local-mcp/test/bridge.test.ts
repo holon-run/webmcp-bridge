@@ -6,6 +6,13 @@
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+let resolveOwnerSessionEnded = (): void => {};
+function resetOwnerSessionEnded(): void {
+  runtimeHandle.ownerSessionEnded = new Promise<void>((resolve) => {
+    resolveOwnerSessionEnded = resolve;
+  });
+}
+
 const runtimeHandle = {
   site: "board",
   targetUrl: "http://127.0.0.1:4173",
@@ -16,6 +23,7 @@ const runtimeHandle = {
     callTool: vi.fn(async () => ({ ok: true })),
   },
   openWindow: vi.fn(async () => "focused" as const),
+  ownerSessionEnded: Promise.resolve(),
   close: vi.fn(async () => {}),
 };
 
@@ -33,7 +41,10 @@ vi.mock("../src/server.js", () => ({
 }));
 
 describe("startLocalMcpBridge", () => {
+  resetOwnerSessionEnded();
+
   afterEach(() => {
+    resetOwnerSessionEnded();
     runtimeHandle.close.mockClear();
     serverHandle.start.mockClear();
     serverHandle.close.mockClear();
@@ -79,6 +90,23 @@ describe("startLocalMcpBridge", () => {
     await vi.waitFor(() => {
       expect(runtimeHandle.close).toHaveBeenCalledOnce();
       expect(onError).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("closes resources when the runtime reports the owner window ended", async () => {
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    const input = new PassThrough();
+
+    await startLocalMcpBridge({
+      url: "http://127.0.0.1:4173",
+      serviceVersion: "0.1.0-test",
+      input,
+    });
+
+    resolveOwnerSessionEnded();
+    await vi.waitFor(() => {
+      expect(serverHandle.close).toHaveBeenCalledOnce();
+      expect(runtimeHandle.close).toHaveBeenCalledOnce();
     });
   });
 });

@@ -10,6 +10,7 @@ import {
   mapNavigationError,
   resolveRecoveryNavigationUrl,
   resolveTargetUrl,
+  shouldEndOwnerSessionAfterPageClose,
   startLocalMcpRuntime,
 } from "../src/runtime.js";
 
@@ -102,6 +103,20 @@ describe("resolveRecoveryNavigationUrl", () => {
         "board.mix.space",
       ]),
     ).toBe("https://board.mix.space");
+  });
+});
+
+describe("shouldEndOwnerSessionAfterPageClose", () => {
+  it("ends a headed owner session after the last page closes", () => {
+    expect(shouldEndOwnerSessionAfterPageClose(false, 0)).toBe(true);
+  });
+
+  it("keeps a headed owner session alive while another page is open", () => {
+    expect(shouldEndOwnerSessionAfterPageClose(false, 1)).toBe(false);
+  });
+
+  it("does not end a headless session from page-close semantics", () => {
+    expect(shouldEndOwnerSessionAfterPageClose(true, 0)).toBe(false);
   });
 });
 
