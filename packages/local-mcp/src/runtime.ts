@@ -62,6 +62,7 @@ export type LocalMcpRuntime = {
   headless: boolean;
   page: Page;
   gateway: LocalMcpGateway;
+  ownerSessionEnded: Promise<void>;
   openWindow: () => Promise<"focused" | "opened">;
   close: () => Promise<void>;
 };
@@ -122,6 +123,10 @@ export function resolveRecoveryNavigationUrl(
     return targetUrl;
   }
   return isUrlAllowed(currentUrl, hostPatterns) ? undefined : targetUrl;
+}
+
+export function shouldEndOwnerSessionAfterPageClose(headless: boolean, openPageCount: number): boolean {
+  return !headless && openPageCount === 0;
 }
 
 function resolveBrowserType(browser: BrowserEngine): BrowserType {
@@ -204,7 +209,21 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   let currentGatewaySession: WebMcpPageGateway | undefined;
   let currentMode: "native" | "polyfill" | "adapter-shim" = "native";
   let gatewayStale = false;
+  let runtimeClosing = false;
   let pageLifecycleCleanup: (() => void) | undefined;
+  let ownerSessionEndedResolved = false;
+  let resolveOwnerSessionEnded!: () => void;
+  const ownerSessionEnded = new Promise<void>((resolve) => {
+    resolveOwnerSessionEnded = resolve;
+  });
+
+  const signalOwnerSessionEnded = (): void => {
+    if (ownerSessionEndedResolved) {
+      return;
+    }
+    ownerSessionEndedResolved = true;
+    resolveOwnerSessionEnded();
+  };
 
   const cleanup = async (): Promise<void> => {
     await currentGatewaySession?.close().catch(() => {
@@ -245,13 +264,25 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     const markGatewayStale = (): void => {
       gatewayStale = true;
     };
+    const handlePageClose = (): void => {
+      markGatewayStale();
+      queueMicrotask(() => {
+        if (runtimeClosing) {
+          return;
+        }
+        const openPageCount = context?.pages().filter((entry) => !entry.isClosed()).length ?? 0;
+        if (shouldEndOwnerSessionAfterPageClose(headless, openPageCount)) {
+          signalOwnerSessionEnded();
+        }
+      });
+    };
     const handleFrameNavigation = (frame: Frame): void => {
       if (frame === pageForEvents.mainFrame()) {
         markGatewayStale();
       }
     };
     pageForEvents.on("framenavigated", handleFrameNavigation);
-    pageForEvents.on("close", markGatewayStale);
+    pageForEvents.on("close", handlePageClose);
     pageLifecycleCleanup = (): void => {
       const pageEvents = pageForEvents as unknown as {
         removeListener?: {
@@ -260,7 +291,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         };
       };
       pageEvents.removeListener?.("framenavigated", handleFrameNavigation);
-      pageEvents.removeListener?.("close", markGatewayStale);
+      pageEvents.removeListener?.("close", handlePageClose);
     };
     if (navigate) {
       try {
@@ -352,6 +383,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         return;
       }
       closed = true;
+      runtimeClosing = true;
       await cleanup();
     };
 
@@ -409,10 +441,12 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         return currentPage as Page;
       },
       gateway,
+      ownerSessionEnded,
       openWindow,
       close,
     };
   } catch (error) {
+    runtimeClosing = true;
     await cleanup();
     throw error;
   }
