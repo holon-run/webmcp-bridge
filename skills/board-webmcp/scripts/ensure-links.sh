@@ -72,7 +72,7 @@ cli_command="$(shell_join "${cli_args[@]}")"
 ui_command="$(shell_join "${ui_args[@]}")"
 
 "${link_command[@]}" board-webmcp-cli "$cli_command" --daemon-exclusive "$profile" --force >/dev/null
-"${link_command[@]}" board-webmcp-ui "$ui_command" --daemon-exclusive "$profile" --force >/dev/null
+"${link_command[@]}" board-webmcp-ui "$ui_command" --daemon-exclusive "$profile" --daemon-idle-ttl 0 --force >/dev/null
 
 printf 'linked %s -> %s\n' 'board-webmcp-cli' "$cli_command"
 printf 'linked %s -> %s\n' 'board-webmcp-ui' "$ui_command"

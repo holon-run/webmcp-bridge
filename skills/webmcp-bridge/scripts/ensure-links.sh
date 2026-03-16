@@ -126,7 +126,7 @@ cli_command="$(shell_join "${cli_args[@]}")"
 ui_command="$(shell_join "${ui_args[@]}")"
 
 "${link_command[@]}" "$cli_name" "$cli_command" --daemon-exclusive "$profile" --force >/dev/null
-"${link_command[@]}" "$ui_name" "$ui_command" --daemon-exclusive "$profile" --force >/dev/null
+"${link_command[@]}" "$ui_name" "$ui_command" --daemon-exclusive "$profile" --daemon-idle-ttl 0 --force >/dev/null
 
 printf 'linked %s -> %s\n' "$cli_name" "$cli_command"
 printf 'linked %s -> %s\n' "$ui_name" "$ui_command"

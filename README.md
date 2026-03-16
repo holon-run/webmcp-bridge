@@ -71,7 +71,8 @@ uxc link board-webmcp-cli \
 
 uxc link board-webmcp-ui \
   "npx -y @webmcp-bridge/local-mcp --url https://board.holon.run --no-headless --user-data-dir ~/.uxc/webmcp-profile/board" \
-  --daemon-exclusive ~/.uxc/webmcp-profile/board
+  --daemon-exclusive ~/.uxc/webmcp-profile/board \
+  --daemon-idle-ttl 0
 ```
 
 Then:
