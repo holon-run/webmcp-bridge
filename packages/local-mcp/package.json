@@ -1,6 +1,6 @@
 {
   "name": "@webmcp-bridge/local-mcp",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "type": "module",
   "description": "Local stdio MCP server that bridges local agents to browser WebMCP through Playwright.",
   "main": "dist/index.js",

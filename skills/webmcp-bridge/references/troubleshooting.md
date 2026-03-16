@@ -22,15 +22,19 @@ After login, switch back to the CLI link for normal automation.
 
 ## UI window flashes open and closes immediately
 
-This usually means the current execution environment did not keep the `uxc` stdio MCP session alive after the command returned.
+With current `uxc` and `@webmcp-bridge/local-mcp` releases, `bridge.open` should keep the headed session alive after the command returns.
 
-Use the same command in the user's own interactive terminal instead:
+If the window still flashes open and disappears, verify that:
+
+- `uxc` is updated to a release that includes daemon detach and per-session idle TTL support
+- the `<site>-webmcp-ui` link was recreated after updating `uxc`
+- the environment can launch Playwright browsers for the current `HOME`
+
+Then rerun:
 
 ```bash
 <site>-webmcp-ui bridge.open
 ```
-
-Once that headed session stays open, subsequent `<site>-webmcp-ui <tool>` calls can reuse it.
 
 ## The user closed the headed browser window manually
 
@@ -40,7 +44,7 @@ Run the same open command again:
 <site>-webmcp-ui bridge.open
 ```
 
-The bridge should recreate the page inside the existing headed session instead of requiring a full daemon reset.
+Closing the last headed browser window ends that owner session. The next `bridge.open` starts a new headed session on the same profile, without requiring a daemon reset.
 
 ## Fresh machine or isolated HOME cannot start Chromium
 

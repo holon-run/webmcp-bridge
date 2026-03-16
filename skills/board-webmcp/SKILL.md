@@ -30,6 +30,7 @@ Use this skill to operate the native board demo through `@webmcp-bridge/local-mc
    - collaborative visible session: `board-webmcp-ui bridge.open`, then `board-webmcp-ui nodes.list`, `board-webmcp-ui edges.list`
 4. Apply updates with structured inputs:
    - non-collaborative automation may use `board-webmcp-cli`
+   - `board-webmcp-cli diagram.export format=json`
    - collaborative visible session should keep all MCP calls on `board-webmcp-ui`
    - `board-webmcp-ui nodes.upsert '{"nodes":[{"label":"Fraud Service","kind":"service"}]}'`
    - `board-webmcp-ui edges.upsert '{"edges":[{"sourceNodeId":"gateway","targetNodeId":"orders","protocol":"grpc"}]}'`
@@ -40,8 +41,7 @@ Use this skill to operate the native board demo through `@webmcp-bridge/local-mc
    - keep all reads and writes on `board-webmcp-ui` for that same collaborative session
    - `board-webmcp-ui selection.get`
    - `board-webmcp-ui bridge.close`
-   - if the human closed the board window manually, run `board-webmcp-ui bridge.open` again to recreate the headed page in the same bridge session
-   - if the window flashes open and immediately disappears in an automated or one-shot execution environment, ask the user to run `board-webmcp-ui bridge.open` in their own interactive terminal first
+   - if the human closed the board window manually, the headed owner session has ended; run `board-webmcp-ui bridge.open` again to start a new headed session on the same profile
 
 ## Default Target
 
@@ -80,9 +80,8 @@ npx playwright install
 - `board.holon.run` is a shared demo. Writes are visible on the board surface and persisted in browser storage for that profile.
 - Prefer `board-webmcp-ui` when a human and AI need to inspect the same diagram state together.
 - When a human and AI are sharing one visible board session, do not mix `board-webmcp-cli` into the same profile. Keep the session on `board-webmcp-ui`.
-- Use `board-webmcp-ui bridge.open` to reveal the current headed browser session before collaborative editing.
-- If the human closes that window manually, `board-webmcp-ui bridge.open` should reopen it in the same headed session.
-- In constrained execution environments, `bridge.open` may not keep the UI session alive after the command exits. In that case, the user should run `board-webmcp-ui bridge.open` directly in their local terminal and keep that session open.
+- Use `board-webmcp-ui bridge.open` directly to start or focus the current headed browser session before collaborative editing.
+- If the human closes that window manually, the headed owner session ends. The next `board-webmcp-ui bridge.open` starts a new headed session on the same profile.
 - Keep the board profile isolated from other sites.
 - Use JSON output for automation. Do not depend on human-formatted text output.
 

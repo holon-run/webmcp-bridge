@@ -1,5 +1,18 @@
 # @webmcp-bridge/local-mcp
 
+## 0.4.3
+
+### Patch Changes
+
+- Document the updated headed-session lifecycle for `bridge.open`.
+  - clarify that modern `uxc` + `local-mcp` releases keep headed UI sessions alive after `bridge.open` returns
+  - clarify that closing the last headed browser window ends the owner session
+  - document that the next `bridge.open` starts a new headed session on the same profile
+  - @webmcp-bridge/core@0.4.3
+  - @webmcp-bridge/playwright@0.4.3
+  - @webmcp-bridge/adapter-x@0.4.3
+  - @webmcp-bridge/adapter-fixture@0.4.3
+
 ## 0.4.2
 
 ### Patch Changes

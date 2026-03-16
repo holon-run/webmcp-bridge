@@ -147,6 +147,7 @@ The public demo at `https://board.holon.run` is the easiest way to see human + A
 - open a visible session with `board-webmcp-ui bridge.open`
 - keep AI tool calls on `board-webmcp-ui` while the human is collaborating in the same visible session
 - keep the browser open while the human and the AI work on the same diagram
+- if the human closes the last headed window, that owner session ends; the next `board-webmcp-ui bridge.open` starts a new headed session on the same profile
 
 See [examples/board/README.md](examples/board/README.md) for the full collaboration flow in Codex / Claude Code.
 

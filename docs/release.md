@@ -29,8 +29,9 @@ Public packages:
 
 ## Current release prep
 
-`@webmcp-bridge/local-mcp@0.1.2` includes:
+The next `@webmcp-bridge/local-mcp` release includes:
 
 - `bridge.open` / `bridge.close` built-in MCP tools for headed bridge session control
-- faster failure with explicit navigation errors for unreachable targets
-- the latest board demo / skill docs aligned to the new session-control workflow
+- refresh recovery after page navigation without requiring daemon resets
+- owner-session shutdown when the last headed browser window is closed
+- the latest board demo / skill docs aligned to the new headed-session lifecycle

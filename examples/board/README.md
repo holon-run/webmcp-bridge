@@ -65,7 +65,7 @@ Reveal the shared headed browser session before live collaboration:
 board-webmcp-ui bridge.open
 ```
 
-If the user closes that window manually, run `board-webmcp-ui bridge.open` again to reopen the page in the same headed session.
+If the user closes that window manually, the headed owner session ends. Run `board-webmcp-ui bridge.open` again to start a new headed session on the same profile.
 
 ## Collaborate With AI
 
@@ -99,7 +99,7 @@ Typical flow in Codex / Claude Code:
    board-webmcp-ui layout.apply mode=layered
    ```
 
-4. When the user closes the visible window manually, reopen it:
+4. When the user closes the visible window manually, start a new headed session on the same profile:
 
    ```bash
    board-webmcp-ui bridge.open
