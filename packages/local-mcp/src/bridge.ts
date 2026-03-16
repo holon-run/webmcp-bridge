@@ -200,7 +200,13 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       options.onError?.(error);
     });
   };
+  const handleOwnerSessionEnded = (): void => {
+    void closeResources().catch((error) => {
+      options.onError?.(error);
+    });
+  };
   input.once("end", handleInputEnded);
+  void runtime.ownerSessionEnded.then(handleOwnerSessionEnded);
 
   return {
     site: runtime.site,
