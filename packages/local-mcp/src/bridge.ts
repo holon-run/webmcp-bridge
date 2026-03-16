@@ -148,6 +148,18 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
   const runtime = await resolveRuntime(options);
 
   let server: LocalMcpStdioServer | undefined;
+  let closed = false;
+  const closeResources = async (): Promise<void> => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    const results = await Promise.allSettled([server?.close(), runtime.close()]);
+    const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (firstFailure) {
+      throw firstFailure.reason;
+    }
+  };
   try {
     const serverOptions: LocalMcpStdioServerOptions = {
       gateway: runtime.gateway,
@@ -160,8 +172,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         }),
         openWindow: runtime.openWindow,
         closeBridge: async () => {
-          await server?.close();
-          await runtime.close();
+          await closeResources();
         },
       },
       serviceVersion: options.serviceVersion,
@@ -183,19 +194,22 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     throw error;
   }
 
-  let closed = false;
+  const input = options.input ?? process.stdin;
+  const handleInputEnded = (): void => {
+    void closeResources().catch((error) => {
+      options.onError?.(error);
+    });
+  };
+  input.once("end", handleInputEnded);
+
   return {
     site: runtime.site,
     targetUrl: runtime.targetUrl,
     mode: runtime.mode,
     headless: runtime.headless,
     close: async (): Promise<void> => {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      await server?.close();
-      await runtime.close();
+      input.removeListener("end", handleInputEnded);
+      await closeResources();
     },
   };
 }

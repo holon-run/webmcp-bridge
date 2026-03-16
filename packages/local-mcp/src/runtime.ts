@@ -19,12 +19,19 @@ import {
   webkit,
   type BrowserContext,
   type BrowserType,
+  type Frame,
   type Page,
 } from "playwright";
 import type { LocalMcpGateway } from "./server.js";
 import type { SiteDefinition } from "./sites.js";
 
 const NAVIGATION_TIMEOUT_MS = 5_000;
+const GATEWAY_RECOVERABLE_ERROR_SNIPPETS = [
+  "Execution context was destroyed",
+  "Cannot find context with specified id",
+  "Target page, context or browser has been closed",
+  "WebMCP bridge invoke handler missing",
+];
 
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
 export type BrowserChannel =
@@ -106,6 +113,17 @@ export function resolveTargetUrl(urlOverride: string | undefined, defaultUrl: st
   return targetUrl;
 }
 
+export function resolveRecoveryNavigationUrl(
+  currentUrl: string | undefined,
+  targetUrl: string,
+  hostPatterns: string[],
+): string | undefined {
+  if (!currentUrl || !currentUrl.trim()) {
+    return targetUrl;
+  }
+  return isUrlAllowed(currentUrl, hostPatterns) ? undefined : targetUrl;
+}
+
 function resolveBrowserType(browser: BrowserEngine): BrowserType {
   if (browser === "firefox") {
     return firefox;
@@ -121,6 +139,11 @@ function extractErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+export function isRecoverableGatewayError(error: unknown): boolean {
+  const message = extractErrorMessage(error);
+  return GATEWAY_RECOVERABLE_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
 }
 
 export function mapNavigationError(error: unknown, targetUrl: string, phase: "goto" | "reload"): Error {
@@ -180,11 +203,14 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   let currentPage: Page | undefined;
   let currentGatewaySession: WebMcpPageGateway | undefined;
   let currentMode: "native" | "polyfill" | "adapter-shim" = "native";
+  let gatewayStale = false;
+  let pageLifecycleCleanup: (() => void) | undefined;
 
   const cleanup = async (): Promise<void> => {
     await currentGatewaySession?.close().catch(() => {
       // Cleanup should be best-effort when process is terminating.
     });
+    pageLifecycleCleanup?.();
     await context?.close().catch(() => {
       // Cleanup should be best-effort when process is terminating.
     });
@@ -203,7 +229,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     gatewayOptions.fallbackAdapter = fallbackAdapterFactory();
   }
 
-  const initializePageSession = async (): Promise<void> => {
+  const initializePageSession = async (navigate = true): Promise<void> => {
     if (!context) {
       throw new Error("SESSION_NOT_AVAILABLE: browser context is unavailable");
     }
@@ -214,17 +240,41 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
 
     const reusablePage = context.pages().find((entry) => !entry.isClosed());
     currentPage = reusablePage ?? (await context.newPage());
-    try {
-      await currentPage.goto(targetUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT_MS,
-      });
-    } catch (error) {
-      throw mapNavigationError(error, targetUrl, "goto");
+    pageLifecycleCleanup?.();
+    const pageForEvents = currentPage;
+    const markGatewayStale = (): void => {
+      gatewayStale = true;
+    };
+    const handleFrameNavigation = (frame: Frame): void => {
+      if (frame === pageForEvents.mainFrame()) {
+        markGatewayStale();
+      }
+    };
+    pageForEvents.on("framenavigated", handleFrameNavigation);
+    pageForEvents.on("close", markGatewayStale);
+    pageLifecycleCleanup = (): void => {
+      const pageEvents = pageForEvents as unknown as {
+        removeListener?: {
+          (event: "framenavigated", listener: (frame: Frame) => void): unknown;
+          (event: "close", listener: () => void): unknown;
+        };
+      };
+      pageEvents.removeListener?.("framenavigated", handleFrameNavigation);
+      pageEvents.removeListener?.("close", markGatewayStale);
+    };
+    if (navigate) {
+      try {
+        await currentPage.goto(targetUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: NAVIGATION_TIMEOUT_MS,
+        });
+      } catch (error) {
+        throw mapNavigationError(error, targetUrl, "goto");
+      }
     }
 
     currentGatewaySession = await createWebMcpPageGateway(currentPage, gatewayOptions);
-    if (currentGatewaySession.mode === "polyfill") {
+    if (navigate && currentGatewaySession.mode === "polyfill") {
       try {
         await currentPage.reload({
           waitUntil: "domcontentloaded",
@@ -234,8 +284,51 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         throw mapNavigationError(error, targetUrl, "reload");
       }
       await waitForPolyfillTools(currentGatewaySession);
+    } else if (currentGatewaySession.mode === "polyfill") {
+      await waitForPolyfillTools(currentGatewaySession).catch(() => {
+        // Recovery should still retry the original operation once even if tools are not visible yet.
+      });
     }
     currentMode = currentGatewaySession.mode;
+    gatewayStale = false;
+  };
+
+  const rebuildGatewaySession = async (): Promise<void> => {
+    if (!currentPage || currentPage.isClosed()) {
+      await initializePageSession(true);
+      return;
+    }
+    const recoveryNavigationUrl = resolveRecoveryNavigationUrl(
+      currentPage.url(),
+      targetUrl,
+      site.manifest.hostPatterns,
+    );
+    if (recoveryNavigationUrl) {
+      try {
+        await currentPage.goto(recoveryNavigationUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: NAVIGATION_TIMEOUT_MS,
+        });
+      } catch (error) {
+        throw mapNavigationError(error, recoveryNavigationUrl, "goto");
+      }
+    }
+    await initializePageSession(false);
+  };
+
+  const withGatewayRecovery = async <T>(operation: () => Promise<T>): Promise<T> => {
+    if (gatewayStale || !currentGatewaySession) {
+      await rebuildGatewaySession();
+    }
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isRecoverableGatewayError(error)) {
+        throw error;
+      }
+      await rebuildGatewaySession();
+      return await operation();
+    }
   };
 
   try {
@@ -269,12 +362,15 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         );
       }
       if (!currentPage || currentPage.isClosed()) {
-        await initializePageSession();
+        await initializePageSession(true);
         if (!currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
         }
         await currentPage.bringToFront();
         return "opened";
+      }
+      if (gatewayStale || !currentGatewaySession) {
+        await rebuildGatewaySession();
       }
       await currentPage.bringToFront();
       return "focused";
@@ -285,13 +381,15 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
         }
-        return await currentGatewaySession.listTools();
+        return await withGatewayRecovery(async () => await currentGatewaySession!.listTools());
       },
       callTool: async (name: string, input: Record<string, unknown>): Promise<JsonValue> => {
         if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
         }
-        return await currentGatewaySession.callTool(name, input as JsonValue);
+        return await withGatewayRecovery(
+          async () => await currentGatewaySession!.callTool(name, input as JsonValue),
+        );
       },
     };
 
