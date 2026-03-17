@@ -44,9 +44,31 @@ Without a bridge, local MCP clients cannot directly use browser-only WebMCP capa
 - `--site <name>`: use a built-in fallback adapter such as `x`
 - `--adapter-module <specifier>`: use a third-party adapter package
 
+## Agent skills
+
+If your agent workflow uses `skills`, install the `uxc` skill first, then install the bridge skills from this repository:
+
+```bash
+npx -y skills@latest add holon-run/uxc --skill uxc
+npx -y skills@latest add holon-run/webmcp-bridge --skill webmcp-bridge --skill board-webmcp --skill webmcp-adapter-creator
+```
+
+This uses the shorter GitHub shorthand supported by `skills add` and installs only the named skills instead of referencing each `SKILL.md` URL directly. The commands do not pin `--agent`, so you can choose the target agent during installation.
+
+The bridge skills depend on `uxc` because they create and use stable `uxc link` commands such as:
+
+- `board-webmcp-cli`
+- `board-webmcp-ui`
+
+Recommended skill flow:
+
+1. Use `webmcp-bridge` for general site connection and link creation.
+2. Use `board-webmcp` for the public board demo at `https://board.holon.run`.
+3. Use `webmcp-adapter-creator` when a site has no native WebMCP and no existing adapter.
+
 ## First 2 minutes
 
-If your main workflow is "agent operates the site for me", install the skills in [Codex skills](#codex-skills) first.
+If your main workflow is "agent operates the site for me", install the skills in [Agent skills](#agent-skills) first.
 
 If you prefer direct CLI use instead of agent + skill use, start here:
 
@@ -161,31 +183,9 @@ See [examples/board/README.md](examples/board/README.md) for the full collaborat
 - `@webmcp-bridge/testkit`: shared contract test helpers.
 - `@webmcp-bridge/local-mcp`: local stdio MCP server.
 
-## Codex skills
-
-If you use Codex, install the `uxc` skill first, then install the bridge skills from this repository:
-
-```bash
-npx -y skills@latest add https://github.com/holon-run/uxc/tree/main/skills/uxc
-npx -y skills@latest add https://github.com/holon-run/webmcp-bridge/tree/main/skills/webmcp-bridge
-npx -y skills@latest add https://github.com/holon-run/webmcp-bridge/tree/main/skills/board-webmcp
-npx -y skills@latest add https://github.com/holon-run/webmcp-bridge/tree/main/skills/webmcp-adapter-creator
-```
-
-The bridge skills depend on `uxc` because they create and use stable `uxc link` commands such as:
-
-- `board-webmcp-cli`
-- `board-webmcp-ui`
-
-Recommended skill flow:
-
-1. Use `webmcp-bridge` for general site connection and link creation.
-2. Use `board-webmcp` for the public board demo at `https://board.holon.run`.
-3. Use `webmcp-adapter-creator` when a site has no native WebMCP and no existing adapter.
-
 ## Repository skills
 
-This repository includes three Codex skills with distinct responsibilities:
+This repository includes three agent skills with distinct responsibilities:
 
 - `webmcp-bridge`: general bridge operations for existing sites. Use it to decide between `--url`, `--site`, and `--adapter-module`, create fixed `uxc` links, manage per-site profiles, and switch between headless and UI bridge modes.
 - `board-webmcp`: site wrapper for the public native demo at `https://board.holon.run`. Use it when the task is specifically about the shared board example.
