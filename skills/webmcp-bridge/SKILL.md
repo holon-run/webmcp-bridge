@@ -58,6 +58,8 @@ Both links must share the same site profile and daemon lock:
 - profile path: `~/.uxc/webmcp-profile/<site>`
 - daemon key: same as profile path
 
+This shared-profile rule assumes one owner session for that site. Do not run independent headed and headless browser processes against the same profile at the same time.
+
 The CLI link should stay deterministic:
 
 - use `--headless`
@@ -71,6 +73,7 @@ The UI link should stay visible:
 
 - Prefer browser-side execution for privileged site actions. Do not move site credentials into local scripts.
 - Do not share one `--user-data-dir` across multiple unrelated sites.
+- If a site is sensitive to headed/headless switching, keep separate profiles for the two modes instead of forcing reuse.
 - Do not dynamically rename link commands at runtime. The skill author chooses the link name once.
 - For destructive writes, inspect tool help first and require explicit user intent.
 - Use `--url` only for the site the user asked for. Do not silently redirect hosts.

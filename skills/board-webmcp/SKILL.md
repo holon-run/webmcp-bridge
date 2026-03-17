@@ -80,6 +80,7 @@ npx playwright install
 - `board.holon.run` is a shared demo. Writes are visible on the board surface and persisted in browser storage for that profile.
 - Prefer `board-webmcp-ui` when a human and AI need to inspect the same diagram state together.
 - When a human and AI are sharing one visible board session, do not mix `board-webmcp-cli` into the same profile. Keep the session on `board-webmcp-ui`.
+- The default shared-profile pattern assumes one daemon-managed board session, not concurrent headed and headless browser processes. If a real target site is sensitive to mode switching, isolate the two profiles.
 - Use `board-webmcp-ui bridge.open` directly to start or focus the current headed browser session before collaborative editing.
 - If the human closes that window manually, the headed owner session ends. The next `board-webmcp-ui bridge.open` starts a new headed session on the same profile.
 - Keep the board profile isolated from other sites.

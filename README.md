@@ -97,6 +97,8 @@ uxc link board-webmcp-ui \
   --daemon-idle-ttl 0
 ```
 
+The `cli` and `ui` links above are intended to reuse the same site profile through the same daemon/session, not through two independent browser processes at the same time. If a target site is sensitive to headed/headless switching or browser fingerprint changes, keep separate profiles for the two modes.
+
 Then:
 
 ```bash

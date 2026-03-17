@@ -33,6 +33,10 @@ Examples:
 
 CLI and UI links for the same site must share the same profile path and the same `--daemon-exclusive` key.
 
+This is for one daemon-managed site session. Do not treat it as permission to launch separate headed and headless browser processes against the same profile concurrently.
+
+If a site reacts badly to headed/headless switching or browser fingerprint differences, split the profile into separate `cli` and `ui` profiles for that site.
+
 ## Link Creation Pattern
 
 ```bash
