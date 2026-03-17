@@ -21,8 +21,21 @@ type ComposeDomResult = {
   submitVisible?: boolean;
 };
 
+type GrokComposeDomResult = {
+  ok: boolean;
+  reason?: string;
+};
+
+type ReplyComposeDomResult = {
+  ok: boolean;
+  dryRun?: boolean;
+  reason?: string;
+  submitVisible?: boolean;
+};
+
 export type CreateXAdapterOptions = {
   composeConfirmTimeoutMs?: number;
+  grokResponseTimeoutMs?: number;
   maxPostLength?: number;
 };
 
@@ -30,6 +43,7 @@ const DEFAULT_TIMELINE_LIMIT = 10;
 const MAX_TIMELINE_LIMIT = 20;
 const MAX_READ_PAGE_CACHE_SIZE = 8;
 const DEFAULT_COMPOSE_CONFIRM_TIMEOUT_MS = 10_000;
+const DEFAULT_GROK_RESPONSE_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_POST_LENGTH = 280;
 const AUTH_STABILIZE_ATTEMPTS = 6;
 const AUTH_STABILIZE_DELAY_MS = 750;
@@ -280,6 +294,46 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
+    name: "notifications.list",
+    description: "Read the main notifications feed",
+    inputSchema: {
+      type: "object",
+      description: "List recent notifications from the authenticated account.",
+      properties: {
+        limit: {
+          type: "integer",
+          description: `Maximum number of notifications to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "mentions.list",
+    description: "Read the mentions tab from notifications",
+    inputSchema: {
+      type: "object",
+      description: "List recent mention notifications where the account is referenced.",
+      properties: {
+        limit: {
+          type: "integer",
+          description: `Maximum number of mentions to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
     name: "timeline.user.list",
     description: "Read one user's timeline tweet cards",
     inputSchema: {
@@ -379,6 +433,47 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
       },
       required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "tweet.reply",
+    description: "Reply to one tweet by url or id",
+    inputSchema: {
+      type: "object",
+      description: "Open a tweet detail page, compose one reply, and optionally skip final submit with dryRun.",
+      properties: {
+        url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
+        id: { type: "string", description: "Tweet id. Used when url is not provided." },
+        text: {
+          type: "string",
+          description: `Reply text content. Max length ${DEFAULT_MAX_POST_LENGTH}.`,
+          minLength: 1,
+          maxLength: DEFAULT_MAX_POST_LENGTH,
+        },
+        dryRun: {
+          type: "boolean",
+          description: "When true, validate the reply compose path without submitting.",
+        },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "grok.ask",
+    description: "Ask Grok a single prompt from the authenticated X session",
+    inputSchema: {
+      type: "object",
+      description: "Open Grok in the current X session, submit one prompt, and return the latest assistant reply.",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "Prompt text to send to Grok.",
+          minLength: 1,
+        },
+      },
+      required: ["prompt"],
       additionalProperties: false,
     },
   },
@@ -1040,6 +1135,18 @@ async function withEphemeralReadOnlyPage<T>(page: Page, url: string, run: (readP
   }
 }
 
+async function withEphemeralPage<T>(page: Page, url: string, run: (ephemeralPage: Page) => Promise<T>): Promise<T> {
+  const context = page.context();
+  const ephemeralPage = await context.newPage();
+  try {
+    await ensureNetworkCaptureInstalled(ephemeralPage);
+    await ephemeralPage.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    return await run(ephemeralPage);
+  } finally {
+    await ephemeralPage.close().catch(() => {});
+  }
+}
+
 function getReadPageCacheState(page: Page): ReadPageCacheState {
   let state = READ_PAGE_CACHE.get(page);
   if (!state) {
@@ -1244,6 +1351,19 @@ async function readTweetByUrl(page: Page, url: string): Promise<JsonValue> {
     }
     return { tweet };
   });
+}
+
+async function readNotifications(page: Page, limit: number): Promise<TimelinePage> {
+  await waitForTweetSurface(page);
+  const cards = await extractTweetCards(page, limit);
+  return {
+    items: mapTweetCards(cards),
+    source: "dom",
+    hasMore: false,
+    debug: {
+      reason: "notifications_dom",
+    },
+  };
 }
 
 async function readProfile(page: Page, handle: string): Promise<JsonValue> {
@@ -1486,6 +1606,382 @@ async function waitForComposeConfirmation(
   return { confirmed: true };
 }
 
+async function ensureReplyComposerReady(page: Page): Promise<void> {
+  const composerSelectors = [
+    "div[data-testid='tweetTextarea_0']",
+    "div[role='textbox'][data-testid='tweetTextarea_0']",
+    "div[role='textbox'][aria-label*='Post text']",
+    "div[role='textbox'][aria-label*='Reply']",
+    "div[role='textbox'][aria-label*='Post your reply']",
+  ];
+  const openReplySelectors = [
+    "[data-testid='reply']",
+    "[data-testid='replyButton']",
+    "button[aria-label*='Reply']",
+    "div[role='button'][aria-label*='Reply']",
+  ];
+
+  for (const selector of composerSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 800 }).catch(() => null);
+    if (handle) {
+      await handle.dispose();
+      return;
+    }
+  }
+
+  await page
+    .evaluate((selectors) => {
+      for (const selector of selectors) {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (element) {
+          element.click();
+          return;
+        }
+      }
+    }, openReplySelectors)
+    .catch(() => {});
+
+  for (const selector of composerSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 2500 }).catch(() => null);
+    if (handle) {
+      await handle.dispose();
+      return;
+    }
+  }
+}
+
+async function composeReply(page: Page, text: string, dryRun: boolean): Promise<ReplyComposeDomResult> {
+  return await page.evaluate(
+    ({ op, content, dryRunMode }) => {
+      if (op !== "reply_compose") {
+        return { ok: false, reason: "invalid_operation" };
+      }
+
+      const pickFirst = (selectors: string[]): HTMLElement | null => {
+        for (const selector of selectors) {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (element) {
+            return element;
+          }
+        }
+        return null;
+      };
+
+      const setText = (target: HTMLElement, value: string): boolean => {
+        target.focus();
+
+        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+          target.value = value;
+          target.dispatchEvent(new Event("input", { bubbles: true }));
+          target.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        }
+
+        if (target.isContentEditable) {
+          try {
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(target);
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+            document.execCommand("insertText", false, value);
+          } catch {
+            // Ignore and fall back to direct assignment below.
+          }
+
+          if ((target.textContent ?? "").trim() !== value) {
+            target.textContent = value;
+          }
+          target.dispatchEvent(new InputEvent("input", { bubbles: true, data: value }));
+          return true;
+        }
+
+        return false;
+      };
+
+      const composerSelectors = [
+        "div[data-testid='tweetTextarea_0']",
+        "div[role='textbox'][data-testid='tweetTextarea_0']",
+        "div[role='textbox'][aria-label*='Reply']",
+        "div[role='textbox'][aria-label*='Post your reply']",
+        "div[role='textbox'][aria-label*='Post text']",
+      ];
+      const submitSelectors = [
+        "[data-testid='tweetButtonInline']",
+        "[data-testid='tweetButton']",
+        "div[data-testid='toolBar'] [data-testid='tweetButtonInline']",
+      ];
+
+      const composer = pickFirst(composerSelectors);
+      if (!composer) {
+        return { ok: false, reason: "composer_not_found" };
+      }
+
+      if (!setText(composer, content)) {
+        return { ok: false, reason: "compose_input_failed" };
+      }
+
+      const submit = pickFirst(submitSelectors);
+      if (dryRunMode) {
+        return {
+          ok: true,
+          dryRun: true,
+          submitVisible: submit !== null,
+        };
+      }
+
+      if (!submit) {
+        return { ok: false, reason: "submit_not_found" };
+      }
+
+      submit.click();
+      return { ok: true };
+    },
+    { op: "reply_compose", content: text, dryRunMode: dryRun },
+  );
+}
+
+async function waitForGrokSurface(page: Page): Promise<void> {
+  await page
+    .waitForFunction(() => {
+      const composer =
+        document.querySelector("textarea") ||
+        document.querySelector("[contenteditable='true'][role='textbox']") ||
+        document.querySelector("[role='textbox'][contenteditable='true']");
+      const messages =
+        document.querySelector("[data-message-author-role='assistant']") ||
+        document.querySelector("[data-testid*='assistant']") ||
+        document.querySelector("article");
+      return composer !== null || messages !== null;
+    }, undefined, { timeout: 12_000 })
+    .catch(() => {});
+  await page.waitForTimeout(800);
+}
+
+async function submitGrokPrompt(page: Page, prompt: string): Promise<GrokComposeDomResult> {
+  return await page.evaluate(
+    ({ op, promptText }) => {
+      if (op !== "grok_submit") {
+        return { ok: false, reason: "invalid_operation" };
+      }
+
+      const pickFirst = (selectors: string[]): HTMLElement | null => {
+        for (const selector of selectors) {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (element) {
+            return element;
+          }
+        }
+        return null;
+      };
+
+      const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
+
+      const setText = (target: HTMLElement, value: string): boolean => {
+        target.focus();
+
+        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+          target.value = value;
+          target.dispatchEvent(new Event("input", { bubbles: true }));
+          target.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        }
+
+        if (target.isContentEditable) {
+          try {
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(target);
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+            document.execCommand("insertText", false, value);
+          } catch {
+            // Ignore and fall back to direct assignment below.
+          }
+
+          if ((target.textContent ?? "").trim() !== value) {
+            target.textContent = value;
+          }
+          target.dispatchEvent(new InputEvent("input", { bubbles: true, data: value }));
+          return true;
+        }
+
+        return false;
+      };
+
+      const composerSelectors = [
+        "textarea",
+        "[contenteditable='true'][role='textbox']",
+        "[role='textbox'][contenteditable='true']",
+      ];
+      const submitSelectors = [
+        "button[aria-label*='Send']",
+        "button[aria-label*='send']",
+        "button[data-testid*='send']",
+        "button[type='submit']",
+      ];
+
+      const composer = pickFirst(composerSelectors);
+      if (!composer) {
+        return { ok: false, reason: "composer_not_found" };
+      }
+
+      if (!setText(composer, promptText)) {
+        return { ok: false, reason: "compose_input_failed" };
+      }
+
+      const submit = pickFirst(submitSelectors);
+      if (!submit) {
+        return { ok: false, reason: "submit_not_found" };
+      }
+
+      const label = normalize(submit.getAttribute("aria-label") ?? submit.textContent ?? "");
+      if (label.includes("stop")) {
+        return { ok: false, reason: "submit_busy" };
+      }
+
+      submit.click();
+      return { ok: true };
+    },
+    { op: "grok_submit", promptText: prompt },
+  );
+}
+
+async function waitForGrokResponse(
+  page: Page,
+  timeoutMs: number,
+): Promise<{ confirmed: boolean; response?: string }> {
+  try {
+    await page.waitForFunction(
+      ({ op }) => {
+        if (op !== "grok_wait") {
+          return false;
+        }
+        const selectors = [
+          "[data-message-author-role='assistant']",
+          "[data-testid*='assistant']",
+          "[data-testid*='response']",
+          "article",
+        ];
+        const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+
+        for (const selector of selectors) {
+          const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
+          for (let i = nodes.length - 1; i >= 0; i -= 1) {
+            const text = normalize(nodes[i]?.innerText || nodes[i]?.textContent || "");
+            if (text.length >= 8) {
+              return true;
+            }
+          }
+        }
+        return false;
+      },
+      { op: "grok_wait" },
+      { timeout: timeoutMs },
+    );
+  } catch {
+    return { confirmed: false };
+  }
+
+  const response = await page.evaluate(({ op }) => {
+    if (op !== "grok_extract_response") {
+      return undefined;
+    }
+
+    const selectors = [
+      "[data-message-author-role='assistant']",
+      "[data-testid*='assistant']",
+      "[data-testid*='response']",
+      "article",
+    ];
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+
+    for (const selector of selectors) {
+      const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
+      for (let i = nodes.length - 1; i >= 0; i -= 1) {
+        const text = normalize(nodes[i]?.innerText || nodes[i]?.textContent || "");
+        if (text.length >= 8) {
+          return text;
+        }
+      }
+    }
+    return undefined;
+  }, { op: "grok_extract_response" });
+
+  if (typeof response === "string" && response.length > 0) {
+    return {
+      confirmed: true,
+      response,
+    };
+  }
+  return { confirmed: false };
+}
+
+async function askGrok(page: Page, prompt: string, timeoutMs: number): Promise<JsonValue> {
+  return await withEphemeralPage(page, "https://x.com/i/grok", async (grokPage) => {
+    await waitForGrokSurface(grokPage);
+    const submitResult = await submitGrokPrompt(grokPage, prompt);
+    if (!submitResult.ok) {
+      return errorResult("UPSTREAM_CHANGED", "grok controls not found", {
+        reason: submitResult.reason ?? "unknown",
+      });
+    }
+
+    const confirmation = await waitForGrokResponse(grokPage, timeoutMs);
+    if (!confirmation.confirmed || !confirmation.response) {
+      return errorResult("ACTION_UNCONFIRMED", "grok response was not confirmed");
+    }
+
+    return {
+      ok: true,
+      response: confirmation.response,
+      url: grokPage.url(),
+    };
+  });
+}
+
+async function replyToTweet(
+  page: Page,
+  targetUrl: string,
+  text: string,
+  dryRun: boolean,
+  timeoutMs: number,
+): Promise<JsonValue> {
+  return await withEphemeralPage(page, targetUrl, async (replyPage) => {
+    await waitForTweetSurface(replyPage);
+    await ensureReplyComposerReady(replyPage);
+    const composeResult = await composeReply(replyPage, text, dryRun);
+    if (!composeResult.ok) {
+      return errorResult("UPSTREAM_CHANGED", "reply controls not found", {
+        reason: composeResult.reason ?? "unknown",
+      });
+    }
+    if (composeResult.dryRun) {
+      return {
+        ok: true,
+        dryRun: true,
+        submitVisible: composeResult.submitVisible === true,
+        replyToUrl: targetUrl,
+      };
+    }
+
+    const confirmation = await waitForComposeConfirmation(replyPage, text, timeoutMs);
+    if (!confirmation.confirmed) {
+      return errorResult("ACTION_UNCONFIRMED", "reply submit was not confirmed in timeline");
+    }
+
+    const result: Record<string, JsonValue> = {
+      ok: true,
+      confirmed: true,
+      replyToUrl: targetUrl,
+    };
+    if (confirmation.statusUrl !== undefined) {
+      result.statusUrl = confirmation.statusUrl;
+    }
+    return result;
+  });
+}
+
 async function requireAuthenticated(page: Page): Promise<
   | {
       ok: true;
@@ -1520,6 +2016,7 @@ async function requireAuthenticated(page: Page): Promise<
 
 export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
   const composeConfirmTimeoutMs = options?.composeConfirmTimeoutMs ?? DEFAULT_COMPOSE_CONFIRM_TIMEOUT_MS;
+  const grokResponseTimeoutMs = options?.grokResponseTimeoutMs ?? DEFAULT_GROK_RESPONSE_TIMEOUT_MS;
   const maxPostLength = options?.maxPostLength ?? DEFAULT_MAX_POST_LENGTH;
 
   return {
@@ -1590,6 +2087,33 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
             ? await readTimelineWithMode(readPage, "bookmarks", limit, cursor)
             : await readTimelineWithMode(readPage, "bookmarks", limit);
         });
+      }
+
+      if (name === "notifications.list") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const limit = normalizeTimelineLimit(args);
+        return await withCachedReadOnlyPage(page, "notifications", "https://x.com/notifications", async (readPage) => {
+          return await readNotifications(readPage, limit);
+        });
+      }
+
+      if (name === "mentions.list") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const limit = normalizeTimelineLimit(args);
+        return await withCachedReadOnlyPage(
+          page,
+          "notifications:mentions",
+          "https://x.com/notifications/mentions",
+          async (readPage) => {
+            return await readNotifications(readPage, limit);
+          },
+        );
       }
 
       if (name === "timeline.user.list") {
@@ -1688,6 +2212,45 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
           result.statusUrl = confirmation.statusUrl;
         }
         return result;
+      }
+
+      if (name === "tweet.reply") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+
+        const text = typeof args.text === "string" ? args.text.trim() : "";
+        if (!text) {
+          return errorResult("VALIDATION_ERROR", "text is required");
+        }
+        if (text.length > maxPostLength) {
+          return errorResult("VALIDATION_ERROR", `text exceeds max length ${maxPostLength}`);
+        }
+
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const targetUrl = url || (id ? `https://x.com/i/web/status/${id}` : "");
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+
+        const dryRun = args.dryRun === true;
+        return await replyToTweet(page, targetUrl, text, dryRun, composeConfirmTimeoutMs);
+      }
+
+      if (name === "grok.ask") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+
+        const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+        if (!prompt) {
+          return errorResult("VALIDATION_ERROR", "prompt is required");
+        }
+
+        return await askGrok(page, prompt, grokResponseTimeoutMs);
       }
 
       return errorResult("TOOL_NOT_FOUND", `unknown tool: ${name}`);

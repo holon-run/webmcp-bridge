@@ -67,6 +67,35 @@ export type LocalMcpRuntime = {
   close: () => Promise<void>;
 };
 
+function createChromiumLaunchOptions(
+  headless: boolean,
+  browserChannel: BrowserChannel | undefined,
+): {
+  headless: boolean;
+  viewport: null;
+  channel?: string;
+  args?: string[];
+  ignoreDefaultArgs?: string[];
+} {
+  const launchOptions: {
+    headless: boolean;
+    viewport: null;
+    channel?: string;
+    args?: string[];
+    ignoreDefaultArgs?: string[];
+  } = {
+    headless,
+    viewport: null,
+    // Experimental: reduce obvious automation markers for login surfaces.
+    args: ["--disable-blink-features=AutomationControlled"],
+    ignoreDefaultArgs: ["--enable-automation"],
+  };
+  if (browserChannel) {
+    launchOptions.channel = browserChannel;
+  }
+  return launchOptions;
+}
+
 function normalizeHost(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -363,17 +392,17 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   };
 
   try {
-    const launchOptions = {
-      headless,
-      viewport: null,
-    } as {
-      headless: boolean;
-      viewport: null;
-      channel?: string;
-    };
-    if (browserChannel) {
-      launchOptions.channel = browserChannel;
-    }
+    const launchOptions =
+      browserEngine === "chromium"
+        ? createChromiumLaunchOptions(headless, browserChannel)
+        : ({
+            headless,
+            viewport: null,
+          } as {
+            headless: boolean;
+            viewport: null;
+            channel?: string;
+          });
     context = await browserType.launchPersistentContext(userDataDir, launchOptions);
     await initializePageSession();
 
