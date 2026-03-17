@@ -16,6 +16,7 @@ type Behavior = {
   confirmCompose: boolean;
   replyComposeResult: { ok: boolean; dryRun?: boolean; reason?: string; submitVisible?: boolean };
   confirmReply: boolean;
+  confirmReplyAfterReload: boolean | undefined;
   grokComposeResult: { ok: boolean; reason?: string };
   confirmGrok: boolean;
   grokResponse?: string;
@@ -23,6 +24,7 @@ type Behavior = {
 };
 
 function createMockPage(partial: Partial<Behavior> = {}) {
+  let replyConfirmAttempts = 0;
   const behavior: Behavior = {
     authState: "authenticated",
     authSignals: ["authenticated_ui"],
@@ -33,6 +35,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     confirmCompose: true,
     replyComposeResult: { ok: true },
     confirmReply: true,
+    confirmReplyAfterReload: undefined,
     grokComposeResult: { ok: true },
     confirmGrok: true,
     grokResponse: "Grok mock response",
@@ -81,12 +84,20 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         return behavior.timelineItems.slice(0, command.maxItems);
       }
 
+      if (command.op === "extract_notifications" && typeof command.maxItems === "number") {
+        return behavior.timelineItems.slice(0, command.maxItems);
+      }
+
       if (typeof command.content === "string" && typeof command.dryRunMode === "boolean") {
         return behavior.composeResult;
       }
 
       if (command.op === "reply_compose") {
         return behavior.replyComposeResult;
+      }
+
+      if (command.op === "reply_submit") {
+        return { ok: true };
       }
 
       if (command.op === "grok_submit") {
@@ -104,10 +115,29 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       return undefined;
     }),
     addInitScript: vi.fn(async () => {}),
+    click: vi.fn(async () => {}),
     goto: vi.fn(async () => {}),
+    type: vi.fn(async () => {}),
+    waitForSelector: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
     waitForTimeout: vi.fn(async () => {}),
     waitForFunction: vi.fn(async (_fn: unknown, arg?: unknown) => {
       if (typeof arg === "string") {
+        replyConfirmAttempts += 1;
+        const replyConfirmed =
+          replyConfirmAttempts > 1 && behavior.confirmReplyAfterReload !== undefined
+            ? behavior.confirmReplyAfterReload
+            : behavior.confirmReply;
+        if (!replyConfirmed) {
+          throw new Error("timeout");
+        }
+        return true;
+      }
+      if (
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        (arg as Record<string, unknown>).op === "reply_submit_ready"
+      ) {
         if (!behavior.confirmReply) {
           throw new Error("timeout");
         }
@@ -128,6 +158,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     close: vi.fn(async () => {}),
     url: vi.fn(() => "https://x.com/i/bookmarks"),
     isClosed: vi.fn(() => false),
+    keyboard: {
+      press: vi.fn(async () => {}),
+    },
   };
   const newPage = vi.fn(async () => readPage);
 
@@ -173,12 +206,20 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         return behavior.timelineItems.slice(0, command.maxItems);
       }
 
+      if (command.op === "extract_notifications" && typeof command.maxItems === "number") {
+        return behavior.timelineItems.slice(0, command.maxItems);
+      }
+
       if (typeof command.content === "string" && typeof command.dryRunMode === "boolean") {
         return behavior.composeResult;
       }
 
       if (command.op === "reply_compose") {
         return behavior.replyComposeResult;
+      }
+
+      if (command.op === "reply_submit") {
+        return { ok: true };
       }
 
       if (command.op === "grok_submit") {
@@ -195,13 +236,26 @@ function createMockPage(partial: Partial<Behavior> = {}) {
 
       return undefined;
     }),
+    click: vi.fn(async () => {}),
     waitForSelector: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
     waitForTimeout: vi.fn(async () => {}),
     waitForLoadState: vi.fn(async () => {}),
     reload: vi.fn(async () => {}),
+    type: vi.fn(async () => {}),
     waitForFunction: vi.fn(async (_fn: unknown, arg?: unknown) => {
       if (typeof arg === "string") {
         if (!behavior.confirmCompose) {
+          throw new Error("timeout");
+        }
+        return true;
+      }
+      if (
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        (arg as Record<string, unknown>).op === "reply_submit_ready"
+      ) {
+        if (!behavior.confirmReply) {
           throw new Error("timeout");
         }
         return true;
@@ -221,6 +275,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     close: vi.fn(async () => {}),
     url: vi.fn(() => "https://x.com/home"),
     isClosed: vi.fn(() => false),
+    keyboard: {
+      press: vi.fn(async () => {}),
+    },
     context: vi.fn(() => ({
       newPage,
     })),
@@ -252,6 +309,7 @@ describe("createXAdapter", () => {
         "timeline.user.list",
         "search.tweets.list",
         "tweet.get",
+        "tweet.thread.get",
         "favorites.list",
         "notifications.list",
         "mentions.list",
@@ -424,6 +482,30 @@ describe("createXAdapter", () => {
     });
   });
 
+  it("rechecks the thread once when reply confirmation needs a reload", async () => {
+    const adapter = createXAdapter();
+    const { page, readPage } = createMockPage({
+      replyComposeResult: { ok: true },
+      confirmReply: false,
+      confirmReplyAfterReload: true,
+      statusUrl: "https://x.com/example/status/789",
+    });
+
+    const result = await adapter.callTool(
+      { name: "tweet.reply", input: { url: "https://x.com/a/status/123", text: "hello there" } },
+      { page: page as never },
+    );
+
+    expect(readPage.goto).toHaveBeenCalledTimes(2);
+    expect(readPage.goto).toHaveBeenLastCalledWith("https://x.com/a/status/123", expect.anything());
+    expect(result).toEqual({
+      ok: true,
+      confirmed: true,
+      replyToUrl: "https://x.com/a/status/123",
+      statusUrl: "https://x.com/example/status/789",
+    });
+  });
+
   it("fails closed when reply submit cannot be confirmed", async () => {
     const adapter = createXAdapter({ composeConfirmTimeoutMs: 100 });
     const { page } = createMockPage({
@@ -508,6 +590,41 @@ describe("createXAdapter", () => {
         code: "VALIDATION_ERROR",
         message: "url or id is required",
       },
+    });
+  });
+
+  it("returns validation error for tweet.thread.get without id/url", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+    const result = await adapter.callTool({ name: "tweet.thread.get", input: {} }, { page: page as never });
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "url or id is required",
+      },
+    });
+  });
+
+  it("reads tweet thread by id", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        { id: "t-1", text: "root tweet", url: "https://x.com/a/status/1" },
+        { id: "t-2", text: "reply tweet", url: "https://x.com/b/status/2" },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "tweet.thread.get", input: { id: "123", limit: 2 } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      tweets: [
+        { id: "t-1", text: "root tweet", url: "https://x.com/a/status/1" },
+        { id: "t-2", text: "reply tweet", url: "https://x.com/b/status/2" },
+      ],
+      source: "network",
     });
   });
 

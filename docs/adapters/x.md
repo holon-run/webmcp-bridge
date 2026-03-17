@@ -9,6 +9,7 @@
 - `timeline.user.list`: read a specific user's timeline tweet cards.
 - `search.tweets.list`: read search result tweet cards.
 - `tweet.get`: read one tweet by URL or ID.
+- `tweet.thread.get`: read one tweet thread by URL or ID.
 - `favorites.list`: read bookmarks/favorites tweet cards.
 - `notifications.list`: read the main notifications feed.
 - `mentions.list`: read the mentions tab from notifications.
@@ -93,6 +94,18 @@ Search tweets:
   "params": {
     "name": "search.tweets.list",
     "arguments": { "query": "playwright", "mode": "latest", "limit": 10 }
+  }
+}
+```
+
+Read a tweet thread:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "tweet.thread.get",
+    "arguments": { "id": "2033895522382319922", "limit": 10 }
   }
 }
 ```

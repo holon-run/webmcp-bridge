@@ -33,6 +33,11 @@ type ReplyComposeDomResult = {
   submitVisible?: boolean;
 };
 
+type SubmitDomResult = {
+  ok: boolean;
+  reason?: string;
+};
+
 export type CreateXAdapterOptions = {
   composeConfirmTimeoutMs?: number;
   grokResponseTimeoutMs?: number;
@@ -262,6 +267,28 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
       properties: {
         url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
         id: { type: "string", description: "Tweet id. Used when url is not provided." },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "tweet.thread.get",
+    description: "Read one tweet thread by url or id",
+    inputSchema: {
+      type: "object",
+      description: "Fetch the focal tweet and nearby replies from a tweet detail thread.",
+      properties: {
+        url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
+        id: { type: "string", description: "Tweet id. Used when url is not provided." },
+        limit: {
+          type: "integer",
+          description: `Maximum number of thread tweets to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
+        },
       },
       additionalProperties: false,
     },
@@ -660,8 +687,17 @@ type TweetCard = {
   createdAt?: string;
 };
 
+type TimelineItem = {
+  id: string;
+  text: string;
+  url?: string;
+  kind?: string;
+  summary?: string;
+  tweetText?: string;
+};
+
 type TimelinePage = {
-  items: TweetCard[];
+  items: TimelineItem[];
   source: "network" | "dom";
   hasMore: boolean;
   nextCursor?: string;
@@ -669,6 +705,71 @@ type TimelinePage = {
     reason: string;
   };
 };
+
+function normalizeInlineText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function enrichNotificationItem(item: TimelineItem): TimelineItem {
+  const text = normalizeInlineText(item.text);
+  const summary = item.summary ? normalizeInlineText(item.summary) : undefined;
+  const tweetText = item.tweetText ? normalizeInlineText(item.tweetText) : undefined;
+  const next: TimelineItem = {
+    id: item.id,
+    text,
+  };
+  if (item.url) {
+    next.url = item.url;
+  }
+  if (summary) {
+    next.summary = summary;
+  }
+  if (tweetText) {
+    next.tweetText = tweetText;
+  }
+  if (item.kind) {
+    next.kind = item.kind;
+  }
+
+  const likeMatch = text.match(/^(.+?liked your post·\s*\S+)\s+(?:Article\s+)?(.+)$/i);
+  if (likeMatch?.[1] && likeMatch[2]) {
+    next.kind = next.kind ?? "like";
+    next.summary = next.summary ?? normalizeInlineText(likeMatch[1]);
+    next.tweetText = next.tweetText ?? normalizeInlineText(likeMatch[2]);
+    next.text = next.tweetText;
+    return next;
+  }
+
+  const repostMatch = text.match(/^(.+?reposted(?: your post)?·\s*\S+)\s+(.+)$/i);
+  if (repostMatch?.[1] && repostMatch[2]) {
+    next.kind = next.kind ?? "repost";
+    next.summary = next.summary ?? normalizeInlineText(repostMatch[1]);
+    next.tweetText = next.tweetText ?? normalizeInlineText(repostMatch[2]);
+    next.text = next.tweetText;
+    return next;
+  }
+
+  const replyMatch = text.match(/^(.+?Replying to @\w+(?:.*?·\s*\S+)?)\s+(.+)$/i);
+  if (replyMatch?.[1] && replyMatch[2]) {
+    next.kind = next.kind ?? "reply";
+    next.summary = next.summary ?? normalizeInlineText(replyMatch[1]);
+    next.tweetText = next.tweetText ?? normalizeInlineText(replyMatch[2]);
+    next.text = next.tweetText;
+    return next;
+  }
+
+  const followMatch = text.match(/^(.+?followed you(?:·\s*\S+)?)$/i);
+  if (followMatch?.[1]) {
+    next.kind = next.kind ?? "follow";
+    next.summary = next.summary ?? normalizeInlineText(followMatch[1]);
+    return next;
+  }
+
+  if (!next.kind && next.url) {
+    next.kind = "mention";
+  }
+  return next;
+}
 
 type ReadPageKey = string;
 type ProcessTemplateBucket = TimelineMode;
@@ -1122,6 +1223,157 @@ async function extractTweetCards(
   return cards;
 }
 
+async function extractNotificationCards(
+  page: Page,
+  limit: number,
+): Promise<Array<{ id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string }>> {
+  return await page.evaluate(({ op, maxItems }) => {
+    if (op !== "extract_notifications") {
+      return [];
+    }
+
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const classifySummary = (value: string): string => {
+      const text = value.toLowerCase();
+      if (text.includes("followed you")) return "follow";
+      if (text.includes("liked your post")) return "like";
+      if (text.includes("reposted your post") || text.includes("reposted")) return "repost";
+      if (text.includes("replying to @") || text.includes("replied")) return "reply";
+      if (text.includes("@")) return "mention";
+      return "notification";
+    };
+    const isGenericHelperText = (value: string): boolean => {
+      const text = value.toLowerCase();
+      return (
+        text.includes("control which conversations you're mentioned in") ||
+        text.includes("control which conversations you’re mentioned in") ||
+        (text.includes("learn more") && text.includes("mentioned"))
+      );
+    };
+    const scoreItem = (value: { text: string; summary?: string; tweetText?: string }): number => {
+      const text = normalize(value.text);
+      let score = text.length;
+      if (value.summary) {
+        score += 100;
+      }
+      if (value.tweetText) {
+        score += 60;
+      }
+      return score;
+    };
+    const pickPreferred = (
+      current:
+        | { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string }
+        | undefined,
+      next: { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string },
+    ): { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string } => {
+      if (!current) {
+        return next;
+      }
+      return scoreItem(next) < scoreItem(current) ? next : current;
+    };
+
+    const byKey = new Map<
+      string,
+      { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string }
+    >();
+    const pushItem = (item: {
+      id: string;
+      text: string;
+      url?: string;
+      kind?: string;
+      summary?: string;
+      tweetText?: string;
+    }): void => {
+      const text = normalize(item.text);
+      if (!text || isGenericHelperText(text)) {
+        return;
+      }
+      const normalizedItem: {
+        id: string;
+        text: string;
+        url?: string;
+        kind?: string;
+        summary?: string;
+        tweetText?: string;
+      } = {
+        id: item.id,
+        text,
+      };
+      if (item.url) {
+        normalizedItem.url = item.url;
+      }
+      if (item.kind) {
+        normalizedItem.kind = item.kind;
+      }
+      if (item.summary) {
+        normalizedItem.summary = normalize(item.summary);
+      }
+      if (item.tweetText) {
+        normalizedItem.tweetText = normalize(item.tweetText);
+      }
+      const dedupeKey = item.url ? `url:${item.url}` : `text:${text.toLowerCase()}`;
+      byKey.set(dedupeKey, pickPreferred(byKey.get(dedupeKey), normalizedItem));
+    };
+
+    const articles = Array.from(document.querySelectorAll<HTMLElement>("article"));
+    for (const article of articles) {
+      const statusAnchor = article.querySelector<HTMLAnchorElement>("a[href*='/status/']");
+      const url = statusAnchor?.href;
+      const id = url?.match(/status\/(\d+)/)?.[1] ?? `article-${byKey.size + 1}`;
+      const textNodes = Array.from(article.querySelectorAll<HTMLElement>("[data-testid='tweetText'], div[lang], div[dir='auto']"));
+      const tweetText = normalize(textNodes.map((node) => node.textContent || "").join(" "));
+      const fallbackText = normalize(article.innerText || article.textContent || "");
+      const summary = tweetText ? normalize(fallbackText.replace(tweetText, "")) : "";
+      const item: { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string } = {
+        id,
+        text: tweetText || fallbackText,
+      };
+      if (url) {
+        item.url = url;
+      }
+      if (summary) {
+        item.summary = summary;
+        item.kind = classifySummary(summary);
+      }
+      if (tweetText) {
+        item.tweetText = tweetText;
+      }
+      pushItem(item);
+    }
+
+    if (byKey.size < maxItems) {
+      const cells = Array.from(document.querySelectorAll<HTMLElement>("[data-testid='cellInnerDiv']"));
+      for (const cell of cells) {
+        const fallbackText = normalize(cell.innerText || cell.textContent || "");
+        const tweetNode = cell.querySelector<HTMLElement>("[data-testid='tweetText'], div[lang], div[dir='auto']");
+        const tweetText = normalize(tweetNode?.innerText || tweetNode?.textContent || "");
+        const summary = tweetText ? normalize(fallbackText.replace(tweetText, "")) : "";
+        const statusAnchor = cell.querySelector<HTMLAnchorElement>("a[href*='/status/']");
+        const url = statusAnchor?.href;
+        const id = url?.match(/status\/(\d+)/)?.[1] ?? `cell-${byKey.size + 1}`;
+        const item: { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string } = {
+          id,
+          text: tweetText || fallbackText,
+        };
+        if (url) {
+          item.url = url;
+        }
+        if (summary) {
+          item.summary = summary;
+          item.kind = classifySummary(summary);
+        }
+        if (tweetText) {
+          item.tweetText = tweetText;
+        }
+        pushItem(item);
+      }
+    }
+
+    return Array.from(byKey.values()).slice(0, maxItems);
+  }, { op: "extract_notifications", maxItems: limit });
+}
+
 async function withEphemeralReadOnlyPage<T>(page: Page, url: string, run: (readPage: Page) => Promise<T>): Promise<T> {
   const context = page.context();
   const readPage = await context.newPage();
@@ -1247,9 +1499,9 @@ async function waitForTweetSurface(page: Page): Promise<void> {
   await page.waitForTimeout(1_000);
 }
 
-function mapTweetCards(items: TweetCard[]): Array<{ id: string; text: string; url?: string }> {
+function mapTweetCards(items: TweetCard[]): TimelineItem[] {
   return items.map((item) => {
-    const mapped: { id: string; text: string; url?: string } = {
+    const mapped: TimelineItem = {
       id: item.id,
       text: item.text,
     };
@@ -1353,11 +1605,71 @@ async function readTweetByUrl(page: Page, url: string): Promise<JsonValue> {
   });
 }
 
+async function readTweetThreadByUrl(page: Page, url: string, limit: number): Promise<JsonValue> {
+  return await withEphemeralReadOnlyPage(page, url, async (readPage) => {
+    const matchId = url.match(/status\/(\d+)/)?.[1];
+    const merged = new Map<string, TimelineItem>();
+
+    const getThreadKey = (item: TimelineItem): string => {
+      if (item.id && !item.id.startsWith("article-") && !item.id.startsWith("cell-")) {
+        return `id:${item.id}`;
+      }
+      if (item.url) {
+        const statusId = item.url.match(/status\/(\d+)/)?.[1];
+        if (statusId) {
+          return `id:${statusId}`;
+        }
+        return `url:${item.url}`;
+      }
+      return `text:${item.text}`;
+    };
+
+    const pickPreferredItem = (current: TimelineItem | undefined, next: TimelineItem): TimelineItem => {
+      if (!current) {
+        return next;
+      }
+      const currentScore = (current.url ? 10 : 0) + current.text.length;
+      const nextScore = (next.url ? 10 : 0) + next.text.length;
+      return nextScore > currentScore ? next : current;
+    };
+
+    const mergeItems = (items: TimelineItem[]): void => {
+      for (const item of items) {
+        const key = getThreadKey(item);
+        merged.set(key, pickPreferredItem(merged.get(key), item));
+      }
+    };
+
+    if (matchId) {
+      const fromNetwork = await readTimelineViaNetwork(readPage, {
+        mode: "tweet",
+        limit,
+        tweetId: matchId,
+      });
+      if (fromNetwork.items.length > 0) {
+        mergeItems(mapTweetCards(fromNetwork.items));
+      }
+    }
+
+    const domCards = await extractTweetCards(readPage, Math.max(limit, 20));
+    mergeItems(mapTweetCards(domCards));
+
+    const tweets = Array.from(merged.values()).slice(0, limit);
+    if (tweets.length === 0) {
+      return errorResult("UPSTREAM_CHANGED", "tweet thread content not found");
+    }
+    return {
+      tweets,
+      source: matchId ? "network" : "dom",
+    };
+  });
+}
+
 async function readNotifications(page: Page, limit: number): Promise<TimelinePage> {
   await waitForTweetSurface(page);
-  const cards = await extractTweetCards(page, limit);
+  const cards = await extractNotificationCards(page, limit);
   return {
-    items: mapTweetCards(cards),
+    items: cards.map(enrichNotificationItem),
     source: "dom",
     hasMore: false,
     debug: {
@@ -1651,94 +1963,249 @@ async function ensureReplyComposerReady(page: Page): Promise<void> {
 }
 
 async function composeReply(page: Page, text: string, dryRun: boolean): Promise<ReplyComposeDomResult> {
-  return await page.evaluate(
-    ({ op, content, dryRunMode }) => {
-      if (op !== "reply_compose") {
-        return { ok: false, reason: "invalid_operation" };
-      }
+  const composerSelectors = [
+    "div[data-testid='tweetTextarea_0']",
+    "div[role='textbox'][data-testid='tweetTextarea_0']",
+    "div[role='textbox'][aria-label*='Reply']",
+    "div[role='textbox'][aria-label*='Post your reply']",
+    "div[role='textbox'][aria-label*='Post text']",
+  ];
+  const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
 
-      const pickFirst = (selectors: string[]): HTMLElement | null => {
+  let composerSelector: string | undefined;
+  for (const selector of composerSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 800 }).catch(() => null);
+    if (!handle) {
+      continue;
+    }
+    await handle.dispose().catch(() => {});
+    composerSelector = selector;
+    break;
+  }
+
+  if (!composerSelector) {
+    return { ok: false, reason: "composer_not_found" };
+  }
+
+  try {
+    await page.click(composerSelector);
+    await page.keyboard.press(selectAllShortcut).catch(() => {});
+    await page.keyboard.press("Backspace").catch(() => {});
+    await page.type(composerSelector, text, { delay: 12 });
+  } catch {
+    return { ok: false, reason: "compose_input_failed" };
+  }
+
+  const submitVisible = await waitForReplySubmitReady(page, 2_000);
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      submitVisible,
+    };
+  }
+
+  if (!submitVisible) {
+    return { ok: false, reason: "submit_not_found" };
+  }
+
+  return {
+    ok: true,
+    submitVisible: true,
+  };
+}
+
+async function waitForReplySubmitReady(page: Page, timeoutMs: number): Promise<boolean> {
+  try {
+    await page.waitForFunction(
+      ({ op }) => {
+        if (op !== "reply_submit_ready") {
+          return false;
+        }
+
+        const selectors = [
+          "[data-testid='tweetButtonInline']",
+          "[data-testid='tweetButton']",
+          "div[data-testid='toolBar'] [data-testid='tweetButtonInline']",
+        ];
+
+        const isEnabled = (element: HTMLElement | null): boolean => {
+          if (!element) {
+            return false;
+          }
+          if (element instanceof HTMLButtonElement) {
+            return !element.disabled;
+          }
+          const ariaDisabled = (element.getAttribute("aria-disabled") ?? "").toLowerCase();
+          return ariaDisabled !== "true";
+        };
+
+        const composerSelectors = [
+          "div[data-testid='tweetTextarea_0']",
+          "div[role='textbox'][data-testid='tweetTextarea_0']",
+          "div[role='textbox'][aria-label*='Reply']",
+          "div[role='textbox'][aria-label*='Post your reply']",
+          "div[role='textbox'][aria-label*='Post text']",
+        ];
+
+        const findNearestSubmit = (composer: HTMLElement | null): HTMLElement | null => {
+          if (!composer) {
+            return null;
+          }
+          const roots = [
+            composer.closest<HTMLElement>("[role='dialog']"),
+            composer.closest<HTMLElement>("form"),
+            composer.closest<HTMLElement>("article"),
+            composer.parentElement,
+            composer.parentElement?.parentElement,
+            document.body,
+          ];
+
+          for (const root of roots) {
+            if (!root) {
+              continue;
+            }
+            for (const selector of selectors) {
+              const element = root.querySelector<HTMLElement>(selector);
+              if (isEnabled(element)) {
+                return element;
+              }
+            }
+          }
+          return null;
+        };
+
+        let composer: HTMLElement | null = null;
+        for (const selector of composerSelectors) {
+          composer = document.querySelector<HTMLElement>(selector);
+          if (composer) {
+            break;
+          }
+        }
+
+        if (findNearestSubmit(composer)) {
+          return true;
+        }
+
         for (const selector of selectors) {
           const element = document.querySelector<HTMLElement>(selector);
-          if (element) {
+          if (isEnabled(element)) {
+            return true;
+          }
+        }
+        return false;
+      },
+      { op: "reply_submit_ready" },
+      { timeout: Math.max(1_500, Math.min(timeoutMs, 6_000)) },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function submitReply(page: Page): Promise<SubmitDomResult> {
+  return await page.evaluate(({ op }) => {
+    if (op !== "reply_submit") {
+      return { ok: false, reason: "invalid_operation" };
+    }
+
+    const composerSelectors = [
+      "div[data-testid='tweetTextarea_0']",
+      "div[role='textbox'][data-testid='tweetTextarea_0']",
+      "div[role='textbox'][aria-label*='Reply']",
+      "div[role='textbox'][aria-label*='Post your reply']",
+      "div[role='textbox'][aria-label*='Post text']",
+    ];
+    const selectors = [
+      "[data-testid='tweetButtonInline']",
+      "[data-testid='tweetButton']",
+      "div[data-testid='toolBar'] [data-testid='tweetButtonInline']",
+    ];
+
+    const isEnabled = (element: HTMLElement | null): boolean => {
+      if (!element) {
+        return false;
+      }
+      if (element instanceof HTMLButtonElement) {
+        return !element.disabled;
+      }
+      const ariaDisabled = (element.getAttribute("aria-disabled") ?? "").toLowerCase();
+      return ariaDisabled !== "true";
+    };
+
+    const findNearestSubmit = (composer: HTMLElement | null): HTMLElement | null => {
+      if (!composer) {
+        return null;
+      }
+      const roots = [
+        composer.closest<HTMLElement>("[role='dialog']"),
+        composer.closest<HTMLElement>("form"),
+        composer.closest<HTMLElement>("article"),
+        composer.parentElement,
+        composer.parentElement?.parentElement,
+        document.body,
+      ];
+
+      for (const root of roots) {
+        if (!root) {
+          continue;
+        }
+        for (const selector of selectors) {
+          const element = root.querySelector<HTMLElement>(selector);
+          if (isEnabled(element)) {
             return element;
           }
         }
-        return null;
-      };
-
-      const setText = (target: HTMLElement, value: string): boolean => {
-        target.focus();
-
-        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-          target.value = value;
-          target.dispatchEvent(new Event("input", { bubbles: true }));
-          target.dispatchEvent(new Event("change", { bubbles: true }));
-          return true;
-        }
-
-        if (target.isContentEditable) {
-          try {
-            const selection = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(target);
-            selection?.removeAllRanges();
-            selection?.addRange(range);
-            document.execCommand("insertText", false, value);
-          } catch {
-            // Ignore and fall back to direct assignment below.
-          }
-
-          if ((target.textContent ?? "").trim() !== value) {
-            target.textContent = value;
-          }
-          target.dispatchEvent(new InputEvent("input", { bubbles: true, data: value }));
-          return true;
-        }
-
-        return false;
-      };
-
-      const composerSelectors = [
-        "div[data-testid='tweetTextarea_0']",
-        "div[role='textbox'][data-testid='tweetTextarea_0']",
-        "div[role='textbox'][aria-label*='Reply']",
-        "div[role='textbox'][aria-label*='Post your reply']",
-        "div[role='textbox'][aria-label*='Post text']",
-      ];
-      const submitSelectors = [
-        "[data-testid='tweetButtonInline']",
-        "[data-testid='tweetButton']",
-        "div[data-testid='toolBar'] [data-testid='tweetButtonInline']",
-      ];
-
-      const composer = pickFirst(composerSelectors);
-      if (!composer) {
-        return { ok: false, reason: "composer_not_found" };
       }
+      return null;
+    };
 
-      if (!setText(composer, content)) {
-        return { ok: false, reason: "compose_input_failed" };
+    let composer: HTMLElement | null = null;
+    for (const selector of composerSelectors) {
+      composer = document.querySelector<HTMLElement>(selector);
+      if (composer) {
+        break;
       }
+    }
 
-      const submit = pickFirst(submitSelectors);
-      if (dryRunMode) {
-        return {
-          ok: true,
-          dryRun: true,
-          submitVisible: submit !== null,
-        };
-      }
-
-      if (!submit) {
-        return { ok: false, reason: "submit_not_found" };
-      }
-
-      submit.click();
+    const nearestSubmit = findNearestSubmit(composer);
+    if (nearestSubmit) {
+      nearestSubmit.click();
       return { ok: true };
-    },
-    { op: "reply_compose", content: text, dryRunMode: dryRun },
-  );
+    }
+
+    for (const selector of selectors) {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!isEnabled(element)) {
+        continue;
+      }
+      element?.click();
+      return { ok: true };
+    }
+
+    return { ok: false, reason: "submit_not_found" };
+  }, { op: "reply_submit" });
+}
+
+async function waitForReplyConfirmation(
+  page: Page,
+  targetUrl: string,
+  text: string,
+  timeoutMs: number,
+): Promise<{ confirmed: boolean; statusUrl?: string }> {
+  const firstPassTimeoutMs = Math.max(2_500, Math.min(timeoutMs, 5_000));
+  const firstPass = await waitForComposeConfirmation(page, text, firstPassTimeoutMs);
+  if (firstPass.confirmed) {
+    return firstPass;
+  }
+
+  await page.waitForTimeout(1_000);
+  await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await waitForTweetSurface(page);
+
+  const secondPassTimeoutMs = Math.max(2_500, timeoutMs - firstPassTimeoutMs);
+  return await waitForComposeConfirmation(page, text, secondPassTimeoutMs);
 }
 
 async function waitForGrokSurface(page: Page): Promise<void> {
@@ -1965,7 +2432,21 @@ async function replyToTweet(
       };
     }
 
-    const confirmation = await waitForComposeConfirmation(replyPage, text, timeoutMs);
+    const submitReady = await waitForReplySubmitReady(replyPage, timeoutMs);
+    if (!submitReady) {
+      return errorResult("UPSTREAM_CHANGED", "reply controls not ready", {
+        reason: "submit_not_ready",
+      });
+    }
+
+    const submitResult = await submitReply(replyPage);
+    if (!submitResult.ok) {
+      return errorResult("UPSTREAM_CHANGED", "reply controls not found", {
+        reason: submitResult.reason ?? "unknown",
+      });
+    }
+
+    const confirmation = await waitForReplyConfirmation(replyPage, targetUrl, text, timeoutMs);
     if (!confirmation.confirmed) {
       return errorResult("ACTION_UNCONFIRMED", "reply submit was not confirmed in timeline");
     }
@@ -2073,6 +2554,21 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
           return errorResult("VALIDATION_ERROR", "url or id is required");
         }
         return await readTweetByUrl(page, targetUrl);
+      }
+
+      if (name === "tweet.thread.get") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const targetUrl = url || (id ? `https://x.com/i/web/status/${id}` : "");
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const limit = normalizeTimelineLimit(args);
+        return await readTweetThreadByUrl(page, targetUrl, limit);
       }
 
       if (name === "favorites.list") {
