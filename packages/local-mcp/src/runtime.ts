@@ -11,6 +11,7 @@ import {
   createWebMcpPageGateway,
   type CreateWebMcpPageGatewayOptions,
   type WebMcpPageGateway,
+  type WebMcpResourceDefinition,
   type WebMcpToolDefinition,
 } from "@webmcp-bridge/playwright";
 import {
@@ -211,8 +212,10 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   let gatewayStale = false;
   let runtimeClosing = false;
   let pageLifecycleCleanup: (() => void) | undefined;
+  let pageGatewayResourceCleanup: (() => void) | undefined;
   let ownerSessionEndedResolved = false;
   let resolveOwnerSessionEnded!: () => void;
+  const resourceUpdatedListeners = new Set<(uri: string) => void>();
   const ownerSessionEnded = new Promise<void>((resolve) => {
     resolveOwnerSessionEnded = resolve;
   });
@@ -229,6 +232,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     await currentGatewaySession?.close().catch(() => {
       // Cleanup should be best-effort when process is terminating.
     });
+    pageGatewayResourceCleanup?.();
     pageLifecycleCleanup?.();
     await context?.close().catch(() => {
       // Cleanup should be best-effort when process is terminating.
@@ -305,6 +309,12 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     }
 
     currentGatewaySession = await createWebMcpPageGateway(currentPage, gatewayOptions);
+    pageGatewayResourceCleanup?.();
+    pageGatewayResourceCleanup = currentGatewaySession.onResourceUpdated((uri) => {
+      for (const listener of resourceUpdatedListeners) {
+        listener(uri);
+      }
+    });
     if (navigate && currentGatewaySession.mode === "polyfill") {
       try {
         await currentPage.reload({
@@ -422,6 +432,24 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         return await withGatewayRecovery(
           async () => await currentGatewaySession!.callTool(name, input as JsonValue),
         );
+      },
+      listResources: async (): Promise<ReadonlyArray<WebMcpResourceDefinition>> => {
+        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+          throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        return await withGatewayRecovery(async () => await currentGatewaySession!.listResources());
+      },
+      readResource: async (uri: string): Promise<JsonValue> => {
+        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+          throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        return await withGatewayRecovery(async () => await currentGatewaySession!.readResource(uri));
+      },
+      onResourceUpdated: (listener) => {
+        resourceUpdatedListeners.add(listener);
+        return () => {
+          resourceUpdatedListeners.delete(listener);
+        };
       },
     };
 

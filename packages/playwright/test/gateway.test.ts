@@ -6,18 +6,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWebMcpPageGateway } from "../src/index.js";
 
-function createMockPage(mode: "native" | "polyfill", tools: unknown[] = []) {
+function createMockPage(
+  mode: "native" | "polyfill",
+  tools: unknown[] = [],
+  resources: unknown[] = [],
+) {
   const listeners = new Map<string, Array<() => void>>();
-  let noArgFunctionCallCount = 0;
+  const exposedFunctions = new Map<string, (...args: unknown[]) => unknown>();
   const page = {
     addInitScript: vi.fn<(...args: [string]) => Promise<void>>(async () => {}),
     exposeFunction: vi.fn<(...args: [string, (...args: unknown[]) => unknown]) => Promise<void>>(
-      async () => {},
+      async (name: string, fn: (...args: unknown[]) => unknown) => {
+        exposedFunctions.set(name, fn);
+      },
     ),
     evaluate: vi.fn(async (script: string | ((...args: unknown[]) => unknown), payload?: unknown) => {
       if (typeof script !== "function") {
         return undefined;
       }
+      const source = script.toString();
       if (
         payload &&
         typeof payload === "object" &&
@@ -26,9 +33,22 @@ function createMockPage(mode: "native" | "polyfill", tools: unknown[] = []) {
       ) {
         return { ok: true, name: (payload as { callName: string }).callName };
       }
-      noArgFunctionCallCount += 1;
-      if (noArgFunctionCallCount === 1) {
+      if (
+        payload &&
+        typeof payload === "object" &&
+        "resourceUri" in payload &&
+        typeof (payload as { resourceUri?: unknown }).resourceUri === "string"
+      ) {
+        return {
+          uri: (payload as { resourceUri: string }).resourceUri,
+          ok: true,
+        };
+      }
+      if (source.includes("__WEBMCP_BRIDGE_MODE__")) {
         return mode;
+      }
+      if (source.includes("listResources")) {
+        return resources;
       }
       return tools;
     }),
@@ -45,7 +65,7 @@ function createMockPage(mode: "native" | "polyfill", tools: unknown[] = []) {
       );
     }),
   };
-  return { page };
+  return { page, exposedFunctions };
 }
 
 describe("createWebMcpPageGateway", () => {
@@ -92,12 +112,49 @@ describe("createWebMcpPageGateway", () => {
     });
   });
 
+  it("lists and reads resources from page-hosted providers", async () => {
+    const { page } = createMockPage(
+      "polyfill",
+      [{ name: "site.tool" }],
+      [{ uri: "board://local/interactions", name: "Board Interactions" }],
+    );
+    const gateway = await createWebMcpPageGateway(page as never);
+
+    await expect(gateway.listResources()).resolves.toEqual([
+      { uri: "board://local/interactions", name: "Board Interactions" },
+    ]);
+    await expect(gateway.readResource("board://local/interactions")).resolves.toEqual({
+      uri: "board://local/interactions",
+      ok: true,
+    });
+  });
+
+  it("forwards page resource updates to gateway listeners", async () => {
+    const { page, exposedFunctions } = createMockPage("polyfill", []);
+    const gateway = await createWebMcpPageGateway(page as never);
+    const listener = vi.fn();
+    const unsubscribe = gateway.onResourceUpdated(listener);
+
+    const resourceUpdatedHandler = [...exposedFunctions.entries()].find(([name]) =>
+      name.startsWith("__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED__"),
+    )?.[1];
+    expect(resourceUpdatedHandler).toBeTypeOf("function");
+
+    await resourceUpdatedHandler?.("board://local/interactions");
+    expect(listener).toHaveBeenCalledWith("board://local/interactions");
+
+    unsubscribe();
+    await resourceUpdatedHandler?.("board://local/interactions");
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("injects polyfill listTools support for page-hosted providers", async () => {
     const { page } = createMockPage("polyfill", []);
     await createWebMcpPageGateway(page as never);
 
     const initScripts = page.addInitScript.mock.calls.map(([script]) => String(script));
     expect(initScripts.some((script) => script.includes("listTools: async"))).toBe(true);
+    expect(initScripts.some((script) => script.includes("listResources: async"))).toBe(true);
     expect(initScripts.some((script) => script.includes("globalAny.__webmcpBridge ="))).toBe(true);
   });
 });

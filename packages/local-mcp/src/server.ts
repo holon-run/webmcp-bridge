@@ -9,15 +9,22 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+  SubscribeRequestSchema,
+  UnsubscribeRequestSchema,
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { WebMcpToolDefinition } from "@webmcp-bridge/playwright";
+import type { WebMcpResourceDefinition, WebMcpToolDefinition } from "@webmcp-bridge/playwright";
 import type { Readable, Writable } from "node:stream";
 import type { McpToolDefinition } from "./mcp-types.js";
 
 export type LocalMcpGateway = {
   listTools: () => Promise<ReadonlyArray<WebMcpToolDefinition>>;
   callTool: (name: string, input: Record<string, unknown>) => Promise<JsonValue>;
+  listResources: () => Promise<ReadonlyArray<WebMcpResourceDefinition>>;
+  readResource: (uri: string) => Promise<JsonValue>;
+  onResourceUpdated: (listener: (uri: string) => void) => () => void;
 };
 
 export type LocalBridgeControl = {
@@ -52,6 +59,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private started = false;
   private closed = false;
   private lastToolsSignature: string | undefined;
+  private readonly subscribedResourceUris = new Set<string>();
+  private readonly unsubscribeResourceUpdates: () => void;
 
   constructor(options: LocalMcpStdioServerOptions) {
     this.transport = new StdioServerTransport(options.input, options.output);
@@ -69,9 +78,16 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
           tools: {
             listChanged: true,
           },
+          resources: {
+            subscribe: true,
+          },
         },
       },
     );
+
+    this.unsubscribeResourceUpdates = options.gateway.onResourceUpdated((uri) => {
+      void this.notifyResourceUpdated(uri);
+    });
 
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       const tools = await this.listAllTools(options);
@@ -90,6 +106,30 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       await this.notifyIfToolsChanged(options.gateway, previousSignature);
       return this.toCallToolResult(toolResult);
     });
+
+    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
+      const resources = await options.gateway.listResources();
+      return {
+        resources: resources.map((resource) => this.toMcpResourceDefinition(resource)),
+      };
+    });
+
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      const resource = await options.gateway.readResource(request.params.uri);
+      return {
+        contents: [this.toMcpResourceContents(request.params.uri, resource, await this.resolveResourceMimeType(options.gateway, request.params.uri))],
+      };
+    });
+
+    this.server.setRequestHandler(SubscribeRequestSchema, async (request) => {
+      this.subscribedResourceUris.add(request.params.uri);
+      return {};
+    });
+
+    this.server.setRequestHandler(UnsubscribeRequestSchema, async (request) => {
+      this.subscribedResourceUris.delete(request.params.uri);
+      return {};
+    });
   }
 
   async start(): Promise<void> {
@@ -105,6 +145,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       return;
     }
     this.closed = true;
+    this.unsubscribeResourceUpdates();
     await this.server.close();
   }
 
@@ -129,6 +170,27 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       return value as Record<string, unknown>;
     }
     return {};
+  }
+
+  private toMcpResourceDefinition(resource: WebMcpResourceDefinition): Record<string, unknown> {
+    return {
+      uri: resource.uri,
+      ...(resource.name !== undefined ? { name: resource.name } : {}),
+      ...(resource.description !== undefined ? { description: resource.description } : {}),
+      ...(resource.mimeType !== undefined ? { mimeType: resource.mimeType } : {}),
+    };
+  }
+
+  private toMcpResourceContents(
+    uri: string,
+    value: JsonValue,
+    mimeType: string | undefined,
+  ): Record<string, unknown> {
+    return {
+      uri,
+      mimeType: mimeType ?? "application/json",
+      text: typeof value === "string" ? value : JSON.stringify(value, null, 2),
+    };
   }
 
   private toStructuredContent(value: JsonValue): Record<string, unknown> {
@@ -219,6 +281,23 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     await this.server.sendToolListChanged().catch(() => {
       // Ignore when client does not advertise listChanged support or session is not notification-ready.
+    });
+  }
+
+  private async resolveResourceMimeType(
+    gateway: LocalMcpGateway,
+    uri: string,
+  ): Promise<string | undefined> {
+    const resources = await gateway.listResources();
+    return resources.find((resource) => resource.uri === uri)?.mimeType;
+  }
+
+  private async notifyResourceUpdated(uri: string): Promise<void> {
+    if (!this.subscribedResourceUris.has(uri)) {
+      return;
+    }
+    await this.server.sendResourceUpdated({ uri }).catch(() => {
+      // Ignore when client has not completed initialization or is not notification-ready.
     });
   }
 

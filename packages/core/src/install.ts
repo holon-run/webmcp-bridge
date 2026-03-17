@@ -7,6 +7,7 @@ import { createBridgeRuntime } from "./runtime.js";
 import type {
   BridgeHandle,
   BridgeInstallTarget,
+  BridgeResourceDefinition,
   BridgeToolDefinition,
   BridgeTransport,
   JsonValue,
@@ -25,7 +26,9 @@ export function isNativeModelContext(target: BridgeInstallTarget): boolean {
   }
   return (
     typeof modelContext.registerTool === "function" &&
-    typeof modelContext.unregisterTool === "function"
+    typeof modelContext.unregisterTool === "function" &&
+    typeof modelContext.registerResource === "function" &&
+    typeof modelContext.unregisterResource === "function"
   );
 }
 
@@ -47,6 +50,14 @@ export function installModelContextBridge(
         }
         return await nativeAny.callTool(name, input);
       },
+      listResources: () => [],
+      readResource: async (uri: string) => {
+        const nativeAny = native as unknown as { readResource?: (resourceUri: string) => Promise<JsonValue> };
+        if (typeof nativeAny.readResource !== "function") {
+          throw new Error("native modelContext readResource is not available");
+        }
+        return await nativeAny.readResource(uri);
+      },
       uninstall: () => {
         // no-op for native mode
       },
@@ -67,6 +78,8 @@ export function installModelContextBridge(
     mode: "shim",
     listTools: () => runtime.listTools(),
     invokeTool: (name, input) => runtime.invokeTool(name, input),
+    listResources: () => runtime.listResources(),
+    readResource: (uri) => runtime.readResource(uri),
     uninstall: () => {
       runtime.clear();
       if (previous) {
@@ -96,4 +109,16 @@ export function defineLocalTool(
     tool.description = description;
   }
   return tool;
+}
+
+export function defineLocalResource(
+  uri: string,
+  read: BridgeResourceDefinition["read"],
+  options?: Omit<BridgeResourceDefinition, "uri" | "read">,
+): BridgeResourceDefinition {
+  return {
+    uri,
+    read,
+    ...(options ?? {}),
+  };
 }

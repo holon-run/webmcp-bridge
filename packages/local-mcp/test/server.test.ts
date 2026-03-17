@@ -34,6 +34,18 @@ describe("createLocalMcpStdioServer", () => {
       },
     ]),
     callTool: vi.fn(async (name: string): Promise<JsonValue> => ({ ok: true, name })),
+    listResources: vi.fn(async () => [
+      {
+        uri: "board://local/interactions",
+        name: "Board Interactions",
+        mimeType: "application/json",
+      },
+    ]),
+    readResource: vi.fn(async () => ({
+      version: 1,
+      items: [],
+    })),
+    onResourceUpdated: vi.fn(() => () => {}),
   };
   const bridgeControl = {
     getState: vi.fn(() => ({
@@ -53,6 +65,9 @@ describe("createLocalMcpStdioServer", () => {
     outputBuffer = "";
     gateway.listTools.mockClear();
     gateway.callTool.mockClear();
+    gateway.listResources.mockClear();
+    gateway.readResource.mockClear();
+    gateway.onResourceUpdated.mockClear();
     bridgeControl.getState.mockClear();
     bridgeControl.openWindow.mockClear();
     bridgeControl.closeBridge.mockClear();
@@ -128,6 +143,9 @@ describe("createLocalMcpStdioServer", () => {
       capabilities: {
         tools: {
           listChanged: true,
+        },
+        resources: {
+          subscribe: true,
         },
       },
     });
@@ -333,6 +351,105 @@ describe("createLocalMcpStdioServer", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(frames.length).toBe(beforeCount);
+  });
+
+  it("proxies resources/list to gateway", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "6",
+      method: "resources/list",
+      params: {},
+    });
+
+    expect(gateway.listResources).toHaveBeenCalledOnce();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      resources: [{ uri: "board://local/interactions", name: "Board Interactions" }],
+    });
+  });
+
+  it("proxies resources/read to gateway", async () => {
+    gateway.readResource.mockResolvedValueOnce({
+      version: 1,
+      items: [{ id: "interaction-1", body: "Expand selection" }],
+    });
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "7",
+      method: "resources/read",
+      params: {
+        uri: "board://local/interactions",
+      },
+    });
+
+    expect(gateway.readResource).toHaveBeenCalledWith("board://local/interactions");
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      contents: [
+        {
+          uri: "board://local/interactions",
+          mimeType: "application/json",
+        },
+      ],
+    });
+    const text = "result" in response ? response.result.contents?.[0]?.text : undefined;
+    expect(typeof text).toBe("string");
+    expect(String(text)).toContain("Expand selection");
+  });
+
+  it("emits resources/updated after a subscribed resource changes", async () => {
+    const notifyResourceUpdated = gateway.onResourceUpdated.mock.calls[0]?.[0] as
+      | ((uri: string) => void)
+      | undefined;
+    expect(notifyResourceUpdated).toBeTypeOf("function");
+
+    await request({
+      jsonrpc: "2.0",
+      id: "8-init",
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          resources: {
+            subscribe: true,
+          },
+        },
+        clientInfo: {
+          name: "test-client",
+          version: "0.1.0-test",
+        },
+      },
+    });
+
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      })}\n`,
+    );
+
+    await request({
+      jsonrpc: "2.0",
+      id: "8-sub",
+      method: "resources/subscribe",
+      params: {
+        uri: "board://local/interactions",
+      },
+    });
+
+    notifyResourceUpdated?.("board://local/interactions");
+
+    await waitFor(() =>
+      frames.some((frame) => frame.method === "notifications/resources/updated"),
+    );
+    const notification = frames.find(
+      (frame) => frame.method === "notifications/resources/updated",
+    );
+    expect(notification).toMatchObject({
+      params: {
+        uri: "board://local/interactions",
+      },
+    });
   });
 
   it("emits tools/list_changed after a tool call mutates available tools", async () => {

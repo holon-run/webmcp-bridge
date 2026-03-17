@@ -3,9 +3,15 @@
  * It depends on local WebMCP types and is used by the tool registration layer so the example works in standard browsers.
  */
 
-import type { JsonValue, WebMcpModelContext, WebMcpToolDefinition } from "./types.js";
+import type {
+  JsonValue,
+  WebMcpModelContext,
+  WebMcpResourceDefinition,
+  WebMcpToolDefinition,
+} from "./types.js";
 
 const CONTEXT_KEY = "__webmcpBoardModelContext";
+const RESOURCE_UPDATED_CALLBACK_KEY = "__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED__";
 
 type MutableNavigator = Navigator & {
   modelContext?: WebMcpModelContext;
@@ -13,6 +19,7 @@ type MutableNavigator = Navigator & {
 
 type GlobalWithContext = typeof globalThis & {
   [CONTEXT_KEY]?: WebMcpModelContext;
+  [RESOURCE_UPDATED_CALLBACK_KEY]?: (uri: string) => Promise<void>;
 };
 
 export function ensureModelContext(target: typeof globalThis = globalThis): WebMcpModelContext {
@@ -22,6 +29,7 @@ export function ensureModelContext(target: typeof globalThis = globalThis): WebM
   }
 
   const tools = new Map<string, WebMcpToolDefinition>();
+  const resources = new Map<string, WebMcpResourceDefinition>();
   const providedContext: JsonValue[] = [];
 
   const modelContext: WebMcpModelContext = {
@@ -31,6 +39,7 @@ export function ensureModelContext(target: typeof globalThis = globalThis): WebM
     clearContext: async () => {
       providedContext.splice(0, providedContext.length);
       tools.clear();
+      resources.clear();
     },
     registerTool: async (tool) => {
       if (!tool.name.trim()) {
@@ -41,6 +50,15 @@ export function ensureModelContext(target: typeof globalThis = globalThis): WebM
     unregisterTool: async (name) => {
       tools.delete(name);
     },
+    registerResource: async (resource) => {
+      if (!resource.uri.trim()) {
+        throw new Error("resource.uri is required");
+      }
+      resources.set(resource.uri, resource);
+    },
+    unregisterResource: async (uri) => {
+      resources.delete(uri);
+    },
     listTools: async () => {
       return [...tools.values()];
     },
@@ -50,6 +68,19 @@ export function ensureModelContext(target: typeof globalThis = globalThis): WebM
         throw new Error(`tool not found: ${name}`);
       }
       return await tool.execute(input);
+    },
+    listResources: async () => {
+      return [...resources.values()].map(({ read: _read, ...resource }) => resource);
+    },
+    readResource: async (uri) => {
+      const resource = resources.get(uri);
+      if (!resource) {
+        throw new Error(`resource not found: ${uri}`);
+      }
+      return await resource.read();
+    },
+    notifyResourceUpdated: async (uri) => {
+      await globalWithContext[RESOURCE_UPDATED_CALLBACK_KEY]?.(uri);
     },
   };
 

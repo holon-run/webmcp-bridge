@@ -10,6 +10,7 @@ import type {
   CreateWebMcpPageGatewayOptions,
   SiteAdapter,
   WebMcpPageGateway,
+  WebMcpResourceDefinition,
   WebMcpToolDefinition,
 } from "./types.js";
 
@@ -38,12 +39,26 @@ const INJECT_SCRIPT = String.raw`
         }
         return await navAny.modelContext.callTool(String(name || ""), input || {});
       },
+      listResources: async () => {
+        if (typeof navAny.modelContext.listResources === "function") {
+          const nativeResources = await navAny.modelContext.listResources();
+          return Array.isArray(nativeResources) ? nativeResources : [];
+        }
+        return [];
+      },
+      readResource: async (uri) => {
+        if (typeof navAny.modelContext.readResource !== "function") {
+          throw new Error("native modelContext readResource is not available");
+        }
+        return await navAny.modelContext.readResource(String(uri || ""));
+      },
     };
     globalAny.__WEBMCP_BRIDGE_MODE__ = "native";
     return;
   }
 
   const tools = new Map();
+  const resources = new Map();
   const contexts = [];
 
   const modelContext = {
@@ -53,6 +68,7 @@ const INJECT_SCRIPT = String.raw`
     clearContext: async () => {
       contexts.splice(0, contexts.length);
       tools.clear();
+      resources.clear();
     },
     registerTool: async (tool) => {
       const name = tool && typeof tool.name === "string" ? tool.name : "";
@@ -67,6 +83,16 @@ const INJECT_SCRIPT = String.raw`
     unregisterTool: async (name) => {
       tools.delete(String(name || ""));
     },
+    registerResource: async (resource) => {
+      const uri = resource && typeof resource.uri === "string" ? resource.uri : "";
+      if (!uri) {
+        throw new Error("resource.uri is required");
+      }
+      resources.set(uri, resource);
+    },
+    unregisterResource: async (uri) => {
+      resources.delete(String(uri || ""));
+    },
     listTools: async () =>
       Array.from(tools.values()).map((tool) => {
         const output = {
@@ -79,6 +105,22 @@ const INJECT_SCRIPT = String.raw`
         }
         return output;
       }),
+    listResources: async () =>
+      Array.from(resources.values()).map((resource) => {
+        const output = {
+          uri: resource.uri,
+        };
+        if (typeof resource.name === "string" && resource.name.trim()) {
+          output.name = resource.name;
+        }
+        if (typeof resource.description === "string" && resource.description.trim()) {
+          output.description = resource.description;
+        }
+        if (typeof resource.mimeType === "string" && resource.mimeType.trim()) {
+          output.mimeType = resource.mimeType;
+        }
+        return output;
+      }),
     callTool: async (name, input) => {
       const local = tools.get(String(name || ""));
       if (local && typeof local.execute === "function") {
@@ -88,6 +130,18 @@ const INJECT_SCRIPT = String.raw`
         throw new Error("bridge call handler missing");
       }
       return await globalAny.__WEBMCP_BRIDGE_CALL__(String(name || ""), input || {});
+    },
+    readResource: async (uri) => {
+      const local = resources.get(String(uri || ""));
+      if (!local || typeof local.read !== "function") {
+        throw new Error("resource not found");
+      }
+      return await local.read();
+    },
+    notifyResourceUpdated: async (uri) => {
+      if (typeof globalAny.__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED__ === "function") {
+        await globalAny.__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED__(String(uri || ""));
+      }
     },
   };
 
@@ -106,6 +160,10 @@ const INJECT_SCRIPT = String.raw`
     list: async () => await modelContext.listTools(),
     invoke: async (name, input) => {
       return await modelContext.callTool(String(name || ""), input || {});
+    },
+    listResources: async () => await modelContext.listResources(),
+    readResource: async (uri) => {
+      return await modelContext.readResource(String(uri || ""));
     },
   };
 
@@ -134,6 +192,7 @@ export async function createWebMcpPageGateway(
   const reinjectOnNavigate = options?.reinjectOnNavigate ?? true;
   let fallbackStarted = false;
   let fallbackStartPromise: Promise<void> | undefined;
+  const resourceUpdatedListeners = new Set<(uri: string) => void>();
   const ensureFallbackStarted = async (): Promise<void> => {
     if (!fallbackAdapter || fallbackStarted) {
       return;
@@ -148,6 +207,7 @@ export async function createWebMcpPageGateway(
   };
 
   const exposedName = `__WEBMCP_BRIDGE_CALL__${randomUUID().replaceAll("-", "")}`;
+  const resourceUpdatedName = `__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED__${randomUUID().replaceAll("-", "")}`;
   await page.exposeFunction(exposedName, async (name: string, input: JsonValue) => {
     if (!fallbackAdapter) {
       return {
@@ -160,13 +220,21 @@ export async function createWebMcpPageGateway(
     await ensureFallbackStarted();
     return await fallbackAdapter.callTool({ name, input }, { page });
   });
+  await page.exposeFunction(resourceUpdatedName, async (uri: string) => {
+    for (const listener of resourceUpdatedListeners) {
+      listener(uri);
+    }
+  });
 
   const bindScript = `window.__WEBMCP_BRIDGE_CALL__ = window.${exposedName};`;
+  const bindResourceUpdatedScript = `window.__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED__ = window.${resourceUpdatedName};`;
 
   await page.addInitScript(INJECT_SCRIPT);
   await page.addInitScript(bindScript);
+  await page.addInitScript(bindResourceUpdatedScript);
   await page.evaluate(INJECT_SCRIPT);
   await page.evaluate(bindScript);
+  await page.evaluate(bindResourceUpdatedScript);
 
   const detectedMode = await page.evaluate(() => {
     const globalAny = window as unknown as { __WEBMCP_BRIDGE_MODE__?: "native" | "polyfill" };
@@ -184,7 +252,7 @@ export async function createWebMcpPageGateway(
   }
 
   const rebindOnNavigate = (): void => {
-    void page.evaluate(bindScript).catch(() => {
+    void Promise.all([page.evaluate(bindScript), page.evaluate(bindResourceUpdatedScript)]).catch(() => {
       // Ignore transient navigation races; the init script will rebind on next document.
     });
   };
@@ -240,6 +308,52 @@ export async function createWebMcpPageGateway(
       );
       return result as JsonValue;
     },
+    listResources: async (): Promise<WebMcpResourceDefinition[]> => {
+      if (mode === "adapter-shim") {
+        return [];
+      }
+      return await page.evaluate(async () => {
+        const globalAny = window as unknown as {
+          __webmcpBridge?: { listResources?: () => Promise<unknown> | unknown };
+        };
+        const listResources = globalAny.__webmcpBridge?.listResources;
+        if (typeof listResources !== "function") {
+          return [];
+        }
+        const resources = await listResources();
+        return Array.isArray(resources) ? resources : [];
+      });
+    },
+    readResource: async (uri: string): Promise<JsonValue> => {
+      if (mode === "adapter-shim") {
+        throw new Error("resource reads are not available in adapter-shim mode");
+      }
+      const payload: { resourceUri: string } = {
+        resourceUri: uri,
+      };
+      const result: unknown = await page.evaluate(
+        async ({ resourceUri }) => {
+          const globalAny = window as unknown as {
+            __webmcpBridge?: {
+              readResource?: (uri: string) => Promise<unknown> | unknown;
+            };
+          };
+          const readResource = globalAny.__webmcpBridge?.readResource;
+          if (typeof readResource !== "function") {
+            throw new Error("WebMCP bridge readResource handler missing");
+          }
+          return await readResource(String(resourceUri || ""));
+        },
+        payload,
+      );
+      return result as JsonValue;
+    },
+    onResourceUpdated: (listener: (uri: string) => void) => {
+      resourceUpdatedListeners.add(listener);
+      return () => {
+        resourceUpdatedListeners.delete(listener);
+      };
+    },
     close: async (): Promise<void> => {
       const session = SESSIONS.get(page);
       if (!session) {
@@ -251,6 +365,7 @@ export async function createWebMcpPageGateway(
   };
 
   const cleanup = async (): Promise<void> => {
+    resourceUpdatedListeners.clear();
     if (reinjectOnNavigate) {
       const pageEvents = page as unknown as {
         removeListener?: (event: string, listener: () => void) => unknown;

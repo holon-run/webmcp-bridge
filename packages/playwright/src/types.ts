@@ -15,6 +15,13 @@ export type WebMcpToolDefinition = {
   };
 };
 
+export type WebMcpResourceDefinition = {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+};
+
 export type AdapterManifest = {
   id: string;
   displayName: string;
@@ -50,5 +57,8 @@ export type WebMcpPageGateway = {
   page: Page;
   listTools: () => Promise<WebMcpToolDefinition[]>;
   callTool: (name: string, input: JsonValue) => Promise<JsonValue>;
+  listResources: () => Promise<WebMcpResourceDefinition[]>;
+  readResource: (uri: string) => Promise<JsonValue>;
+  onResourceUpdated: (listener: (uri: string) => void) => () => void;
   close: () => Promise<void>;
 };
