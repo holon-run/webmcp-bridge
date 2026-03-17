@@ -46,14 +46,25 @@ Without a bridge, local MCP clients cannot directly use browser-only WebMCP capa
 
 ## Agent skills
 
-If your agent workflow uses `skills`, install the `uxc` skill first, then install the bridge skills from this repository:
+If your agent workflow uses `skills`, install the `uxc` skill first, then install the bridge skills.
+
+Install from ClawHub:
+
+```bash
+clawhub install uxc
+clawhub install webmcp-bridge
+clawhub install board-webmcp
+clawhub install webmcp-adapter-creator
+```
+
+Or install directly from GitHub:
 
 ```bash
 npx -y skills@latest add holon-run/uxc --skill uxc
 npx -y skills@latest add holon-run/webmcp-bridge --skill webmcp-bridge --skill board-webmcp --skill webmcp-adapter-creator
 ```
 
-This uses the shorter GitHub shorthand supported by `skills add` and installs only the named skills instead of referencing each `SKILL.md` URL directly. The commands do not pin `--agent`, so you can choose the target agent during installation.
+The GitHub form uses the shorter shorthand supported by `skills add` and installs only the named skills instead of referencing each `SKILL.md` URL directly. The commands do not pin `--agent`, so you can choose the target agent during installation.
 
 The bridge skills depend on `uxc` because they create and use stable `uxc link` commands such as:
 
@@ -194,6 +205,8 @@ This repository includes three agent skills with distinct responsibilities:
 - `webmcp-adapter-creator`: adapter creation workflow for sites that do not expose native WebMCP. Use it to scaffold a new adapter package, design tool schemas, and implement browser-side request-template execution.
 
 These skills assume the `uxc` CLI and the `uxc` skill are already installed.
+
+They are published on ClawHub as `webmcp-bridge`, `board-webmcp`, and `webmcp-adapter-creator`.
 
 ## Adapter authoring
 
