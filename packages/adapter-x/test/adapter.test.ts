@@ -25,6 +25,7 @@ type Behavior = {
 
 function createMockPage(partial: Partial<Behavior> = {}) {
   let replyConfirmAttempts = 0;
+  let grokSubmitted = false;
   const behavior: Behavior = {
     authState: "authenticated",
     authSignals: ["authenticated_ui"],
@@ -101,11 +102,20 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (command.op === "grok_submit") {
+        grokSubmitted = true;
         return behavior.grokComposeResult;
       }
 
-      if (command.op === "grok_extract_response") {
-        return behavior.grokResponse;
+      if (command.op === "grok_extract_state") {
+        return grokSubmitted && behavior.confirmGrok
+          ? {
+              responseForPrompt: behavior.grokResponse,
+              latestResponse: behavior.grokResponse,
+            }
+          : {
+              responseForPrompt: undefined,
+              latestResponse: undefined,
+            };
       }
 
       if (typeof command.needle === "string") {
@@ -120,6 +130,8 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     type: vi.fn(async () => {}),
     waitForSelector: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
     waitForTimeout: vi.fn(async () => {}),
+    route: vi.fn(async () => {}),
+    unroute: vi.fn(async () => {}),
     waitForFunction: vi.fn(async (_fn: unknown, arg?: unknown) => {
       if (typeof arg === "string") {
         replyConfirmAttempts += 1;
@@ -223,11 +235,20 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (command.op === "grok_submit") {
+        grokSubmitted = true;
         return behavior.grokComposeResult;
       }
 
-      if (command.op === "grok_extract_response") {
-        return behavior.grokResponse;
+      if (command.op === "grok_extract_state") {
+        return grokSubmitted && behavior.confirmGrok
+          ? {
+              responseForPrompt: behavior.grokResponse,
+              latestResponse: behavior.grokResponse,
+            }
+          : {
+              responseForPrompt: undefined,
+              latestResponse: undefined,
+            };
       }
 
       if (typeof command.needle === "string") {
@@ -239,6 +260,8 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     click: vi.fn(async () => {}),
     waitForSelector: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
     waitForTimeout: vi.fn(async () => {}),
+    route: vi.fn(async () => {}),
+    unroute: vi.fn(async () => {}),
     waitForLoadState: vi.fn(async () => {}),
     reload: vi.fn(async () => {}),
     type: vi.fn(async () => {}),

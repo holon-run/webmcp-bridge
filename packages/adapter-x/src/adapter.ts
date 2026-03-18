@@ -492,11 +492,17 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     description: "Ask Grok a single prompt from the authenticated X session",
     inputSchema: {
       type: "object",
-      description: "Open Grok in the current X session, submit one prompt, and return the latest assistant reply.",
+      description:
+        "Ask Grok from the authenticated X session. Starts a new chat by default; pass conversationId to continue an existing conversation.",
       properties: {
         prompt: {
           type: "string",
           description: "Prompt text to send to Grok.",
+          minLength: 1,
+        },
+        conversationId: {
+          type: "string",
+          description: "Existing Grok conversation id. When omitted, the adapter starts a new chat before asking.",
           minLength: 1,
         },
       },
@@ -2226,185 +2232,806 @@ async function waitForGrokSurface(page: Page): Promise<void> {
 }
 
 async function submitGrokPrompt(page: Page, prompt: string): Promise<GrokComposeDomResult> {
-  return await page.evaluate(
-    ({ op, promptText }) => {
-      if (op !== "grok_submit") {
-        return { ok: false, reason: "invalid_operation" };
+  const composerSelectors = [
+    "textarea",
+    "[contenteditable='true'][role='textbox']",
+    "[role='textbox'][contenteditable='true']",
+  ];
+  const submitSelectors = [
+    "button[aria-label*='Grok something']",
+    "button[aria-label*='Send']",
+    "button[aria-label*='send']",
+    "button[data-testid*='send']",
+    "button[type='submit']",
+  ];
+  const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
+
+  let composerSelector: string | undefined;
+  for (const selector of composerSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 1_200 }).catch(() => null);
+    if (!handle) {
+      continue;
+    }
+    await handle.dispose().catch(() => {});
+    composerSelector = selector;
+    break;
+  }
+
+  if (!composerSelector) {
+    return { ok: false, reason: "composer_not_found" };
+  }
+
+  try {
+    await page.click(composerSelector);
+    await page.keyboard.press(selectAllShortcut).catch(() => {});
+    await page.keyboard.press("Backspace").catch(() => {});
+    await page.type(composerSelector, prompt, { delay: 12 });
+  } catch {
+    return { ok: false, reason: "compose_input_failed" };
+  }
+
+  const submitSelector = await page.evaluate((selectors) => {
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
+
+    for (const selector of selectors) {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) {
+        continue;
       }
-
-      const pickFirst = (selectors: string[]): HTMLElement | null => {
-        for (const selector of selectors) {
-          const element = document.querySelector<HTMLElement>(selector);
-          if (element) {
-            return element;
-          }
-        }
-        return null;
-      };
-
-      const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
-
-      const setText = (target: HTMLElement, value: string): boolean => {
-        target.focus();
-
-        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-          target.value = value;
-          target.dispatchEvent(new Event("input", { bubbles: true }));
-          target.dispatchEvent(new Event("change", { bubbles: true }));
-          return true;
-        }
-
-        if (target.isContentEditable) {
-          try {
-            const selection = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(target);
-            selection?.removeAllRanges();
-            selection?.addRange(range);
-            document.execCommand("insertText", false, value);
-          } catch {
-            // Ignore and fall back to direct assignment below.
-          }
-
-          if ((target.textContent ?? "").trim() !== value) {
-            target.textContent = value;
-          }
-          target.dispatchEvent(new InputEvent("input", { bubbles: true, data: value }));
-          return true;
-        }
-
-        return false;
-      };
-
-      const composerSelectors = [
-        "textarea",
-        "[contenteditable='true'][role='textbox']",
-        "[role='textbox'][contenteditable='true']",
-      ];
-      const submitSelectors = [
-        "button[aria-label*='Send']",
-        "button[aria-label*='send']",
-        "button[data-testid*='send']",
-        "button[type='submit']",
-      ];
-
-      const composer = pickFirst(composerSelectors);
-      if (!composer) {
-        return { ok: false, reason: "composer_not_found" };
+      if (element instanceof HTMLButtonElement && element.disabled) {
+        continue;
       }
-
-      if (!setText(composer, promptText)) {
-        return { ok: false, reason: "compose_input_failed" };
+      const ariaDisabled = (element.getAttribute("aria-disabled") ?? "").toLowerCase();
+      if (ariaDisabled === "true") {
+        continue;
       }
-
-      const submit = pickFirst(submitSelectors);
-      if (!submit) {
-        return { ok: false, reason: "submit_not_found" };
-      }
-
-      const label = normalize(submit.getAttribute("aria-label") ?? submit.textContent ?? "");
+      const label = normalize(element.getAttribute("aria-label") ?? element.textContent ?? "");
       if (label.includes("stop")) {
-        return { ok: false, reason: "submit_busy" };
+        continue;
       }
+      return selector;
+    }
+    return undefined;
+  }, submitSelectors);
 
-      submit.click();
-      return { ok: true };
-    },
-    { op: "grok_submit", promptText: prompt },
-  );
+  if (!submitSelector) {
+    return { ok: false, reason: "submit_not_found" };
+  }
+
+  try {
+    await page.click(submitSelector);
+  } catch {
+    return { ok: false, reason: "submit_click_failed" };
+  }
+
+  return { ok: true };
+}
+
+async function prepareGrokSession(page: Page, conversationId?: string): Promise<void> {
+  const targetUrl =
+    typeof conversationId === "string" && conversationId.trim().length > 0
+      ? `https://x.com/i/grok?conversation=${encodeURIComponent(conversationId.trim())}`
+      : "https://x.com/i/grok";
+
+  if (!isSameLocation(page.url(), targetUrl)) {
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  }
+
+  await waitForGrokSurface(page);
+
+  if (conversationId && conversationId.trim().length > 0) {
+    return;
+  }
+
+  const currentConversationId = (() => {
+    try {
+      return new URL(page.url()).searchParams.get("conversation") ?? undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+
+  const newChatButton = page
+    .locator("button[aria-label*='New Chat'], button:has-text('New Chat')")
+    .first();
+  if ((await newChatButton.count().catch(() => 0)) === 0) {
+    return;
+  }
+
+  await newChatButton.click({ timeout: 2_000 }).catch(() => {});
+  await page
+    .waitForFunction(
+      ({ previousConversationId }) => {
+        const currentUrl = window.location.href;
+        try {
+          const conversation = new URL(currentUrl).searchParams.get("conversation") ?? undefined;
+          if (!previousConversationId) {
+            return conversation === undefined || conversation.length === 0;
+          }
+          return conversation !== previousConversationId;
+        } catch {
+          return false;
+        }
+      },
+      { previousConversationId: currentConversationId },
+      { timeout: 5_000 },
+    )
+    .catch(() => {});
+  await page.waitForTimeout(600);
+  await waitForGrokSurface(page);
+}
+
+async function askGrokViaNetwork(
+  page: Page,
+  prompt: string,
+): Promise<{ ok: true; response: string; url: string; conversationId?: string } | undefined> {
+  let capturedResult:
+    | {
+        response: string;
+        conversationId?: string;
+      }
+    | undefined;
+
+  const routeHandler = async (route: {
+    request(): {
+      method(): string;
+    };
+    continue(options?: Record<string, unknown>): Promise<void>;
+    fetch(options?: Record<string, unknown>): Promise<{
+      status(): number;
+      text(): Promise<string>;
+    }>;
+    fulfill(options?: Record<string, unknown>): Promise<void>;
+  }) => {
+    const request = route.request();
+    if (request.method() === "OPTIONS") {
+      await route.continue().catch(() => {});
+      return;
+    }
+
+    const response = await route.fetch().catch(() => undefined);
+    if (!response) {
+      await route.continue().catch(() => {});
+      return;
+    }
+
+    const responseText = await response.text().catch(() => "");
+    const finalParts: string[] = [];
+    let conversationId: string | undefined;
+    for (const rawLine of responseText.split("\n")) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as {
+          conversationId?: string;
+          result?: {
+            message?: string;
+            messageTag?: string;
+          };
+        };
+        if (!conversationId && typeof parsed.conversationId === "string") {
+          conversationId = parsed.conversationId;
+        }
+        if (parsed?.result?.messageTag === "final" && typeof parsed.result.message === "string") {
+          finalParts.push(parsed.result.message);
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    const finalResponse = finalParts.join("").trim();
+    if (response.status() >= 200 && response.status() < 300 && finalResponse) {
+      const nextResult: { response: string; conversationId?: string } = {
+        response: finalResponse,
+      };
+      if (conversationId) {
+        nextResult.conversationId = conversationId;
+      }
+      capturedResult = nextResult;
+    }
+
+    await route.fulfill({ response }).catch(() => {});
+  };
+
+  await page.route("https://grok.x.com/2/grok/add_response.json*", routeHandler);
+
+  try {
+    const submitResult = await submitGrokPrompt(page, prompt);
+    if (!submitResult.ok) {
+      return undefined;
+    }
+
+    const start = Date.now();
+    while (!capturedResult && Date.now() - start < 10_000) {
+      await page.waitForTimeout(100);
+    }
+
+    if (capturedResult) {
+      const output: { ok: true; response: string; url: string; conversationId?: string } = {
+        ok: true,
+        response: capturedResult.response,
+        url:
+          typeof capturedResult.conversationId === "string"
+            ? `https://x.com/i/grok?conversation=${capturedResult.conversationId}`
+            : page.url(),
+      };
+      if (typeof capturedResult.conversationId === "string") {
+        output.conversationId = capturedResult.conversationId;
+      }
+      return output;
+    }
+    return undefined;
+  } finally {
+    await page.unroute("https://grok.x.com/2/grok/add_response.json*", routeHandler).catch(() => {});
+  }
 }
 
 async function waitForGrokResponse(
   page: Page,
+  previousResponse: string | undefined,
+  prompt: string,
   timeoutMs: number,
 ): Promise<{ confirmed: boolean; response?: string }> {
   try {
     await page.waitForFunction(
-      ({ op }) => {
+      ({ op, previous, promptText }) => {
         if (op !== "grok_wait") {
           return false;
         }
-        const selectors = [
-          "[data-message-author-role='assistant']",
-          "[data-testid*='assistant']",
-          "[data-testid*='response']",
-          "article",
-        ];
-        const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
 
-        for (const selector of selectors) {
-          const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
-          for (let i = nodes.length - 1; i >= 0; i -= 1) {
-            const text = normalize(nodes[i]?.innerText || nodes[i]?.textContent || "");
-            if (text.length >= 8) {
-              return true;
+        const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+        const previousText = normalize(previous);
+        const normalizedPrompt = normalize(promptText);
+        const isIgnoredResponse = (value: string): boolean => {
+          const lower = value.toLowerCase();
+          return (
+            lower.length < 3 ||
+            lower.startsWith("see new posts") ||
+            lower.startsWith("thought for ") ||
+            lower.startsWith("agents thinking") ||
+            lower.startsWith("ask anything") ||
+            lower === "agents" ||
+            lower === "thinking" ||
+            lower === "expert" ||
+            lower.startsWith("grok") ||
+            lower.includes("explore ") ||
+            lower.includes("discuss ") ||
+            lower.includes("create images") ||
+            lower.includes("edit image") ||
+            lower.includes("latest news") ||
+            lower === normalizedPrompt.toLowerCase() ||
+            lower === previousText.toLowerCase()
+          );
+        };
+        const scope =
+          document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
+          document.querySelector<HTMLElement>("main");
+        if (!scope) {
+          return false;
+        }
+        const lines = (scope.innerText || scope.textContent || "")
+          .split(/\n+/)
+          .map((line) => normalize(line))
+          .filter((line) => line.length > 0);
+        const linePromptIndex = lines.lastIndexOf(normalizedPrompt);
+        if (linePromptIndex >= 0) {
+          const hasStopControl = Array.from(document.querySelectorAll<HTMLElement>("button")).some((button) => {
+            const label = normalize(button.getAttribute("aria-label") ?? button.textContent ?? "").toLowerCase();
+            return label.includes("stop");
+          });
+          let hasLineCandidate = false;
+          for (let index = linePromptIndex + 1; index < lines.length; index += 1) {
+            const candidate = lines[index];
+            if (!candidate || isIgnoredResponse(candidate)) {
+              continue;
             }
+            hasLineCandidate = true;
+          }
+          if (!hasStopControl && hasLineCandidate) {
+            return true;
           }
         }
-        return false;
+        const entries: string[] = [];
+        for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
+          if (node.closest("button, a, textarea, nav")) {
+            continue;
+          }
+          const text = normalize(node.innerText || node.textContent || "");
+          if (!text) {
+            continue;
+          }
+          const childWithSameText = Array.from(node.children).some((child) => {
+            if (!(child instanceof HTMLElement)) {
+              return false;
+            }
+            return normalize(child.innerText || child.textContent || "") === text;
+          });
+          if (childWithSameText) {
+            continue;
+          }
+          if (entries[entries.length - 1] !== text) {
+            entries.push(text);
+          }
+        }
+
+        const hasStopControl = Array.from(document.querySelectorAll<HTMLElement>("button")).some((button) => {
+          const label = normalize(button.getAttribute("aria-label") ?? button.textContent ?? "").toLowerCase();
+          return label.includes("stop");
+        });
+
+        const promptIndex = entries.lastIndexOf(normalizedPrompt);
+        if (promptIndex < 0) {
+          return false;
+        }
+
+        let hasCandidate = false;
+        for (let index = promptIndex + 1; index < entries.length; index += 1) {
+          const candidate = entries[index];
+          if (!candidate || isIgnoredResponse(candidate)) {
+            continue;
+          }
+          hasCandidate = true;
+        }
+
+        return !hasStopControl && hasCandidate;
       },
-      { op: "grok_wait" },
+      {
+        op: "grok_wait",
+        previous: (previousResponse ?? "").replace(/\s+/g, " ").trim(),
+        promptText: prompt,
+      },
       { timeout: timeoutMs },
     );
   } catch {
     return { confirmed: false };
   }
 
-  const response = await page.evaluate(({ op }) => {
-    if (op !== "grok_extract_response") {
+  const state = await page.evaluate(({ op, promptText, previousText }) => {
+    if (op !== "grok_extract_state") {
       return undefined;
     }
 
-    const selectors = [
-      "[data-message-author-role='assistant']",
-      "[data-testid*='assistant']",
-      "[data-testid*='response']",
-      "article",
-    ];
     const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
-
-    for (const selector of selectors) {
-      const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
-      for (let i = nodes.length - 1; i >= 0; i -= 1) {
-        const text = normalize(nodes[i]?.innerText || nodes[i]?.textContent || "");
-        if (text.length >= 8) {
-          return text;
+    const normalizedPrompt = normalize(promptText);
+    const normalizedPrevious = normalize(previousText);
+    const isIgnoredResponse = (value: string): boolean => {
+      const lower = value.toLowerCase();
+      return (
+        lower.length < 3 ||
+        lower.startsWith("see new posts") ||
+        lower.startsWith("thought for ") ||
+        lower.startsWith("agents thinking") ||
+        lower.startsWith("ask anything") ||
+        lower === "agents" ||
+        lower === "thinking" ||
+        lower === "expert" ||
+        lower.startsWith("grok") ||
+        lower.includes("explore ") ||
+        lower.includes("discuss ") ||
+        lower.includes("create images") ||
+        lower.includes("edit image") ||
+        lower.includes("latest news") ||
+        lower === normalizedPrompt.toLowerCase() ||
+        lower === normalizedPrevious.toLowerCase()
+      );
+    };
+    const scope =
+      document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
+      document.querySelector<HTMLElement>("main");
+    if (!scope) {
+      return undefined;
+    }
+    const lines = (scope.innerText || scope.textContent || "")
+      .split(/\n+/)
+      .map((line) => normalize(line))
+      .filter((line) => line.length > 0);
+    const lineResponseCandidates: string[] = [];
+    const linePromptIndex = lines.lastIndexOf(normalizedPrompt);
+    if (linePromptIndex >= 0) {
+      for (let index = linePromptIndex + 1; index < lines.length; index += 1) {
+        const candidate = lines[index];
+        if (!candidate || isIgnoredResponse(candidate)) {
+          continue;
         }
+        lineResponseCandidates.push(candidate);
       }
     }
-    return undefined;
-  }, { op: "grok_extract_response" });
+    let responseForPrompt: string | undefined;
+    if (lineResponseCandidates.length > 0) {
+      responseForPrompt = lineResponseCandidates.sort((left, right) => right.length - left.length)[0];
+    }
+    if (responseForPrompt) {
+      let latestResponse = responseForPrompt;
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const candidate = lines[index];
+        if (!candidate || isIgnoredResponse(candidate)) {
+          continue;
+        }
+        latestResponse = candidate;
+        break;
+      }
+      return {
+        responseForPrompt,
+        latestResponse,
+      };
+    }
 
-  if (typeof response === "string" && response.length > 0) {
+    const entries: string[] = [];
+    for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
+      if (node.closest("button, a, textarea, nav")) {
+        continue;
+      }
+      const text = normalize(node.innerText || node.textContent || "");
+      if (!text) {
+        continue;
+      }
+      const childWithSameText = Array.from(node.children).some((child) => {
+        if (!(child instanceof HTMLElement)) {
+          return false;
+        }
+        return normalize(child.innerText || child.textContent || "") === text;
+      });
+      if (childWithSameText) {
+        continue;
+      }
+      if (entries[entries.length - 1] !== text) {
+        entries.push(text);
+      }
+    }
+
+    const responseCandidates: string[] = [];
+    const promptIndex = entries.lastIndexOf(normalizedPrompt);
+    if (promptIndex >= 0) {
+      for (let index = promptIndex + 1; index < entries.length; index += 1) {
+        const candidate = entries[index];
+        if (!candidate || isIgnoredResponse(candidate)) {
+          continue;
+        }
+        responseCandidates.push(candidate);
+      }
+    }
+
+    responseForPrompt = undefined;
+    if (responseCandidates.length > 0) {
+      responseForPrompt = responseCandidates.sort((left, right) => right.length - left.length)[0];
+    }
+
+    let latestResponse: string | undefined;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const candidate = entries[index];
+      if (!candidate || isIgnoredResponse(candidate)) {
+        continue;
+      }
+      latestResponse = candidate;
+      break;
+    }
+
+    return {
+      responseForPrompt,
+      latestResponse,
+    };
+  }, {
+    op: "grok_extract_state",
+    promptText: prompt,
+    previousText: previousResponse ?? "",
+  });
+
+  if (state && typeof state === "object" && typeof state.responseForPrompt === "string" && state.responseForPrompt.length > 0) {
+    await page.waitForTimeout(600);
+    const settledState = await page.evaluate(({ op, promptText, previousText }) => {
+      if (op !== "grok_extract_state") {
+        return undefined;
+      }
+
+      const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+      const normalizedPrompt = normalize(promptText);
+      const normalizedPrevious = normalize(previousText);
+      const isIgnoredResponse = (value: string): boolean => {
+        const lower = value.toLowerCase();
+        return (
+          lower.length < 3 ||
+          lower.startsWith("see new posts") ||
+          lower.startsWith("thought for ") ||
+          lower.startsWith("agents thinking") ||
+          lower.startsWith("ask anything") ||
+          lower === "agents" ||
+          lower === "thinking" ||
+          lower === "expert" ||
+          lower.startsWith("grok") ||
+          lower.includes("explore ") ||
+          lower.includes("discuss ") ||
+          lower.includes("create images") ||
+          lower.includes("edit image") ||
+          lower.includes("latest news") ||
+          lower === normalizedPrompt.toLowerCase() ||
+          lower === normalizedPrevious.toLowerCase()
+        );
+      };
+      const scope =
+        document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
+        document.querySelector<HTMLElement>("main");
+      if (!scope) {
+        return undefined;
+      }
+      const lines = (scope.innerText || scope.textContent || "")
+        .split(/\n+/)
+        .map((line) => normalize(line))
+        .filter((line) => line.length > 0);
+      const lineResponseCandidates: string[] = [];
+      const linePromptIndex = lines.lastIndexOf(normalizedPrompt);
+      if (linePromptIndex >= 0) {
+        for (let index = linePromptIndex + 1; index < lines.length; index += 1) {
+          const candidate = lines[index];
+          if (!candidate || isIgnoredResponse(candidate)) {
+            continue;
+          }
+          lineResponseCandidates.push(candidate);
+        }
+      }
+      if (lineResponseCandidates.length > 0) {
+        return {
+          responseForPrompt: lineResponseCandidates.sort((left, right) => right.length - left.length)[0],
+        };
+      }
+
+      const entries: string[] = [];
+      for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
+        if (node.closest("button, a, textarea, nav")) {
+          continue;
+        }
+        const text = normalize(node.innerText || node.textContent || "");
+        if (!text) {
+          continue;
+        }
+        const childWithSameText = Array.from(node.children).some((child) => {
+          if (!(child instanceof HTMLElement)) {
+            return false;
+          }
+          return normalize(child.innerText || child.textContent || "") === text;
+        });
+        if (childWithSameText) {
+          continue;
+        }
+        if (entries[entries.length - 1] !== text) {
+          entries.push(text);
+        }
+      }
+
+      const responseCandidates: string[] = [];
+      const promptIndex = entries.lastIndexOf(normalizedPrompt);
+      if (promptIndex >= 0) {
+        for (let index = promptIndex + 1; index < entries.length; index += 1) {
+          const candidate = entries[index];
+          if (!candidate || isIgnoredResponse(candidate)) {
+            continue;
+          }
+          responseCandidates.push(candidate);
+        }
+      }
+
+      let responseForPrompt: string | undefined;
+      if (responseCandidates.length > 0) {
+        responseForPrompt = responseCandidates.sort((left, right) => right.length - left.length)[0];
+      }
+
+      return {
+        responseForPrompt,
+      };
+    }, {
+      op: "grok_extract_state",
+      promptText: prompt,
+      previousText: previousResponse ?? "",
+    });
+
+    if (
+      settledState &&
+      typeof settledState === "object" &&
+      typeof settledState.responseForPrompt === "string" &&
+      settledState.responseForPrompt.length > 0
+    ) {
+      return {
+        confirmed: true,
+        response: settledState.responseForPrompt,
+      };
+    }
+  }
+
+  if (state && typeof state === "object" && typeof state.responseForPrompt === "string" && state.responseForPrompt.length > 0) {
     return {
       confirmed: true,
-      response,
+      response: state.responseForPrompt,
     };
   }
   return { confirmed: false };
 }
 
-async function askGrok(page: Page, prompt: string, timeoutMs: number): Promise<JsonValue> {
-  return await withEphemeralPage(page, "https://x.com/i/grok", async (grokPage) => {
-    await waitForGrokSurface(grokPage);
-    const submitResult = await submitGrokPrompt(grokPage, prompt);
-    if (!submitResult.ok) {
-      return errorResult("UPSTREAM_CHANGED", "grok controls not found", {
-        reason: submitResult.reason ?? "unknown",
-      });
+async function readLatestGrokResponse(page: Page): Promise<string | undefined> {
+  const state = await page.evaluate(({ op }) => {
+    if (op !== "grok_extract_state") {
+      return undefined;
     }
 
-    const confirmation = await waitForGrokResponse(grokPage, timeoutMs);
-    if (!confirmation.confirmed || !confirmation.response) {
-      return errorResult("ACTION_UNCONFIRMED", "grok response was not confirmed");
-    }
-
-    return {
-      ok: true,
-      response: confirmation.response,
-      url: grokPage.url(),
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const isIgnoredResponse = (value: string): boolean => {
+      const lower = value.toLowerCase();
+      return (
+        lower.length < 3 ||
+        lower.startsWith("see new posts") ||
+        lower.startsWith("thought for ") ||
+        lower.startsWith("agents thinking") ||
+        lower.startsWith("ask anything") ||
+        lower === "agents" ||
+        lower === "thinking" ||
+        lower === "expert" ||
+        lower.startsWith("grok") ||
+        lower.includes("explore ")
+      );
     };
-  });
+    const scope =
+      document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
+      document.querySelector<HTMLElement>("main");
+    if (!scope) {
+      return undefined;
+    }
+    const lines = (scope.innerText || scope.textContent || "")
+      .split(/\n+/)
+      .map((line) => normalize(line))
+      .filter((line) => line.length > 0);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const candidate = lines[index];
+      if (!candidate || isIgnoredResponse(candidate)) {
+        continue;
+      }
+      return { latestResponse: candidate };
+    }
+
+    const entries: string[] = [];
+    for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
+      if (node.closest("button, a, textarea, nav")) {
+        continue;
+      }
+      const text = normalize(node.innerText || node.textContent || "");
+      if (!text || isIgnoredResponse(text)) {
+        continue;
+      }
+      const childWithSameText = Array.from(node.children).some((child) => {
+        if (!(child instanceof HTMLElement)) {
+          return false;
+        }
+        return normalize(child.innerText || child.textContent || "") === text;
+      });
+      if (childWithSameText) {
+        continue;
+      }
+      if (entries[entries.length - 1] !== text) {
+        entries.push(text);
+      }
+    }
+
+    let latestResponse: string | undefined;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const candidate = entries[index];
+      if (!candidate || isIgnoredResponse(candidate)) {
+        continue;
+      }
+      latestResponse = candidate;
+      break;
+    }
+
+    return { latestResponse };
+  }, { op: "grok_extract_state" });
+
+  if (state && typeof state === "object" && typeof state.latestResponse === "string") {
+    return state.latestResponse;
+  }
+  return undefined;
+}
+
+function logGrokPhase(phase: string, details?: Record<string, JsonValue>): void {
+  const payload: Record<string, JsonValue> = {
+    phase,
+  };
+  if (details) {
+    for (const [key, value] of Object.entries(details)) {
+      if (value !== undefined) {
+        payload[key] = value;
+      }
+    }
+  }
+  process.stderr.write(`[adapter-x grok] ${JSON.stringify(payload)}\n`);
+}
+
+async function askGrok(
+  page: Page,
+  prompt: string,
+  timeoutMs: number,
+  conversationId?: string,
+): Promise<JsonValue> {
+  logGrokPhase("start", { timeoutMs, promptLength: prompt.length });
+  try {
+    const targetUrl =
+      typeof conversationId === "string" && conversationId.trim().length > 0
+        ? `https://x.com/i/grok?conversation=${encodeURIComponent(conversationId.trim())}`
+        : "https://x.com/i/grok";
+    return await withEphemeralPage(page, targetUrl, async (grokPage) => {
+      logGrokPhase("page_opened", { url: grokPage.url() });
+      await prepareGrokSession(grokPage, conversationId);
+      logGrokPhase("surface_ready");
+      const networkResult = await askGrokViaNetwork(grokPage, prompt);
+      logGrokPhase("network_result", {
+        ok: networkResult?.ok === true,
+        responseLength: networkResult?.response.length ?? 0,
+      });
+      if (networkResult?.ok) {
+        const output: Record<string, JsonValue> = {
+          ok: true,
+          response: networkResult.response,
+          url: networkResult.url,
+        };
+        if (networkResult.conversationId) {
+          output.conversationId = networkResult.conversationId;
+        }
+        return output;
+      }
+      await grokPage.goto("https://x.com/i/grok", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+      await waitForGrokSurface(grokPage);
+      const previousResponse = await readLatestGrokResponse(grokPage);
+      logGrokPhase("previous_response_read", {
+        hasPreviousResponse: previousResponse !== undefined,
+        previousResponseLength: previousResponse?.length ?? 0,
+      });
+      const submitResult = await submitGrokPrompt(grokPage, prompt);
+      const submitLogDetails: Record<string, JsonValue> = {
+        ok: submitResult.ok,
+      };
+      if (submitResult.reason !== undefined) {
+        submitLogDetails.reason = submitResult.reason;
+      }
+      logGrokPhase("submit_result", submitLogDetails);
+      if (!submitResult.ok) {
+        return errorResult("UPSTREAM_CHANGED", "grok controls not found", {
+          reason: submitResult.reason ?? "unknown",
+        });
+      }
+
+      logGrokPhase("wait_start", { timeoutMs });
+      const confirmation = await waitForGrokResponse(grokPage, previousResponse, prompt, timeoutMs);
+      logGrokPhase("wait_result", {
+        confirmed: confirmation.confirmed,
+        responseLength: confirmation.response?.length ?? 0,
+      });
+      if (!confirmation.confirmed || !confirmation.response) {
+        return errorResult("ACTION_UNCONFIRMED", "grok response was not confirmed");
+      }
+
+      logGrokPhase("success", {
+        responseLength: confirmation.response.length,
+        url: grokPage.url(),
+      });
+      const output: Record<string, JsonValue> = {
+        ok: true,
+        response: confirmation.response,
+        url: grokPage.url(),
+      };
+      if (conversationId) {
+        output.conversationId = conversationId;
+      }
+      return output;
+    });
+  } catch (error) {
+    const details: Record<string, JsonValue> = {};
+    if (error instanceof Error) {
+      details.name = error.name;
+      details.message = error.message;
+    } else if (error !== undefined) {
+      details.message = String(error);
+    }
+    logGrokPhase("error", details);
+    return errorResult("UPSTREAM_CHANGED", "grok execution threw", details);
+  }
 }
 
 async function replyToTweet(
@@ -2746,7 +3373,8 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
           return errorResult("VALIDATION_ERROR", "prompt is required");
         }
 
-        return await askGrok(page, prompt, grokResponseTimeoutMs);
+        const conversationId = typeof args.conversationId === "string" ? args.conversationId.trim() : "";
+        return await askGrok(page, prompt, grokResponseTimeoutMs, conversationId || undefined);
       }
 
       return errorResult("TOOL_NOT_FOUND", `unknown tool: ${name}`);
