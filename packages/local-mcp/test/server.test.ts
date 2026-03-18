@@ -7,7 +7,11 @@ import { PassThrough } from "node:stream";
 import type { JsonValue } from "@webmcp-bridge/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpJsonRpcResponse } from "../src/mcp-types.js";
-import { createLocalMcpStdioServer, type LocalMcpStdioServer } from "../src/server.js";
+import {
+  createLocalMcpStdioServer,
+  type LocalMcpGateway,
+  type LocalMcpStdioServer,
+} from "../src/server.js";
 
 async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void> {
   const start = Date.now();
@@ -26,27 +30,43 @@ describe("createLocalMcpStdioServer", () => {
   const frames: Array<Record<string, unknown>> = [];
   let outputBuffer = "";
 
-  const gateway = {
-    listTools: vi.fn(async () => [
-      {
-        name: "ping",
-        description: "ping",
-      },
-    ]),
-    callTool: vi.fn(async (name: string): Promise<JsonValue> => ({ ok: true, name })),
-    listResources: vi.fn(async () => [
-      {
-        uri: "board://local/interactions",
-        name: "Board Interactions",
-        mimeType: "application/json",
-      },
-    ]),
-    readResource: vi.fn(async () => ({
-      version: 1,
-      items: [],
-    })),
-    onResourceUpdated: vi.fn(() => () => {}),
+  type GatewayReadResourcePayload = {
+    version: number;
+    items: Array<{
+      id: string;
+      body: string;
+    }>;
   };
+
+  const listTools = vi.fn<LocalMcpGateway["listTools"]>(async () => [
+    {
+      name: "ping",
+      description: "ping",
+    },
+  ]);
+  const callTool = vi.fn<LocalMcpGateway["callTool"]>(
+    async (name: string): Promise<JsonValue> => ({ ok: true, name }),
+  );
+  const listResources = vi.fn<LocalMcpGateway["listResources"]>(async () => [
+    {
+      uri: "board://local/interactions",
+      name: "Board Interactions",
+      mimeType: "application/json",
+    },
+  ]);
+  const readResource = vi.fn<(uri: string) => Promise<GatewayReadResourcePayload>>(async () => ({
+    version: 1,
+    items: [],
+  }));
+  const onResourceUpdated = vi.fn<LocalMcpGateway["onResourceUpdated"]>(() => () => {});
+
+  const gateway = {
+    listTools,
+    callTool,
+    listResources,
+    readResource,
+    onResourceUpdated,
+  } satisfies LocalMcpGateway;
   const bridgeControl = {
     getState: vi.fn(() => ({
       site: "board",
@@ -63,11 +83,11 @@ describe("createLocalMcpStdioServer", () => {
     output = new PassThrough();
     frames.length = 0;
     outputBuffer = "";
-    gateway.listTools.mockClear();
-    gateway.callTool.mockClear();
-    gateway.listResources.mockClear();
-    gateway.readResource.mockClear();
-    gateway.onResourceUpdated.mockClear();
+    listTools.mockClear();
+    callTool.mockClear();
+    listResources.mockClear();
+    readResource.mockClear();
+    onResourceUpdated.mockClear();
     bridgeControl.getState.mockClear();
     bridgeControl.openWindow.mockClear();
     bridgeControl.closeBridge.mockClear();
@@ -159,7 +179,7 @@ describe("createLocalMcpStdioServer", () => {
       params: {},
     });
 
-    expect(gateway.listTools).toHaveBeenCalledOnce();
+    expect(listTools).toHaveBeenCalledOnce();
     expect("result" in response ? response.result : undefined).toMatchObject({
       tools: [{ name: "bridge.open" }, { name: "bridge.close" }, { name: "ping" }],
     });
@@ -177,7 +197,7 @@ describe("createLocalMcpStdioServer", () => {
     });
 
     expect(bridgeControl.openWindow).toHaveBeenCalledOnce();
-    expect(gateway.callTool).not.toHaveBeenCalled();
+    expect(callTool).not.toHaveBeenCalled();
     expect("result" in response ? response.result : undefined).toMatchObject({
       structuredContent: {
         ok: true,
@@ -259,7 +279,7 @@ describe("createLocalMcpStdioServer", () => {
       },
     });
     await waitFor(() => bridgeControl.closeBridge.mock.calls.length === 1);
-    expect(gateway.callTool).not.toHaveBeenCalled();
+    expect(callTool).not.toHaveBeenCalled();
   });
 
   it("proxies tools/call to gateway", async () => {
@@ -275,7 +295,7 @@ describe("createLocalMcpStdioServer", () => {
       },
     });
 
-    expect(gateway.callTool).toHaveBeenCalledWith("ping", { ping: true });
+    expect(callTool).toHaveBeenCalledWith("ping", { ping: true });
     expect("result" in response ? response.result : undefined).toMatchObject({
       content: [],
       structuredContent: { ok: true, name: "ping" },
@@ -283,7 +303,7 @@ describe("createLocalMcpStdioServer", () => {
   });
 
   it("passes through MCP CallToolResult payload without remapping", async () => {
-    gateway.callTool.mockResolvedValueOnce({
+    callTool.mockResolvedValueOnce({
       content: [{ type: "text", text: "ok" }],
       structuredContent: { ok: true },
       isError: false,
@@ -307,7 +327,7 @@ describe("createLocalMcpStdioServer", () => {
   });
 
   it("does not pass through invalid CallToolResult-like payload", async () => {
-    gateway.callTool.mockResolvedValueOnce({
+    callTool.mockResolvedValueOnce({
       structuredContent: "invalid",
     });
 
@@ -361,14 +381,14 @@ describe("createLocalMcpStdioServer", () => {
       params: {},
     });
 
-    expect(gateway.listResources).toHaveBeenCalledOnce();
+    expect(listResources).toHaveBeenCalledOnce();
     expect("result" in response ? response.result : undefined).toMatchObject({
       resources: [{ uri: "board://local/interactions", name: "Board Interactions" }],
     });
   });
 
   it("proxies resources/read to gateway", async () => {
-    gateway.readResource.mockResolvedValueOnce({
+    readResource.mockResolvedValueOnce({
       version: 1,
       items: [{ id: "interaction-1", body: "Expand selection" }],
     });
@@ -382,7 +402,7 @@ describe("createLocalMcpStdioServer", () => {
       },
     });
 
-    expect(gateway.readResource).toHaveBeenCalledWith("board://local/interactions");
+    expect(readResource).toHaveBeenCalledWith("board://local/interactions");
     expect("result" in response ? response.result : undefined).toMatchObject({
       contents: [
         {
@@ -391,13 +411,17 @@ describe("createLocalMcpStdioServer", () => {
         },
       ],
     });
-    const text = "result" in response ? response.result.contents?.[0]?.text : undefined;
+    const result =
+      "result" in response
+        ? (response.result as { contents?: Array<{ text?: string }> })
+        : undefined;
+    const text = result?.contents?.[0]?.text;
     expect(typeof text).toBe("string");
     expect(String(text)).toContain("Expand selection");
   });
 
   it("emits resources/updated after a subscribed resource changes", async () => {
-    const notifyResourceUpdated = gateway.onResourceUpdated.mock.calls[0]?.[0] as
+    const notifyResourceUpdated = onResourceUpdated.mock.calls[0]?.[0] as
       | ((uri: string) => void)
       | undefined;
     expect(notifyResourceUpdated).toBeTypeOf("function");
@@ -453,8 +477,8 @@ describe("createLocalMcpStdioServer", () => {
   });
 
   it("emits tools/list_changed after a tool call mutates available tools", async () => {
-    gateway.listTools.mockResolvedValueOnce([{ name: "navigate", description: "navigate" }]);
-    gateway.listTools.mockResolvedValueOnce([
+    listTools.mockResolvedValueOnce([{ name: "navigate", description: "navigate" }]);
+    listTools.mockResolvedValueOnce([
       { name: "navigate", description: "navigate" },
       { name: "search_entities", description: "search entities" },
     ]);

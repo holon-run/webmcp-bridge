@@ -17,6 +17,15 @@ type MutableNavigator = Navigator & {
   modelContext?: WebMcpModelContext;
 };
 
+function toResourceDescriptor(resource: WebMcpResourceDefinition): Omit<WebMcpResourceDefinition, "read"> {
+  return {
+    uri: resource.uri,
+    ...(resource.name !== undefined ? { name: resource.name } : {}),
+    ...(resource.description !== undefined ? { description: resource.description } : {}),
+    ...(resource.mimeType !== undefined ? { mimeType: resource.mimeType } : {}),
+  };
+}
+
 type GlobalWithContext = typeof globalThis & {
   [CONTEXT_KEY]?: WebMcpModelContext;
   [RESOURCE_UPDATED_CALLBACK_KEY]?: (uri: string) => Promise<void>;
@@ -70,7 +79,7 @@ export function ensureModelContext(target: typeof globalThis = globalThis): WebM
       return await tool.execute(input);
     },
     listResources: async () => {
-      return [...resources.values()].map(({ read: _read, ...resource }) => resource);
+      return [...resources.values()].map(toResourceDescriptor);
     },
     readResource: async (uri) => {
       const resource = resources.get(uri);

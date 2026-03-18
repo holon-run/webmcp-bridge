@@ -116,9 +116,16 @@ export function defineLocalResource(
   read: BridgeResourceDefinition["read"],
   options?: Omit<BridgeResourceDefinition, "uri" | "read">,
 ): BridgeResourceDefinition {
-  return {
+  const resource: BridgeResourceDefinition = {
     uri,
+    name: options?.name ?? uri,
     read,
-    ...(options ?? {}),
   };
+  if (options?.description !== undefined) {
+    resource.description = options.description;
+  }
+  if (options?.mimeType !== undefined) {
+    resource.mimeType = options.mimeType;
+  }
+  return resource;
 }

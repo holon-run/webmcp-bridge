@@ -28,6 +28,15 @@ export function createBridgeRuntime(transport?: BridgeTransport): BridgeRuntime 
   const resources = new Map<string, BridgeResourceDefinition>();
   const resourceListeners = new Set<(uri: string) => void>();
 
+  const toResourceDescriptor = (
+    resource: BridgeResourceDefinition,
+  ): BridgeResourceDescriptor => ({
+    uri: resource.uri,
+    name: resource.name,
+    ...(resource.description !== undefined ? { description: resource.description } : {}),
+    ...(resource.mimeType !== undefined ? { mimeType: resource.mimeType } : {}),
+  });
+
   const invokeTool = async (name: string, input: JsonValue): Promise<JsonValue> => {
     const localTool = tools.get(name);
     if (localTool) {
@@ -69,8 +78,7 @@ export function createBridgeRuntime(transport?: BridgeTransport): BridgeRuntime 
     unregisterResource: async (uri) => {
       resources.delete(uri);
     },
-    listResources: async () =>
-      Array.from(resources.values()).map(({ read: _read, ...descriptor }) => descriptor),
+    listResources: async () => Array.from(resources.values()).map(toResourceDescriptor),
     readResource: async (uri) => {
       const resource = resources.get(uri);
       if (!resource) {
@@ -89,7 +97,7 @@ export function createBridgeRuntime(transport?: BridgeTransport): BridgeRuntime 
     modelContext,
     listTools: () => Array.from(tools.values()),
     invokeTool,
-    listResources: () => Array.from(resources.values()).map(({ read: _read, ...descriptor }) => descriptor),
+    listResources: () => Array.from(resources.values()).map(toResourceDescriptor),
     readResource: async (uri) => {
       const resource = resources.get(uri);
       if (!resource) {
