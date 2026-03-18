@@ -1,0 +1,42 @@
+{
+  "name": "@webmcp-bridge/adapter-utils",
+  "version": "0.4.3",
+  "type": "module",
+  "description": "Shared low-level utilities for webmcp-bridge fallback adapters.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/adapter-utils",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holon-run/webmcp-bridge.git",
+    "directory": "packages/adapter-utils"
+  },
+  "bugs": {
+    "url": "https://github.com/holon-run/webmcp-bridge/issues"
+  },
+  "keywords": [
+    "webmcp",
+    "adapter",
+    "utilities",
+    "stream",
+    "dom"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}
