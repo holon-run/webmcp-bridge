@@ -14,6 +14,9 @@ import {
   type RequestTemplate,
   TemplateCache,
 } from "@webmcp-bridge/adapter-utils";
+import { mkdtemp, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, extname, join } from "node:path";
 import type { Page } from "playwright";
 
 type XAuthState = "authenticated" | "auth_required" | "challenge_required";
@@ -47,6 +50,19 @@ type SubmitDomResult = {
   reason?: string;
 };
 
+type GrokAttachment = {
+  path: string;
+  name: string;
+  mimeType?: string;
+};
+
+type GrokArtifact = {
+  kind: "file";
+  name: string;
+  path: string;
+  mimeType?: string;
+};
+
 export type CreateXAdapterOptions = {
   composeConfirmTimeoutMs?: number;
   grokResponseTimeoutMs?: number;
@@ -57,11 +73,12 @@ const DEFAULT_TIMELINE_LIMIT = 10;
 const MAX_TIMELINE_LIMIT = 20;
 const MAX_READ_PAGE_CACHE_SIZE = 8;
 const DEFAULT_COMPOSE_CONFIRM_TIMEOUT_MS = 10_000;
-const DEFAULT_GROK_RESPONSE_TIMEOUT_MS = 30_000;
+const DEFAULT_GROK_RESPONSE_TIMEOUT_MS = 90_000;
 const DEFAULT_MAX_POST_LENGTH = 280;
 const AUTH_STABILIZE_ATTEMPTS = 6;
 const AUTH_STABILIZE_DELAY_MS = 750;
 const AUTH_WARMUP_TIMEOUT_MS = 12_000;
+const GROK_ARTIFACT_DIR_PREFIX = "webmcp-bridge-grok-";
 
 const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
   globalKey: "__WEBMCP_X_CAPTURE__",
@@ -381,6 +398,42 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
           description: "Existing Grok conversation id. When omitted, the adapter starts a new chat before asking.",
           minLength: 1,
         },
+        attachments: {
+          type: "array",
+          description: "Optional local files to upload with the prompt.",
+          items: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+                description: "Optional display name override. Defaults to the file basename.",
+              },
+              mimeType: {
+                type: "string",
+                description: "Optional MIME type hint.",
+              },
+              source: {
+                type: "object",
+                properties: {
+                  kind: {
+                    type: "string",
+                    enum: ["file"],
+                    description: "Attachment source kind. Only local file paths are supported.",
+                  },
+                  path: {
+                    type: "string",
+                    description: "Absolute local file path to upload through the browser session.",
+                    minLength: 1,
+                  },
+                },
+                required: ["kind", "path"],
+                additionalProperties: false,
+              },
+            },
+            required: ["source"],
+            additionalProperties: false,
+          },
+        },
       },
       required: ["prompt"],
       additionalProperties: false,
@@ -404,6 +457,182 @@ function errorResult(code: string, message: string, details?: JsonValue): JsonVa
     error.details = details;
   }
   return { error };
+}
+
+function sanitizeArtifactName(name: string): string {
+  const trimmed = name.trim();
+  const normalized = trimmed.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ");
+  return normalized.length > 0 ? normalized : "artifact.bin";
+}
+
+function inferArtifactExtension(mimeType?: string): string {
+  switch ((mimeType ?? "").toLowerCase()) {
+    case "text/csv":
+      return ".csv";
+    case "application/json":
+      return ".json";
+    case "text/plain":
+      return ".txt";
+    case "text/markdown":
+      return ".md";
+    case "application/pdf":
+      return ".pdf";
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+      return ".jpg";
+    default:
+      return ".bin";
+  }
+}
+
+function inferArtifactNameFromLabel(label: string, mimeType?: string): string {
+  const match = label.match(/([A-Za-z0-9._-]+\.[A-Za-z0-9]+)\b/);
+  const matchedName = match?.[1];
+  if (matchedName) {
+    return sanitizeArtifactName(matchedName);
+  }
+  const base = sanitizeArtifactName(label.replace(/\s+/g, " ").trim() || "artifact");
+  const extension = extname(base) || inferArtifactExtension(mimeType);
+  return extname(base) ? base : `${base}${extension}`;
+}
+
+function parseDataUri(uri: string): { mimeType?: string; buffer: Buffer } | undefined {
+  if (!uri.startsWith("data:")) {
+    return undefined;
+  }
+  const commaIndex = uri.indexOf(",");
+  if (commaIndex < 0) {
+    return undefined;
+  }
+  const meta = uri.slice(5, commaIndex);
+  const payload = uri.slice(commaIndex + 1);
+  const parts = meta.split(";").filter((part) => part.length > 0);
+  const mimeType = parts[0] && !parts[0].includes("=") ? parts[0] : undefined;
+  const isBase64 = parts.includes("base64");
+  try {
+    const buffer = isBase64
+      ? Buffer.from(payload, "base64")
+      : Buffer.from(decodeURIComponent(payload), "utf8");
+    return mimeType ? { mimeType, buffer } : { buffer };
+  } catch {
+    return undefined;
+  }
+}
+
+async function materializeGrokArtifacts(
+  response: string,
+): Promise<{ response: string; artifacts?: GrokArtifact[] }> {
+  const matches = Array.from(response.matchAll(/\[([^\]]+)\]\((data:[^)]+)\)/g));
+  if (matches.length === 0) {
+    return { response };
+  }
+
+  const artifactDir = await mkdtemp(join(tmpdir(), GROK_ARTIFACT_DIR_PREFIX));
+  const artifacts: GrokArtifact[] = [];
+  let cleanedResponse = response;
+
+  for (const match of matches) {
+    const label = match[1] ?? "artifact";
+    const dataUri = match[2] ?? "";
+    const parsed = parseDataUri(dataUri);
+    if (!parsed) {
+      continue;
+    }
+    const name = inferArtifactNameFromLabel(label, parsed.mimeType);
+    const path = join(artifactDir, name);
+    await writeFile(path, parsed.buffer);
+    const artifact: GrokArtifact = {
+      kind: "file",
+      name,
+      path,
+    };
+    if (parsed.mimeType) {
+      artifact.mimeType = parsed.mimeType;
+    }
+    artifacts.push(artifact);
+    cleanedResponse = cleanedResponse.replace(match[0], `${label.trim() || name} `);
+  }
+
+  const output = {
+    response: cleanedResponse.replace(/[ \t]+\n/g, "\n").replace(/\s{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim(),
+  } as { response: string; artifacts?: GrokArtifact[] };
+  if (artifacts.length > 0) {
+    output.artifacts = artifacts;
+  }
+  return output;
+}
+
+async function resolveGrokAttachments(input: unknown): Promise<{ ok: true; attachments: GrokAttachment[] } | { ok: false; result: JsonValue }> {
+  if (input === undefined) {
+    return { ok: true, attachments: [] };
+  }
+  if (!Array.isArray(input)) {
+    return {
+      ok: false,
+      result: errorResult("VALIDATION_ERROR", "attachments must be an array"),
+    };
+  }
+
+  const attachments: GrokAttachment[] = [];
+  for (const [index, rawAttachment] of input.entries()) {
+    if (typeof rawAttachment !== "object" || rawAttachment === null || Array.isArray(rawAttachment)) {
+      return {
+        ok: false,
+        result: errorResult("VALIDATION_ERROR", `attachments[${index}] must be an object`),
+      };
+    }
+    const attachment = rawAttachment as Record<string, unknown>;
+    const source = attachment.source;
+    if (typeof source !== "object" || source === null || Array.isArray(source)) {
+      return {
+        ok: false,
+        result: errorResult("VALIDATION_ERROR", `attachments[${index}].source must be an object`),
+      };
+    }
+    const sourceRecord = source as Record<string, unknown>;
+    if (sourceRecord.kind !== "file") {
+      return {
+        ok: false,
+        result: errorResult("VALIDATION_ERROR", `attachments[${index}].source.kind must be \"file\"`),
+      };
+    }
+    const path = typeof sourceRecord.path === "string" ? sourceRecord.path.trim() : "";
+    if (!path) {
+      return {
+        ok: false,
+        result: errorResult("VALIDATION_ERROR", `attachments[${index}].source.path is required`),
+      };
+    }
+    try {
+      const fileStat = await stat(path);
+      if (!fileStat.isFile()) {
+        return {
+          ok: false,
+          result: errorResult("VALIDATION_ERROR", `attachments[${index}].source.path must point to a file`),
+        };
+      }
+    } catch {
+      return {
+        ok: false,
+        result: errorResult("VALIDATION_ERROR", `attachments[${index}].source.path was not found`),
+      };
+    }
+
+    const resolvedAttachment: GrokAttachment = {
+      path,
+      name:
+        typeof attachment.name === "string" && attachment.name.trim().length > 0
+          ? sanitizeArtifactName(attachment.name)
+          : basename(path),
+    };
+    if (typeof attachment.mimeType === "string" && attachment.mimeType.trim().length > 0) {
+      resolvedAttachment.mimeType = attachment.mimeType.trim();
+    }
+    attachments.push(resolvedAttachment);
+  }
+
+  return { ok: true, attachments };
 }
 
 function normalizeTimelineLimit(input: Record<string, unknown>): number {
@@ -2238,16 +2467,69 @@ async function prepareGrokSession(page: Page, conversationId?: string): Promise<
   await waitForGrokSurface(page);
 }
 
+async function uploadGrokAttachments(page: Page, attachments: GrokAttachment[]): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (attachments.length === 0) {
+    return { ok: true };
+  }
+
+  const uploadSelectors = [
+    "input[type='file'][accept*='application/pdf']",
+    "input[type='file'][accept*='text/csv']",
+    "input[type='file'][accept*='text/plain']",
+    "input[type='file']",
+  ];
+
+  let uploadSelector: string | undefined;
+  for (const selector of uploadSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 1_200 }).catch(() => null);
+    if (!handle) {
+      continue;
+    }
+    await handle.dispose().catch(() => {});
+    uploadSelector = selector;
+    break;
+  }
+
+  if (!uploadSelector) {
+    return { ok: false, reason: "attachment_input_not_found" };
+  }
+
+  try {
+    await page.setInputFiles(uploadSelector, attachments.map((attachment) => attachment.path));
+  } catch {
+    return { ok: false, reason: "attachment_upload_failed" };
+  }
+
+  const attachmentNames = attachments.map((attachment) => attachment.name);
+  await page
+    .waitForFunction(
+      ({ names }) => {
+        const bodyText = document.body?.innerText ?? "";
+        return names.every((name) => bodyText.includes(name));
+      },
+      { names: attachmentNames },
+      { timeout: 10_000 },
+    )
+    .catch(() => {});
+
+  await page.waitForTimeout(600);
+  return { ok: true };
+}
+
 async function askGrokViaNetwork(
   page: Page,
   prompt: string,
-): Promise<{ ok: true; response: string; url: string; conversationId?: string } | undefined> {
+  timeoutMs: number,
+): Promise<{ ok: true; response: string; url: string; conversationId?: string; artifacts?: GrokArtifact[] } | undefined> {
   const captured = await captureRoutedResponseText(
     page,
     "https://grok.x.com/2/grok/add_response.json*",
     async () => {
       const submitResult = await submitGrokPrompt(page, prompt);
       return submitResult.ok;
+    },
+    {
+      timeoutMs,
     },
   );
 
@@ -2287,14 +2569,18 @@ async function askGrokViaNetwork(
   if (!finalResponse) {
     return undefined;
   }
+  const artifactResult = await materializeGrokArtifacts(finalResponse);
 
-  const output: { ok: true; response: string; url: string; conversationId?: string } = {
+  const output: { ok: true; response: string; url: string; conversationId?: string; artifacts?: GrokArtifact[] } = {
     ok: true,
-    response: finalResponse,
+    response: artifactResult.response,
     url: typeof conversationId === "string" ? `https://x.com/i/grok?conversation=${conversationId}` : page.url(),
   };
   if (typeof conversationId === "string") {
     output.conversationId = conversationId;
+  }
+  if (artifactResult.artifacts) {
+    output.artifacts = artifactResult.artifacts;
   }
   return output;
 }
@@ -2778,6 +3064,7 @@ async function askGrok(
   page: Page,
   prompt: string,
   timeoutMs: number,
+  attachments: GrokAttachment[],
   conversationId?: string,
 ): Promise<JsonValue> {
   logGrokPhase("start", { timeoutMs, promptLength: prompt.length });
@@ -2790,7 +3077,21 @@ async function askGrok(
       logGrokPhase("page_opened", { url: grokPage.url() });
       await prepareGrokSession(grokPage, conversationId);
       logGrokPhase("surface_ready");
-      const networkResult = await askGrokViaNetwork(grokPage, prompt);
+      const uploadResult = await uploadGrokAttachments(grokPage, attachments);
+      const attachmentLogDetails: Record<string, JsonValue> = {
+        ok: uploadResult.ok,
+        attachmentCount: attachments.length,
+      };
+      if (!uploadResult.ok) {
+        attachmentLogDetails.reason = uploadResult.reason;
+      }
+      logGrokPhase("attachments_ready", attachmentLogDetails);
+      if (!uploadResult.ok) {
+        return errorResult("UPSTREAM_CHANGED", "grok attachment controls not found", {
+          reason: uploadResult.reason,
+        });
+      }
+      const networkResult = await askGrokViaNetwork(grokPage, prompt, timeoutMs);
       logGrokPhase("network_result", {
         ok: networkResult?.ok === true,
         responseLength: networkResult?.response.length ?? 0,
@@ -2803,6 +3104,9 @@ async function askGrok(
         };
         if (networkResult.conversationId) {
           output.conversationId = networkResult.conversationId;
+        }
+        if (networkResult.artifacts) {
+          output.artifacts = networkResult.artifacts as unknown as JsonValue;
         }
         return output;
       }
@@ -3203,8 +3507,18 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
           return errorResult("VALIDATION_ERROR", "prompt is required");
         }
 
+        const resolvedAttachments = await resolveGrokAttachments(args.attachments);
+        if (!resolvedAttachments.ok) {
+          return resolvedAttachments.result;
+        }
         const conversationId = typeof args.conversationId === "string" ? args.conversationId.trim() : "";
-        return await askGrok(page, prompt, grokResponseTimeoutMs, conversationId || undefined);
+        return await askGrok(
+          page,
+          prompt,
+          grokResponseTimeoutMs,
+          resolvedAttachments.attachments,
+          conversationId || undefined,
+        );
       }
 
       return errorResult("TOOL_NOT_FOUND", `unknown tool: ${name}`);
