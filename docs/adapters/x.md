@@ -185,14 +185,7 @@ Chat with Grok and upload one local file:
     "name": "grok.chat",
     "arguments": {
       "prompt": "Read the attached CSV and give me the total.",
-      "attachments": [
-        {
-          "source": {
-            "kind": "file",
-            "path": "/tmp/grok-upload-sample.csv"
-          }
-        }
-      ]
+      "attachmentPaths": ["/tmp/grok-upload-sample.csv"]
     }
   }
 }
@@ -222,7 +215,8 @@ When Grok returns a downloadable `data:` link, `grok.chat` materializes it into 
 - Selector-based implementation; upstream UI changes may require selector updates.
 - Text-only compose and reply scope in `0.1.x`.
 - `grok.chat` starts a new conversation by default; pass `conversationId` to continue an existing chat.
-- `grok.chat` attachments currently support local file-path uploads only.
+- `grok.chat` attachments currently support local file-path uploads only, via `attachmentPaths`.
+- `grok.chat` marks each `attachmentPaths` item with `x-uxc-kind: "file-path"` so schema-aware clients can treat them as local file references.
 - Download artifacts are currently extracted from Grok `data:` links and materialized to a local temp path; native browser download capture is not wired yet.
 - `notifications.list` and `mentions.list` are currently DOM-backed and do not expose cursor pagination yet.
 - Requires user already logged in on web session.

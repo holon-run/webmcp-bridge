@@ -685,7 +685,7 @@ describe("createXAdapter", () => {
         name: "grok.chat",
         input: {
           prompt: "use file",
-          attachments: [{ source: { kind: "file", path: filePath } }],
+          attachmentPaths: [filePath],
         },
       },
       { page: page as never },

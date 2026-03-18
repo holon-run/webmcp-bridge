@@ -398,40 +398,14 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
           description: "Existing Grok conversation id. When omitted, the adapter starts a new chat before asking.",
           minLength: 1,
         },
-        attachments: {
+        attachmentPaths: {
           type: "array",
           description: "Optional local files to upload with the prompt.",
           items: {
-            type: "object",
-            properties: {
-              name: {
-                type: "string",
-                description: "Optional display name override. Defaults to the file basename.",
-              },
-              mimeType: {
-                type: "string",
-                description: "Optional MIME type hint.",
-              },
-              source: {
-                type: "object",
-                properties: {
-                  kind: {
-                    type: "string",
-                    enum: ["file"],
-                    description: "Attachment source kind. Only local file paths are supported.",
-                  },
-                  path: {
-                    type: "string",
-                    description: "Absolute local file path to upload through the browser session.",
-                    minLength: 1,
-                  },
-                },
-                required: ["kind", "path"],
-                additionalProperties: false,
-              },
-            },
-            required: ["source"],
-            additionalProperties: false,
+            type: "string",
+            description: "Absolute local file path to upload through the browser session.",
+            minLength: 1,
+            "x-uxc-kind": "file-path",
           },
         },
       },
@@ -570,38 +544,17 @@ async function resolveGrokAttachments(input: unknown): Promise<{ ok: true; attac
   if (!Array.isArray(input)) {
     return {
       ok: false,
-      result: errorResult("VALIDATION_ERROR", "attachments must be an array"),
+      result: errorResult("VALIDATION_ERROR", "attachmentPaths must be an array"),
     };
   }
 
   const attachments: GrokAttachment[] = [];
-  for (const [index, rawAttachment] of input.entries()) {
-    if (typeof rawAttachment !== "object" || rawAttachment === null || Array.isArray(rawAttachment)) {
-      return {
-        ok: false,
-        result: errorResult("VALIDATION_ERROR", `attachments[${index}] must be an object`),
-      };
-    }
-    const attachment = rawAttachment as Record<string, unknown>;
-    const source = attachment.source;
-    if (typeof source !== "object" || source === null || Array.isArray(source)) {
-      return {
-        ok: false,
-        result: errorResult("VALIDATION_ERROR", `attachments[${index}].source must be an object`),
-      };
-    }
-    const sourceRecord = source as Record<string, unknown>;
-    if (sourceRecord.kind !== "file") {
-      return {
-        ok: false,
-        result: errorResult("VALIDATION_ERROR", `attachments[${index}].source.kind must be \"file\"`),
-      };
-    }
-    const path = typeof sourceRecord.path === "string" ? sourceRecord.path.trim() : "";
+  for (const [index, rawPath] of input.entries()) {
+    const path = typeof rawPath === "string" ? rawPath.trim() : "";
     if (!path) {
       return {
         ok: false,
-        result: errorResult("VALIDATION_ERROR", `attachments[${index}].source.path is required`),
+        result: errorResult("VALIDATION_ERROR", `attachmentPaths[${index}] must be a non-empty string`),
       };
     }
     try {
@@ -609,26 +562,20 @@ async function resolveGrokAttachments(input: unknown): Promise<{ ok: true; attac
       if (!fileStat.isFile()) {
         return {
           ok: false,
-          result: errorResult("VALIDATION_ERROR", `attachments[${index}].source.path must point to a file`),
+          result: errorResult("VALIDATION_ERROR", `attachmentPaths[${index}] must point to a file`),
         };
       }
     } catch {
       return {
         ok: false,
-        result: errorResult("VALIDATION_ERROR", `attachments[${index}].source.path was not found`),
+        result: errorResult("VALIDATION_ERROR", `attachmentPaths[${index}] was not found`),
       };
     }
 
     const resolvedAttachment: GrokAttachment = {
       path,
-      name:
-        typeof attachment.name === "string" && attachment.name.trim().length > 0
-          ? sanitizeArtifactName(attachment.name)
-          : basename(path),
+      name: basename(path),
     };
-    if (typeof attachment.mimeType === "string" && attachment.mimeType.trim().length > 0) {
-      resolvedAttachment.mimeType = attachment.mimeType.trim();
-    }
     attachments.push(resolvedAttachment);
   }
 
@@ -3507,7 +3454,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
           return errorResult("VALIDATION_ERROR", "prompt is required");
         }
 
-        const resolvedAttachments = await resolveGrokAttachments(args.attachments);
+        const resolvedAttachments = await resolveGrokAttachments(args.attachmentPaths);
         if (!resolvedAttachments.ok) {
           return resolvedAttachments.result;
         }
