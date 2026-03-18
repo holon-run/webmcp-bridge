@@ -488,8 +488,8 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
-    name: "grok.ask",
-    description: "Ask Grok a single prompt from the authenticated X session",
+    name: "grok.chat",
+    description: "Send one prompt to Grok from the authenticated X session",
     inputSchema: {
       type: "object",
       description:
@@ -3362,7 +3362,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         return await replyToTweet(page, targetUrl, text, dryRun, composeConfirmTimeoutMs);
       }
 
-      if (name === "grok.ask") {
+      if (name === "grok.chat") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
           return authCheck.result;

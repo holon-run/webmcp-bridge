@@ -338,7 +338,7 @@ describe("createXAdapter", () => {
         "mentions.list",
         "user.get",
         "tweet.reply",
-        "grok.ask",
+        "grok.chat",
       ]),
     );
   });
@@ -549,11 +549,11 @@ describe("createXAdapter", () => {
     });
   });
 
-  it("returns validation error for grok.ask without prompt", async () => {
+  it("returns validation error for grok.chat without prompt", async () => {
     const adapter = createXAdapter();
     const { page } = createMockPage();
 
-    const result = await adapter.callTool({ name: "grok.ask", input: {} }, { page: page as never });
+    const result = await adapter.callTool({ name: "grok.chat", input: {} }, { page: page as never });
 
     expect(result).toEqual({
       error: {
@@ -572,7 +572,7 @@ describe("createXAdapter", () => {
     });
 
     const result = await adapter.callTool(
-      { name: "grok.ask", input: { prompt: "say hello" } },
+      { name: "grok.chat", input: { prompt: "say hello" } },
       { page: page as never },
     );
 
@@ -592,7 +592,7 @@ describe("createXAdapter", () => {
     });
 
     const result = await adapter.callTool(
-      { name: "grok.ask", input: { prompt: "say hello" } },
+      { name: "grok.chat", input: { prompt: "say hello" } },
       { page: page as never },
     );
 

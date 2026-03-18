@@ -16,7 +16,7 @@
 - `user.get`: read a user profile summary by handle.
 - `tweet.create`: submit a text post with optional `dryRun`.
 - `tweet.reply`: reply to one tweet by URL or ID, with optional `dryRun`.
-- `grok.ask`: send one prompt to Grok and return the latest assistant reply.
+- `grok.chat`: send one prompt to Grok and return the assistant reply.
 
 `timeline.home.list`, `timeline.user.list`, `search.tweets.list`, and `favorites.list` support incremental pagination with:
 
@@ -149,14 +149,29 @@ Reply to a tweet:
 }
 ```
 
-Ask Grok:
+Chat with Grok:
 
 ```json
 {
   "method": "tools/call",
   "params": {
-    "name": "grok.ask",
+    "name": "grok.chat",
     "arguments": { "prompt": "Summarize the latest replies to my last post." }
+  }
+}
+```
+
+Continue an existing Grok conversation:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "grok.chat",
+    "arguments": {
+      "prompt": "Continue from the previous answer in one sentence.",
+      "conversationId": "2034141763959722111"
+    }
   }
 }
 ```
@@ -165,6 +180,6 @@ Ask Grok:
 
 - Selector-based implementation; upstream UI changes may require selector updates.
 - Text-only compose and reply scope in `0.1.x`.
-- `grok.ask` is single-turn and returns the latest visible assistant text only.
+- `grok.chat` starts a new conversation by default; pass `conversationId` to continue an existing chat.
 - `notifications.list` and `mentions.list` are currently DOM-backed and do not expose cursor pagination yet.
 - Requires user already logged in on web session.
