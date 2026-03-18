@@ -25,6 +25,11 @@ export async function captureRoutedResponseText(
   const shouldSkipRequest = options?.shouldSkipRequest ?? ((method: string) => method === "OPTIONS");
 
   const routeHandler = async (route: Route) => {
+    if (captured) {
+      await route.continue().catch(() => {});
+      return;
+    }
+
     const method = route.request().method();
     if (shouldSkipRequest(method)) {
       await route.continue().catch(() => {});

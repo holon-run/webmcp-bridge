@@ -28,7 +28,7 @@ describe("adapter-utils", () => {
   });
 
   it("parses ndjson and collects tagged text", () => {
-    const entries = parseNdjsonLines<Array<{ message?: string; messageTag?: string }> extends never ? never : { message?: string; messageTag?: string }>(
+    const entries = parseNdjsonLines<{ message?: string; messageTag?: string }>(
       `{"message":"foo","messageTag":"final"}\n{"message":"bar","messageTag":"summary"}\n{"message":"baz","messageTag":"final"}\nnot-json\n`,
     );
 
@@ -123,6 +123,7 @@ describe("adapter-utils", () => {
 
   it("captures routed response text with a minimal page-like object", async () => {
     let registeredHandler: ((route: { request(): { method(): string }; continue(): Promise<void>; fetch(): Promise<{ status(): number; text(): Promise<string> }>; fulfill(): Promise<void>; }) => Promise<void>) | undefined;
+    let continueCalls = 0;
     const page = {
       route: async (_pattern: string, handler: typeof registeredHandler) => {
         registeredHandler = handler;
@@ -140,10 +141,23 @@ describe("adapter-utils", () => {
         }
         await registeredHandler({
           request: () => ({ method: () => "POST" }),
-          continue: async () => {},
+          continue: async () => {
+            continueCalls += 1;
+          },
           fetch: async () => ({
             status: () => 200,
             text: async () => "{\"ok\":true}",
+          }),
+          fulfill: async () => {},
+        });
+        await registeredHandler({
+          request: () => ({ method: () => "POST" }),
+          continue: async () => {
+            continueCalls += 1;
+          },
+          fetch: async () => ({
+            status: () => 200,
+            text: async () => "{\"ok\":false}",
           }),
           fulfill: async () => {},
         });
@@ -156,5 +170,6 @@ describe("adapter-utils", () => {
       status: 200,
       text: "{\"ok\":true}",
     });
+    expect(continueCalls).toBe(1);
   });
 });

@@ -1147,7 +1147,7 @@ async function extractNotificationCards(
       if (!current) {
         return next;
       }
-      return scoreItem(next) < scoreItem(current) ? next : current;
+      return scoreItem(next) > scoreItem(current) ? next : current;
     };
 
     const byKey = new Map<
@@ -1486,6 +1486,7 @@ async function readTweetThreadByUrl(page: Page, url: string, limit: number): Pro
   return await withEphemeralReadOnlyPage(page, url, async (readPage) => {
     const matchId = url.match(/status\/(\d+)/)?.[1];
     const merged = new Map<string, TimelineItem>();
+    let source: "network" | "dom" = "dom";
 
     const getThreadKey = (item: TimelineItem): string => {
       if (item.id && !item.id.startsWith("article-") && !item.id.startsWith("cell-")) {
@@ -1525,6 +1526,7 @@ async function readTweetThreadByUrl(page: Page, url: string, limit: number): Pro
       });
       if (fromNetwork.items.length > 0) {
         mergeItems(mapTweetCards(fromNetwork.items));
+        source = "network";
       }
     }
 
@@ -1537,7 +1539,7 @@ async function readTweetThreadByUrl(page: Page, url: string, limit: number): Pro
     }
     return {
       tweets,
-      source: matchId ? "network" : "dom",
+      source,
     };
   });
 }

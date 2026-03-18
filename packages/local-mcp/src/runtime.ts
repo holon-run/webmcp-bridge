@@ -26,11 +26,18 @@ import type { LocalMcpGateway } from "./server.js";
 import type { SiteDefinition } from "./sites.js";
 
 const NAVIGATION_TIMEOUT_MS = 5_000;
+const LAUNCH_RETRY_DELAY_MS = 750;
+const MAX_LAUNCH_ATTEMPTS = 2;
 const GATEWAY_RECOVERABLE_ERROR_SNIPPETS = [
   "Execution context was destroyed",
   "Cannot find context with specified id",
   "Target page, context or browser has been closed",
   "WebMCP bridge invoke handler missing",
+];
+const LAUNCH_RETRY_ERROR_SNIPPETS = [
+  "Target page, context or browser has been closed",
+  "Opening in existing browser session.",
+  "ProcessSingleton",
 ];
 
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
@@ -67,6 +74,11 @@ export type LocalMcpRuntime = {
   close: () => Promise<void>;
 };
 
+function isChromiumAutomationWorkaroundEnabled(): boolean {
+  const value = process.env.WEBMCP_CHROMIUM_LOGIN_WORKAROUND;
+  return value === "1" || value === "true";
+}
+
 function createChromiumLaunchOptions(
   headless: boolean,
   browserChannel: BrowserChannel | undefined,
@@ -86,14 +98,53 @@ function createChromiumLaunchOptions(
   } = {
     headless,
     viewport: null,
-    // Experimental: reduce obvious automation markers for login surfaces.
-    args: ["--disable-blink-features=AutomationControlled"],
-    ignoreDefaultArgs: ["--enable-automation"],
   };
+  if (isChromiumAutomationWorkaroundEnabled()) {
+    // Experimental: reduce obvious automation markers for login surfaces.
+    launchOptions.args = ["--disable-blink-features=AutomationControlled"];
+    launchOptions.ignoreDefaultArgs = ["--enable-automation"];
+  }
   if (browserChannel) {
     launchOptions.channel = browserChannel;
   }
   return launchOptions;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isRetryableLaunchError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return LAUNCH_RETRY_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
+}
+
+async function launchPersistentContextWithRetry(
+  browserType: BrowserType,
+  userDataDir: string,
+  launchOptions: {
+    headless: boolean;
+    viewport: null;
+    channel?: string;
+    args?: string[];
+    ignoreDefaultArgs?: string[];
+  },
+): Promise<BrowserContext> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_LAUNCH_ATTEMPTS; attempt += 1) {
+    try {
+      return await browserType.launchPersistentContext(userDataDir, launchOptions);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= MAX_LAUNCH_ATTEMPTS || !isRetryableLaunchError(error)) {
+        throw error;
+      }
+      await sleep(LAUNCH_RETRY_DELAY_MS);
+    }
+  }
+  throw lastError;
 }
 
 function normalizeHost(value: string): string {
@@ -403,7 +454,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
             viewport: null;
             channel?: string;
           });
-    context = await browserType.launchPersistentContext(userDataDir, launchOptions);
+    context = await launchPersistentContextWithRetry(browserType, userDataDir, launchOptions);
     await initializePageSession();
 
     let closed = false;
