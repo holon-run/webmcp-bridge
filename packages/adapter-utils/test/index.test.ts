@@ -4,7 +4,18 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { collectTextByTag, dedupeStrings, joinTextParts, normalizeText, parseNdjsonLines } from "../src/index.js";
+import {
+  applyHeaderAllowlist,
+  collectTextByTag,
+  captureRoutedResponseText,
+  dedupeStrings,
+  fromDomFallback,
+  fromNetwork,
+  joinTextParts,
+  normalizeText,
+  parseNdjsonLines,
+  TemplateCache,
+} from "../src/index.js";
 
 describe("adapter-utils", () => {
   it("normalizes and deduplicates text", () => {
@@ -24,5 +35,78 @@ describe("adapter-utils", () => {
       { message: "baz", messageTag: "final" },
     ]);
     expect(collectTextByTag(entries, "final")).toEqual(["foo", "baz"]);
+  });
+
+  it("filters headers and caches templates", () => {
+    expect(
+      applyHeaderAllowlist(
+        {
+          Authorization: "Bearer token",
+          Cookie: "secret",
+          "x-csrf-token": "csrf",
+        },
+        ["authorization", "x-csrf-token"],
+      ),
+    ).toEqual({
+      Authorization: "Bearer token",
+      "x-csrf-token": "csrf",
+    });
+
+    const cache = new TemplateCache<string, { url: string }>();
+    cache.set("timeline", { url: "/graphql/home" });
+    expect(cache.has("timeline")).toBe(true);
+    expect(cache.get("timeline")).toEqual({ url: "/graphql/home" });
+    expect(cache.delete("timeline")).toBe(true);
+    expect(cache.get("timeline")).toBeUndefined();
+  });
+
+  it("creates explicit network and dom fallback results", () => {
+    expect(fromNetwork([{ id: "1" }])).toEqual({
+      source: "network",
+      data: [{ id: "1" }],
+      reason: undefined,
+    });
+    expect(fromDomFallback([{ id: "1" }], "no_template")).toEqual({
+      source: "dom",
+      data: [{ id: "1" }],
+      reason: "no_template",
+    });
+  });
+
+  it("captures routed response text with a minimal page-like object", async () => {
+    let registeredHandler: ((route: { request(): { method(): string }; continue(): Promise<void>; fetch(): Promise<{ status(): number; text(): Promise<string> }>; fulfill(): Promise<void>; }) => Promise<void>) | undefined;
+    const page = {
+      route: async (_pattern: string, handler: typeof registeredHandler) => {
+        registeredHandler = handler;
+      },
+      unroute: async () => {},
+      waitForTimeout: async () => {},
+    };
+
+    const result = await captureRoutedResponseText(
+      page as never,
+      "**/demo",
+      async () => {
+        if (!registeredHandler) {
+          return false;
+        }
+        await registeredHandler({
+          request: () => ({ method: () => "POST" }),
+          continue: async () => {},
+          fetch: async () => ({
+            status: () => 200,
+            text: async () => "{\"ok\":true}",
+          }),
+          fulfill: async () => {},
+        });
+        return true;
+      },
+    );
+
+    expect(result).toEqual({
+      method: "POST",
+      status: 200,
+      text: "{\"ok\":true}",
+    });
   });
 });

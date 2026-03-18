@@ -86,6 +86,10 @@ importers:
         version: 1.58.2
 
   packages/adapter-utils:
+    dependencies:
+      playwright:
+        specifier: ^1.58.2
+        version: 1.58.2
     devDependencies:
       vitest:
         specifier: ^3.2.4

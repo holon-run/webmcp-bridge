@@ -5,7 +5,12 @@
 
 import type { JsonValue } from "@webmcp-bridge/core";
 import type { SiteAdapter, WebMcpToolDefinition } from "@webmcp-bridge/playwright";
-import { collectTextByTag, joinTextParts, parseNdjsonLines } from "@webmcp-bridge/adapter-utils";
+import {
+  captureRoutedResponseText,
+  collectTextByTag,
+  joinTextParts,
+  parseNdjsonLines,
+} from "@webmcp-bridge/adapter-utils";
 import type { Page } from "playwright";
 
 type XAuthState = "authenticated" | "auth_required" | "challenge_required";
@@ -2366,37 +2371,20 @@ async function askGrokViaNetwork(
   page: Page,
   prompt: string,
 ): Promise<{ ok: true; response: string; url: string; conversationId?: string } | undefined> {
-  let capturedResult:
-    | {
-        response: string;
-        conversationId?: string;
-      }
-    | undefined;
+  const captured = await captureRoutedResponseText(
+    page,
+    "https://grok.x.com/2/grok/add_response.json*",
+    async () => {
+      const submitResult = await submitGrokPrompt(page, prompt);
+      return submitResult.ok;
+    },
+  );
 
-  const routeHandler = async (route: {
-    request(): {
-      method(): string;
-    };
-    continue(options?: Record<string, unknown>): Promise<void>;
-    fetch(options?: Record<string, unknown>): Promise<{
-      status(): number;
-      text(): Promise<string>;
-    }>;
-    fulfill(options?: Record<string, unknown>): Promise<void>;
-  }) => {
-    const request = route.request();
-    if (request.method() === "OPTIONS") {
-      await route.continue().catch(() => {});
-      return;
-    }
+  if (!captured || captured.status < 200 || captured.status >= 300) {
+    return undefined;
+  }
 
-    const response = await route.fetch().catch(() => undefined);
-    if (!response) {
-      await route.continue().catch(() => {});
-      return;
-    }
-
-    const responseText = await response.text().catch(() => "");
+  const responseText = captured.text;
     const entries = parseNdjsonLines<
       {
         conversationId?: string;
@@ -2427,51 +2415,20 @@ async function askGrokViaNetwork(
       }
     }
 
-    const finalResponse = joinTextParts(finalParts).trim();
-    if (response.status() >= 200 && response.status() < 300 && finalResponse) {
-      const nextResult: { response: string; conversationId?: string } = {
-        response: finalResponse,
-      };
-      if (conversationId) {
-        nextResult.conversationId = conversationId;
-      }
-      capturedResult = nextResult;
-    }
-
-    await route.fulfill({ response }).catch(() => {});
-  };
-
-  await page.route("https://grok.x.com/2/grok/add_response.json*", routeHandler);
-
-  try {
-    const submitResult = await submitGrokPrompt(page, prompt);
-    if (!submitResult.ok) {
-      return undefined;
-    }
-
-    const start = Date.now();
-    while (!capturedResult && Date.now() - start < 10_000) {
-      await page.waitForTimeout(100);
-    }
-
-    if (capturedResult) {
-      const output: { ok: true; response: string; url: string; conversationId?: string } = {
-        ok: true,
-        response: capturedResult.response,
-        url:
-          typeof capturedResult.conversationId === "string"
-            ? `https://x.com/i/grok?conversation=${capturedResult.conversationId}`
-            : page.url(),
-      };
-      if (typeof capturedResult.conversationId === "string") {
-        output.conversationId = capturedResult.conversationId;
-      }
-      return output;
-    }
+  const finalResponse = joinTextParts(finalParts).trim();
+  if (!finalResponse) {
     return undefined;
-  } finally {
-    await page.unroute("https://grok.x.com/2/grok/add_response.json*", routeHandler).catch(() => {});
   }
+
+  const output: { ok: true; response: string; url: string; conversationId?: string } = {
+    ok: true,
+    response: finalResponse,
+    url: typeof conversationId === "string" ? `https://x.com/i/grok?conversation=${conversationId}` : page.url(),
+  };
+  if (typeof conversationId === "string") {
+    output.conversationId = conversationId;
+  }
+  return output;
 }
 
 async function waitForGrokResponse(

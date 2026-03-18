@@ -4,5 +4,7 @@
  */
 
 export * from "./dom.js";
+export * from "./network.js";
+export * from "./playwright.js";
 export * from "./stream.js";
 export * from "./text.js";
