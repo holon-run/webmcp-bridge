@@ -16,7 +16,7 @@ import {
 } from "@webmcp-bridge/adapter-utils";
 import { mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { basename, extname, isAbsolute, join } from "node:path";
 import type { Page } from "playwright";
 
 type XAuthState = "authenticated" | "auth_required" | "challenge_required";
@@ -502,8 +502,9 @@ async function materializeGrokArtifacts(
     return { response };
   }
 
-  const artifactDir = await mkdtemp(join(tmpdir(), GROK_ARTIFACT_DIR_PREFIX));
   const artifacts: GrokArtifact[] = [];
+  const reservedNames = new Set<string>();
+  let artifactDir: string | undefined;
   let cleanedResponse = response;
 
   for (const match of matches) {
@@ -513,7 +514,20 @@ async function materializeGrokArtifacts(
     if (!parsed) {
       continue;
     }
-    const name = inferArtifactNameFromLabel(label, parsed.mimeType);
+    let name = inferArtifactNameFromLabel(label, parsed.mimeType);
+    if (reservedNames.has(name)) {
+      const extension = extname(name);
+      const stem = extension ? name.slice(0, -extension.length) : name;
+      let suffix = 2;
+      do {
+        name = `${stem}-${suffix}${extension}`;
+        suffix += 1;
+      } while (reservedNames.has(name));
+    }
+    reservedNames.add(name);
+    if (!artifactDir) {
+      artifactDir = await mkdtemp(join(tmpdir(), GROK_ARTIFACT_DIR_PREFIX));
+    }
     const path = join(artifactDir, name);
     await writeFile(path, parsed.buffer);
     const artifact: GrokArtifact = {
@@ -555,6 +569,12 @@ async function resolveGrokAttachments(input: unknown): Promise<{ ok: true; attac
       return {
         ok: false,
         result: errorResult("VALIDATION_ERROR", `attachmentPaths[${index}] must be a non-empty string`),
+      };
+    }
+    if (!isAbsolute(path)) {
+      return {
+        ok: false,
+        result: errorResult("VALIDATION_ERROR", `attachmentPaths[${index}] must be an absolute file path`),
       };
     }
     try {

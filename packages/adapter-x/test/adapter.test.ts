@@ -3,10 +3,10 @@
  * It depends on adapter factory APIs and page-like mocks to keep unit assertions deterministic.
  */
 
-import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createXAdapter } from "../src/index.js";
 
 type Behavior = {
@@ -399,6 +399,13 @@ function createMockPage(partial: Partial<Behavior> = {}) {
 }
 
 describe("createXAdapter", () => {
+  const tempDirs = new Set<string>();
+
+  afterEach(async () => {
+    await Promise.all(Array.from(tempDirs, (dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.clear();
+  });
+
   it("publishes tool schemas", async () => {
     const adapter = createXAdapter();
     const tools = await adapter.listTools({ page: {} as never });
@@ -672,6 +679,7 @@ describe("createXAdapter", () => {
   it("uploads local attachments before sending grok.chat", async () => {
     const adapter = createXAdapter();
     const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-grok-upload-"));
+    tempDirs.add(tempDir);
     const filePath = join(tempDir, "sample.csv");
     await writeFile(filePath, "name,value\nalpha,1\n");
     const { page, readPage, getUploadedFiles } = createMockPage({
@@ -698,6 +706,29 @@ describe("createXAdapter", () => {
       conversationId: "mock-conversation",
       response: "attachment ok",
       url: "https://x.com/i/grok?conversation=mock-conversation",
+    });
+  });
+
+  it("rejects relative attachment paths", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      {
+        name: "grok.chat",
+        input: {
+          prompt: "use file",
+          attachmentPaths: ["sample.csv"],
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "attachmentPaths[0] must be an absolute file path",
+      },
     });
   });
 
@@ -734,6 +765,33 @@ describe("createXAdapter", () => {
     });
     const artifacts = (result as { artifacts?: Array<{ path: string }> }).artifacts ?? [];
     expect(artifacts[0]?.path).toMatch(/sample\.csv$/);
+    if (artifacts[0]?.path) {
+      tempDirs.add(dirname(artifacts[0].path));
+    }
+  });
+
+  it("deduplicates artifact filenames from multiple data-uri links", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      grokComposeResult: { ok: true },
+      confirmGrok: true,
+      grokRawResponse: [
+        "{\"conversationId\":\"mock-conversation\"}",
+        "{\"result\":{\"message\":\"[Download sample.csv](data:text/csv;base64,YQo=) [Download sample.csv](data:text/csv;base64,Ygo=)\",\"messageTag\":\"final\"}}",
+      ].join("\n"),
+      grokResponse: "Download sample.csv Download sample.csv",
+    });
+
+    const result = await adapter.callTool(
+      { name: "grok.chat", input: { prompt: "make duplicate csv" } },
+      { page: page as never },
+    );
+
+    const artifacts = (result as { artifacts?: Array<{ name: string; path: string }> }).artifacts ?? [];
+    expect(artifacts.map((artifact) => artifact.name)).toEqual(["sample.csv", "sample-2.csv"]);
+    for (const artifact of artifacts) {
+      tempDirs.add(dirname(artifact.path));
+    }
   });
 
   it("fails closed when grok response cannot be confirmed", async () => {
