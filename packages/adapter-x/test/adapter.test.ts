@@ -3,7 +3,10 @@
  * It depends on adapter factory APIs and page-like mocks to keep unit assertions deterministic.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { createXAdapter } from "../src/index.js";
 
 type Behavior = {
@@ -20,12 +23,14 @@ type Behavior = {
   grokComposeResult: { ok: boolean; reason?: string };
   confirmGrok: boolean;
   grokResponse?: string;
+  grokRawResponse?: string;
   statusUrl?: string;
 };
 
 function createMockPage(partial: Partial<Behavior> = {}) {
   let replyConfirmAttempts = 0;
   let grokSubmitted = false;
+  let uploadedFiles: string[] = [];
   let routedHandler:
     | ((
         route: {
@@ -55,7 +60,8 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   };
 
   const grokNetworkResponseText = behavior.confirmGrok
-    ? `{"conversationId":"mock-conversation","result":{"message":"${behavior.grokResponse}","messageTag":"final"}}\n`
+    ? (behavior.grokRawResponse
+        ?? `{"conversationId":"mock-conversation","result":{"message":"${behavior.grokResponse}","messageTag":"final"}}\n`)
     : "";
 
   const triggerGrokRoute = async (): Promise<void> => {
@@ -174,7 +180,18 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     unroute: vi.fn(async () => {
       routedHandler = undefined;
     }),
+    setInputFiles: vi.fn(async (_selector: string, files: string | string[]) => {
+      uploadedFiles = Array.isArray(files) ? files : [files];
+    }),
     waitForFunction: vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        Array.isArray((arg as Record<string, unknown>).names)
+      ) {
+        return true;
+      }
       if (typeof arg === "string") {
         replyConfirmAttempts += 1;
         const replyConfirmed =
@@ -317,10 +334,21 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     unroute: vi.fn(async () => {
       routedHandler = undefined;
     }),
+    setInputFiles: vi.fn(async (_selector: string, files: string | string[]) => {
+      uploadedFiles = Array.isArray(files) ? files : [files];
+    }),
     waitForLoadState: vi.fn(async () => {}),
     reload: vi.fn(async () => {}),
     type: vi.fn(async () => {}),
     waitForFunction: vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        Array.isArray((arg as Record<string, unknown>).names)
+      ) {
+        return true;
+      }
       if (typeof arg === "string") {
         if (!behavior.confirmCompose) {
           throw new Error("timeout");
@@ -366,10 +394,18 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     readPage,
     newPage,
     behavior,
+    getUploadedFiles: () => uploadedFiles,
   };
 }
 
 describe("createXAdapter", () => {
+  const tempDirs = new Set<string>();
+
+  afterEach(async () => {
+    await Promise.all(Array.from(tempDirs, (dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.clear();
+  });
+
   it("publishes tool schemas", async () => {
     const adapter = createXAdapter();
     const tools = await adapter.listTools({ page: {} as never });
@@ -638,6 +674,124 @@ describe("createXAdapter", () => {
       response: "Grok says hello from the mock adapter.",
       url: "https://x.com/i/grok?conversation=mock-conversation",
     });
+  });
+
+  it("uploads local attachments before sending grok.chat", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-grok-upload-"));
+    tempDirs.add(tempDir);
+    const filePath = join(tempDir, "sample.csv");
+    await writeFile(filePath, "name,value\nalpha,1\n");
+    const { page, readPage, getUploadedFiles } = createMockPage({
+      grokComposeResult: { ok: true },
+      confirmGrok: true,
+      grokResponse: "attachment ok",
+    });
+
+    const result = await adapter.callTool(
+      {
+        name: "grok.chat",
+        input: {
+          prompt: "use file",
+          attachmentPaths: [filePath],
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(readPage.goto).toHaveBeenCalledWith("https://x.com/i/grok", expect.anything());
+    expect(getUploadedFiles()).toEqual([filePath]);
+    expect(result).toEqual({
+      ok: true,
+      conversationId: "mock-conversation",
+      response: "attachment ok",
+      url: "https://x.com/i/grok?conversation=mock-conversation",
+    });
+  });
+
+  it("rejects relative attachment paths", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      {
+        name: "grok.chat",
+        input: {
+          prompt: "use file",
+          attachmentPaths: ["sample.csv"],
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "attachmentPaths[0] must be an absolute file path",
+      },
+    });
+  });
+
+  it("materializes data-uri download links from grok.chat into local artifacts", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      grokComposeResult: { ok: true },
+      confirmGrok: true,
+      grokRawResponse: [
+        "{\"conversationId\":\"mock-conversation\"}",
+        "{\"result\":{\"message\":\"[Download sample.csv](data:text/csv;base64,bmFtZSx2YWx1ZQphbHBoYSwxCg==)\",\"messageTag\":\"final\"}}",
+        "{\"result\":{\"message\":\" DONE\",\"messageTag\":\"final\"}}",
+      ].join("\n"),
+      grokResponse: "Download sample.csv DONE",
+    });
+
+    const result = await adapter.callTool(
+      { name: "grok.chat", input: { prompt: "make csv" } },
+      { page: page as never },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      conversationId: "mock-conversation",
+      response: "Download sample.csv DONE",
+      url: "https://x.com/i/grok?conversation=mock-conversation",
+      artifacts: [
+        {
+          kind: "file",
+          name: "sample.csv",
+          mimeType: "text/csv",
+        },
+      ],
+    });
+    const artifacts = (result as { artifacts?: Array<{ path: string }> }).artifacts ?? [];
+    expect(artifacts[0]?.path).toMatch(/sample\.csv$/);
+    if (artifacts[0]?.path) {
+      tempDirs.add(dirname(artifacts[0].path));
+    }
+  });
+
+  it("deduplicates artifact filenames from multiple data-uri links", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      grokComposeResult: { ok: true },
+      confirmGrok: true,
+      grokRawResponse: [
+        "{\"conversationId\":\"mock-conversation\"}",
+        "{\"result\":{\"message\":\"[Download sample.csv](data:text/csv;base64,YQo=) [Download sample.csv](data:text/csv;base64,Ygo=)\",\"messageTag\":\"final\"}}",
+      ].join("\n"),
+      grokResponse: "Download sample.csv Download sample.csv",
+    });
+
+    const result = await adapter.callTool(
+      { name: "grok.chat", input: { prompt: "make duplicate csv" } },
+      { page: page as never },
+    );
+
+    const artifacts = (result as { artifacts?: Array<{ name: string; path: string }> }).artifacts ?? [];
+    expect(artifacts.map((artifact) => artifact.name)).toEqual(["sample.csv", "sample-2.csv"]);
+    for (const artifact of artifacts) {
+      tempDirs.add(dirname(artifact.path));
+    }
   });
 
   it("fails closed when grok response cannot be confirmed", async () => {

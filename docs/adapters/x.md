@@ -16,7 +16,7 @@
 - `user.get`: read a user profile summary by handle.
 - `tweet.create`: submit a text post with optional `dryRun`.
 - `tweet.reply`: reply to one tweet by URL or ID, with optional `dryRun`.
-- `grok.chat`: send one prompt to Grok and return the assistant reply.
+- `grok.chat`: send one prompt to Grok, optionally upload local files, and return the assistant reply.
 
 `timeline.home.list`, `timeline.user.list`, `search.tweets.list`, and `favorites.list` support incremental pagination with:
 
@@ -176,10 +176,47 @@ Continue an existing Grok conversation:
 }
 ```
 
+Chat with Grok and upload one local file:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "grok.chat",
+    "arguments": {
+      "prompt": "Read the attached CSV and give me the total.",
+      "attachmentPaths": ["/tmp/grok-upload-sample.csv"]
+    }
+  }
+}
+```
+
+When Grok returns a downloadable `data:` link, `grok.chat` materializes it into a local artifact path:
+
+```json
+{
+  "ok": true,
+  "response": "Download sample.csv DONE",
+  "conversationId": "2034214461893214237",
+  "url": "https://x.com/i/grok?conversation=2034214461893214237",
+  "artifacts": [
+    {
+      "kind": "file",
+      "name": "sample.csv",
+      "mimeType": "text/csv",
+      "path": "/tmp/webmcp-bridge-grok-abc123/sample.csv"
+    }
+  ]
+}
+```
+
 ## Known limits
 
 - Selector-based implementation; upstream UI changes may require selector updates.
 - Text-only compose and reply scope in `0.1.x`.
 - `grok.chat` starts a new conversation by default; pass `conversationId` to continue an existing chat.
+- `grok.chat` attachments currently support local file-path uploads only, via `attachmentPaths`.
+- `grok.chat` marks each `attachmentPaths` item with `x-uxc-kind: "file-path"` so schema-aware clients can treat them as local file references.
+- Download artifacts are currently extracted from Grok `data:` links and materialized to a local temp path; native browser download capture is not wired yet.
 - `notifications.list` and `mentions.list` are currently DOM-backed and do not expose cursor pagination yet.
 - Requires user already logged in on web session.
