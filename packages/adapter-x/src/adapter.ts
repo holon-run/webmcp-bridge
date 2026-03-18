@@ -5,6 +5,15 @@
 
 import type { JsonValue } from "@webmcp-bridge/core";
 import type { SiteAdapter, WebMcpToolDefinition } from "@webmcp-bridge/playwright";
+import {
+  buildRequestCaptureInitScript,
+  captureRoutedResponseText,
+  collectTextByTag,
+  joinTextParts,
+  parseNdjsonLines,
+  type RequestTemplate,
+  TemplateCache,
+} from "@webmcp-bridge/adapter-utils";
 import type { Page } from "playwright";
 
 type XAuthState = "authenticated" | "auth_required" | "challenge_required";
@@ -21,8 +30,26 @@ type ComposeDomResult = {
   submitVisible?: boolean;
 };
 
+type GrokComposeDomResult = {
+  ok: boolean;
+  reason?: string;
+};
+
+type ReplyComposeDomResult = {
+  ok: boolean;
+  dryRun?: boolean;
+  reason?: string;
+  submitVisible?: boolean;
+};
+
+type SubmitDomResult = {
+  ok: boolean;
+  reason?: string;
+};
+
 export type CreateXAdapterOptions = {
   composeConfirmTimeoutMs?: number;
+  grokResponseTimeoutMs?: number;
   maxPostLength?: number;
 };
 
@@ -30,25 +57,15 @@ const DEFAULT_TIMELINE_LIMIT = 10;
 const MAX_TIMELINE_LIMIT = 20;
 const MAX_READ_PAGE_CACHE_SIZE = 8;
 const DEFAULT_COMPOSE_CONFIRM_TIMEOUT_MS = 10_000;
+const DEFAULT_GROK_RESPONSE_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_POST_LENGTH = 280;
 const AUTH_STABILIZE_ATTEMPTS = 6;
 const AUTH_STABILIZE_DELAY_MS = 750;
 const AUTH_WARMUP_TIMEOUT_MS = 12_000;
 
-const CAPTURE_INJECT_SCRIPT = String.raw`
-(() => {
-  const globalAny = window;
-  if (globalAny.__WEBMCP_X_CAPTURE__) {
-    return;
-  }
-
-  const state = {
-    enabled: true,
-    entries: [],
-  };
-
-  const now = () => Date.now();
-  const isGraphQLTimelineUrl = (url) => {
+const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
+  globalKey: "__WEBMCP_X_CAPTURE__",
+  shouldCaptureSource: String.raw`((url) => {
     if (typeof url !== "string") return false;
     return (
       url.includes("/i/api/graphql/") &&
@@ -63,144 +80,22 @@ const CAPTURE_INJECT_SCRIPT = String.raw`
         url.includes("/SearchTimeline")
       )
     );
-  };
-
-  const detectOperation = (url) => {
-    if (url.includes("/HomeTimeline")) return "HomeTimeline";
-    if (url.includes("/BookmarksAll")) return "BookmarksAll";
-    if (url.includes("/Bookmarks")) return "Bookmarks";
-    if (url.includes("/TweetDetail")) return "TweetDetail";
-    if (url.includes("/UserTweetsAndReplies")) return "UserTweetsAndReplies";
-    if (url.includes("/UserMedia")) return "UserMedia";
-    if (url.includes("/UserTweets")) return "UserTweets";
-    if (url.includes("/SearchTimeline")) return "SearchTimeline";
-    return "Unknown";
-  };
-
-  const pickHeaders = (headersLike) => {
-    const output = {};
-    if (!headersLike) return output;
-    try {
-      const headers = new Headers(headersLike);
-      headers.forEach((value, key) => {
-        output[String(key).toLowerCase()] = String(value);
-      });
-      return output;
-    } catch {
-      if (typeof headersLike === "object") {
-        for (const [k, v] of Object.entries(headersLike)) {
-          output[String(k).toLowerCase()] = String(v);
-        }
-      }
-      return output;
-    }
-  };
-
-  const appendEntry = (entry) => {
-    state.entries.push(entry);
-    if (state.entries.length > 80) {
-      state.entries.splice(0, state.entries.length - 80);
-    }
-  };
-
-  const originalFetch = globalAny.fetch?.bind(globalAny);
-  if (typeof originalFetch === "function") {
-    globalAny.fetch = async (...args) => {
-      const input = args[0];
-      const init = args[1] || {};
-      const url = typeof input === "string" ? input : input?.url || "";
-      const method = String(init.method || (typeof input !== "string" && input?.method) || "GET").toUpperCase();
-      const headers = pickHeaders(init.headers || (typeof input !== "string" ? input?.headers : undefined));
-      const body = typeof init.body === "string" ? init.body : undefined;
-      const shouldCapture = isGraphQLTimelineUrl(url);
-      const response = await originalFetch(...args);
-
-      if (shouldCapture) {
-        let responseJson;
-        try {
-          responseJson = await response.clone().json();
-        } catch {
-          responseJson = undefined;
-        }
-        appendEntry({
-          ts: now(),
-          op: detectOperation(url),
-          url,
-          method,
-          headers,
-          body,
-          ok: response.ok,
-          status: response.status,
-          responseJson,
-        });
-      }
-      return response;
-    };
-  }
-
-  const OriginalXMLHttpRequest = globalAny.XMLHttpRequest;
-  const xhrProto = OriginalXMLHttpRequest?.prototype;
-  if (xhrProto && !xhrProto.__webmcpCapturePatched) {
-    const originalOpen = xhrProto.open;
-    const originalSend = xhrProto.send;
-    const originalSetRequestHeader = xhrProto.setRequestHeader;
-
-    xhrProto.open = function(method, url, ...rest) {
-      this.__webmcpCapture = {
-        method: String(method || "GET").toUpperCase(),
-        url: String(url || ""),
-        headers: {},
-      };
-      return originalOpen.call(this, method, url, ...rest);
-    };
-
-    xhrProto.setRequestHeader = function(key, value) {
-      try {
-        const capture = this.__webmcpCapture;
-        if (capture && capture.headers && typeof key === "string") {
-          capture.headers[String(key).toLowerCase()] = String(value);
-        }
-      } catch {}
-      return originalSetRequestHeader.call(this, key, value);
-    };
-
-    xhrProto.send = function(body) {
-      try {
-        this.addEventListener("loadend", () => {
-          const capture = this.__webmcpCapture || {};
-          const url = typeof capture.url === "string" ? capture.url : "";
-          if (!isGraphQLTimelineUrl(url)) {
-            return;
-          }
-          let responseJson;
-          try {
-            const text = typeof this.responseText === "string" ? this.responseText : "";
-            responseJson = text ? JSON.parse(text) : undefined;
-          } catch {
-            responseJson = undefined;
-          }
-          appendEntry({
-            ts: now(),
-            op: detectOperation(url),
-            url,
-            method: typeof capture.method === "string" ? capture.method : "GET",
-            headers: capture.headers || {},
-            body: typeof body === "string" ? body : undefined,
-            ok: this.status >= 200 && this.status < 300,
-            status: Number(this.status || 0),
-            responseJson,
-          });
-        });
-      } catch {}
-      return originalSend.call(this, body);
-    };
-
-    xhrProto.__webmcpCapturePatched = true;
-  }
-
-  globalAny.__WEBMCP_X_CAPTURE__ = state;
-})();
-`;
+  })`,
+  enrichEntrySource: String.raw`((entry) => {
+    const url = typeof entry?.url === "string" ? entry.url : "";
+    let op = "Unknown";
+    if (url.includes("/HomeTimeline")) op = "HomeTimeline";
+    else if (url.includes("/BookmarksAll")) op = "BookmarksAll";
+    else if (url.includes("/Bookmarks")) op = "Bookmarks";
+    else if (url.includes("/TweetDetail")) op = "TweetDetail";
+    else if (url.includes("/UserTweetsAndReplies")) op = "UserTweetsAndReplies";
+    else if (url.includes("/UserMedia")) op = "UserMedia";
+    else if (url.includes("/UserTweets")) op = "UserTweets";
+    else if (url.includes("/SearchTimeline")) op = "SearchTimeline";
+    return { ...entry, op };
+  })`,
+  maxEntries: 80,
+});
 
 const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
   {
@@ -256,6 +151,28 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
+    name: "tweet.thread.get",
+    description: "Read one tweet thread by url or id",
+    inputSchema: {
+      type: "object",
+      description: "Fetch the focal tweet and nearby replies from a tweet detail thread.",
+      properties: {
+        url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
+        id: { type: "string", description: "Tweet id. Used when url is not provided." },
+        limit: {
+          type: "integer",
+          description: `Maximum number of thread tweets to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
     name: "favorites.list",
     description: "Read bookmarks/favorites feed cards",
     inputSchema: {
@@ -271,6 +188,46 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         cursor: {
           type: "string",
           description: "Pagination cursor returned by previous call as nextCursor.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "notifications.list",
+    description: "Read the main notifications feed",
+    inputSchema: {
+      type: "object",
+      description: "List recent notifications from the authenticated account.",
+      properties: {
+        limit: {
+          type: "integer",
+          description: `Maximum number of notifications to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "mentions.list",
+    description: "Read the mentions tab from notifications",
+    inputSchema: {
+      type: "object",
+      description: "List recent mention notifications where the account is referenced.",
+      properties: {
+        limit: {
+          type: "integer",
+          description: `Maximum number of mentions to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
         },
       },
       additionalProperties: false,
@@ -379,6 +336,53 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
       },
       required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "tweet.reply",
+    description: "Reply to one tweet by url or id",
+    inputSchema: {
+      type: "object",
+      description: "Open a tweet detail page, compose one reply, and optionally skip final submit with dryRun.",
+      properties: {
+        url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
+        id: { type: "string", description: "Tweet id. Used when url is not provided." },
+        text: {
+          type: "string",
+          description: `Reply text content. Max length ${DEFAULT_MAX_POST_LENGTH}.`,
+          minLength: 1,
+          maxLength: DEFAULT_MAX_POST_LENGTH,
+        },
+        dryRun: {
+          type: "boolean",
+          description: "When true, validate the reply compose path without submitting.",
+        },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "grok.chat",
+    description: "Send one prompt to Grok from the authenticated X session",
+    inputSchema: {
+      type: "object",
+      description:
+        "Ask Grok from the authenticated X session. Starts a new chat by default; pass conversationId to continue an existing conversation.",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "Prompt text to send to Grok.",
+          minLength: 1,
+        },
+        conversationId: {
+          type: "string",
+          description: "Existing Grok conversation id. When omitted, the adapter starts a new chat before asking.",
+          minLength: 1,
+        },
+      },
+      required: ["prompt"],
       additionalProperties: false,
     },
   },
@@ -565,8 +569,17 @@ type TweetCard = {
   createdAt?: string;
 };
 
+type TimelineItem = {
+  id: string;
+  text: string;
+  url?: string;
+  kind?: string;
+  summary?: string;
+  tweetText?: string;
+};
+
 type TimelinePage = {
-  items: TweetCard[];
+  items: TimelineItem[];
   source: "network" | "dom";
   hasMore: boolean;
   nextCursor?: string;
@@ -575,14 +588,73 @@ type TimelinePage = {
   };
 };
 
+function normalizeInlineText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function enrichNotificationItem(item: TimelineItem): TimelineItem {
+  const text = normalizeInlineText(item.text);
+  const summary = item.summary ? normalizeInlineText(item.summary) : undefined;
+  const tweetText = item.tweetText ? normalizeInlineText(item.tweetText) : undefined;
+  const next: TimelineItem = {
+    id: item.id,
+    text,
+  };
+  if (item.url) {
+    next.url = item.url;
+  }
+  if (summary) {
+    next.summary = summary;
+  }
+  if (tweetText) {
+    next.tweetText = tweetText;
+  }
+  if (item.kind) {
+    next.kind = item.kind;
+  }
+
+  const likeMatch = text.match(/^(.+?liked your post·\s*\S+)\s+(?:Article\s+)?(.+)$/i);
+  if (likeMatch?.[1] && likeMatch[2]) {
+    next.kind = next.kind ?? "like";
+    next.summary = next.summary ?? normalizeInlineText(likeMatch[1]);
+    next.tweetText = next.tweetText ?? normalizeInlineText(likeMatch[2]);
+    next.text = next.tweetText;
+    return next;
+  }
+
+  const repostMatch = text.match(/^(.+?reposted(?: your post)?·\s*\S+)\s+(.+)$/i);
+  if (repostMatch?.[1] && repostMatch[2]) {
+    next.kind = next.kind ?? "repost";
+    next.summary = next.summary ?? normalizeInlineText(repostMatch[1]);
+    next.tweetText = next.tweetText ?? normalizeInlineText(repostMatch[2]);
+    next.text = next.tweetText;
+    return next;
+  }
+
+  const replyMatch = text.match(/^(.+?Replying to @\w+(?:.*?·\s*\S+)?)\s+(.+)$/i);
+  if (replyMatch?.[1] && replyMatch[2]) {
+    next.kind = next.kind ?? "reply";
+    next.summary = next.summary ?? normalizeInlineText(replyMatch[1]);
+    next.tweetText = next.tweetText ?? normalizeInlineText(replyMatch[2]);
+    next.text = next.tweetText;
+    return next;
+  }
+
+  const followMatch = text.match(/^(.+?followed you(?:·\s*\S+)?)$/i);
+  if (followMatch?.[1]) {
+    next.kind = next.kind ?? "follow";
+    next.summary = next.summary ?? normalizeInlineText(followMatch[1]);
+    return next;
+  }
+
+  if (!next.kind && next.url) {
+    next.kind = "mention";
+  }
+  return next;
+}
+
 type ReadPageKey = string;
 type ProcessTemplateBucket = TimelineMode;
-type NetworkTemplate = {
-  url: string;
-  method: string;
-  headers: Record<string, string>;
-  body?: string;
-};
 
 type ReadPageCacheEntry = {
   key: string;
@@ -595,7 +667,7 @@ type ReadPageCacheState = {
 };
 
 const READ_PAGE_CACHE = new WeakMap<Page, ReadPageCacheState>();
-const PROCESS_TEMPLATE_CACHE = new Map<ProcessTemplateBucket, NetworkTemplate>();
+const PROCESS_TEMPLATE_CACHE = new TemplateCache<ProcessTemplateBucket, RequestTemplate>();
 
 async function readTimelineViaNetwork(
   page: Page,
@@ -781,10 +853,13 @@ async function readTimelineViaNetwork(
         return result;
       };
 
-      const sanitizeHeaders = (headers: Record<string, string>): Record<string, string> => {
+      const sanitizeHeaders = (headers?: Record<string, string>): Record<string, string> => {
         const blockedPrefixes = ["sec-", ":"];
         const blockedExact = new Set(["host", "content-length", "cookie", "origin", "referer", "connection"]);
         const output: Record<string, string> = {};
+        if (!headers) {
+          return output;
+        }
         for (const [key, value] of Object.entries(headers)) {
           const k = key.toLowerCase();
           if (blockedExact.has(k)) {
@@ -859,12 +934,7 @@ async function readTimelineViaNetwork(
         nextCursor?: string;
         source: "network" | "dom";
         reason?: string;
-        selectedTemplate?: {
-          url: string;
-          method: string;
-          headers: Record<string, string>;
-          body?: string;
-        };
+        selectedTemplate?: RequestTemplate;
       } = {
         items: parsed.items.slice(0, limit),
         source: parsed.items.length > 0 ? ("network" as const) : ("dom" as const),
@@ -912,16 +982,19 @@ async function readTimelineViaNetwork(
   if (
     selectedTemplate &&
     typeof selectedTemplate.url === "string" &&
-    typeof selectedTemplate.method === "string" &&
-    typeof selectedTemplate.headers === "object" &&
-    selectedTemplate.headers !== null &&
-    !Array.isArray(selectedTemplate.headers)
+    typeof selectedTemplate.method === "string"
   ) {
-    const cacheValue: NetworkTemplate = {
+    const cacheValue: RequestTemplate = {
       url: selectedTemplate.url,
       method: selectedTemplate.method,
-      headers: selectedTemplate.headers as Record<string, string>,
     };
+    if (
+      typeof selectedTemplate.headers === "object" &&
+      selectedTemplate.headers !== null &&
+      !Array.isArray(selectedTemplate.headers)
+    ) {
+      cacheValue.headers = selectedTemplate.headers as Record<string, string>;
+    }
     if (typeof selectedTemplate.body === "string") {
       cacheValue.body = selectedTemplate.body;
     }
@@ -1027,6 +1100,157 @@ async function extractTweetCards(
   return cards;
 }
 
+async function extractNotificationCards(
+  page: Page,
+  limit: number,
+): Promise<Array<{ id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string }>> {
+  return await page.evaluate(({ op, maxItems }) => {
+    if (op !== "extract_notifications") {
+      return [];
+    }
+
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const classifySummary = (value: string): string => {
+      const text = value.toLowerCase();
+      if (text.includes("followed you")) return "follow";
+      if (text.includes("liked your post")) return "like";
+      if (text.includes("reposted your post") || text.includes("reposted")) return "repost";
+      if (text.includes("replying to @") || text.includes("replied")) return "reply";
+      if (text.includes("@")) return "mention";
+      return "notification";
+    };
+    const isGenericHelperText = (value: string): boolean => {
+      const text = value.toLowerCase();
+      return (
+        text.includes("control which conversations you're mentioned in") ||
+        text.includes("control which conversations you’re mentioned in") ||
+        (text.includes("learn more") && text.includes("mentioned"))
+      );
+    };
+    const scoreItem = (value: { text: string; summary?: string; tweetText?: string }): number => {
+      const text = normalize(value.text);
+      let score = text.length;
+      if (value.summary) {
+        score += 100;
+      }
+      if (value.tweetText) {
+        score += 60;
+      }
+      return score;
+    };
+    const pickPreferred = (
+      current:
+        | { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string }
+        | undefined,
+      next: { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string },
+    ): { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string } => {
+      if (!current) {
+        return next;
+      }
+      return scoreItem(next) > scoreItem(current) ? next : current;
+    };
+
+    const byKey = new Map<
+      string,
+      { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string }
+    >();
+    const pushItem = (item: {
+      id: string;
+      text: string;
+      url?: string;
+      kind?: string;
+      summary?: string;
+      tweetText?: string;
+    }): void => {
+      const text = normalize(item.text);
+      if (!text || isGenericHelperText(text)) {
+        return;
+      }
+      const normalizedItem: {
+        id: string;
+        text: string;
+        url?: string;
+        kind?: string;
+        summary?: string;
+        tweetText?: string;
+      } = {
+        id: item.id,
+        text,
+      };
+      if (item.url) {
+        normalizedItem.url = item.url;
+      }
+      if (item.kind) {
+        normalizedItem.kind = item.kind;
+      }
+      if (item.summary) {
+        normalizedItem.summary = normalize(item.summary);
+      }
+      if (item.tweetText) {
+        normalizedItem.tweetText = normalize(item.tweetText);
+      }
+      const dedupeKey = item.url ? `url:${item.url}` : `text:${text.toLowerCase()}`;
+      byKey.set(dedupeKey, pickPreferred(byKey.get(dedupeKey), normalizedItem));
+    };
+
+    const articles = Array.from(document.querySelectorAll<HTMLElement>("article"));
+    for (const article of articles) {
+      const statusAnchor = article.querySelector<HTMLAnchorElement>("a[href*='/status/']");
+      const url = statusAnchor?.href;
+      const id = url?.match(/status\/(\d+)/)?.[1] ?? `article-${byKey.size + 1}`;
+      const textNodes = Array.from(article.querySelectorAll<HTMLElement>("[data-testid='tweetText'], div[lang], div[dir='auto']"));
+      const tweetText = normalize(textNodes.map((node) => node.textContent || "").join(" "));
+      const fallbackText = normalize(article.innerText || article.textContent || "");
+      const summary = tweetText ? normalize(fallbackText.replace(tweetText, "")) : "";
+      const item: { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string } = {
+        id,
+        text: tweetText || fallbackText,
+      };
+      if (url) {
+        item.url = url;
+      }
+      if (summary) {
+        item.summary = summary;
+        item.kind = classifySummary(summary);
+      }
+      if (tweetText) {
+        item.tweetText = tweetText;
+      }
+      pushItem(item);
+    }
+
+    if (byKey.size < maxItems) {
+      const cells = Array.from(document.querySelectorAll<HTMLElement>("[data-testid='cellInnerDiv']"));
+      for (const cell of cells) {
+        const fallbackText = normalize(cell.innerText || cell.textContent || "");
+        const tweetNode = cell.querySelector<HTMLElement>("[data-testid='tweetText'], div[lang], div[dir='auto']");
+        const tweetText = normalize(tweetNode?.innerText || tweetNode?.textContent || "");
+        const summary = tweetText ? normalize(fallbackText.replace(tweetText, "")) : "";
+        const statusAnchor = cell.querySelector<HTMLAnchorElement>("a[href*='/status/']");
+        const url = statusAnchor?.href;
+        const id = url?.match(/status\/(\d+)/)?.[1] ?? `cell-${byKey.size + 1}`;
+        const item: { id: string; text: string; url?: string; kind?: string; summary?: string; tweetText?: string } = {
+          id,
+          text: tweetText || fallbackText,
+        };
+        if (url) {
+          item.url = url;
+        }
+        if (summary) {
+          item.summary = summary;
+          item.kind = classifySummary(summary);
+        }
+        if (tweetText) {
+          item.tweetText = tweetText;
+        }
+        pushItem(item);
+      }
+    }
+
+    return Array.from(byKey.values()).slice(0, maxItems);
+  }, { op: "extract_notifications", maxItems: limit });
+}
+
 async function withEphemeralReadOnlyPage<T>(page: Page, url: string, run: (readPage: Page) => Promise<T>): Promise<T> {
   const context = page.context();
   const readPage = await context.newPage();
@@ -1037,6 +1261,18 @@ async function withEphemeralReadOnlyPage<T>(page: Page, url: string, run: (readP
     return await run(readPage);
   } finally {
     await readPage.close().catch(() => {});
+  }
+}
+
+async function withEphemeralPage<T>(page: Page, url: string, run: (ephemeralPage: Page) => Promise<T>): Promise<T> {
+  const context = page.context();
+  const ephemeralPage = await context.newPage();
+  try {
+    await ensureNetworkCaptureInstalled(ephemeralPage);
+    await ephemeralPage.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    return await run(ephemeralPage);
+  } finally {
+    await ephemeralPage.close().catch(() => {});
   }
 }
 
@@ -1140,9 +1376,9 @@ async function waitForTweetSurface(page: Page): Promise<void> {
   await page.waitForTimeout(1_000);
 }
 
-function mapTweetCards(items: TweetCard[]): Array<{ id: string; text: string; url?: string }> {
+function mapTweetCards(items: TweetCard[]): TimelineItem[] {
   return items.map((item) => {
-    const mapped: { id: string; text: string; url?: string } = {
+    const mapped: TimelineItem = {
       id: item.id,
       text: item.text,
     };
@@ -1244,6 +1480,81 @@ async function readTweetByUrl(page: Page, url: string): Promise<JsonValue> {
     }
     return { tweet };
   });
+}
+
+async function readTweetThreadByUrl(page: Page, url: string, limit: number): Promise<JsonValue> {
+  return await withEphemeralReadOnlyPage(page, url, async (readPage) => {
+    const matchId = url.match(/status\/(\d+)/)?.[1];
+    const merged = new Map<string, TimelineItem>();
+    let source: "network" | "dom" = "dom";
+
+    const getThreadKey = (item: TimelineItem): string => {
+      if (item.id && !item.id.startsWith("article-") && !item.id.startsWith("cell-")) {
+        return `id:${item.id}`;
+      }
+      if (item.url) {
+        const statusId = item.url.match(/status\/(\d+)/)?.[1];
+        if (statusId) {
+          return `id:${statusId}`;
+        }
+        return `url:${item.url}`;
+      }
+      return `text:${item.text}`;
+    };
+
+    const pickPreferredItem = (current: TimelineItem | undefined, next: TimelineItem): TimelineItem => {
+      if (!current) {
+        return next;
+      }
+      const currentScore = (current.url ? 10 : 0) + current.text.length;
+      const nextScore = (next.url ? 10 : 0) + next.text.length;
+      return nextScore > currentScore ? next : current;
+    };
+
+    const mergeItems = (items: TimelineItem[]): void => {
+      for (const item of items) {
+        const key = getThreadKey(item);
+        merged.set(key, pickPreferredItem(merged.get(key), item));
+      }
+    };
+
+    if (matchId) {
+      const fromNetwork = await readTimelineViaNetwork(readPage, {
+        mode: "tweet",
+        limit,
+        tweetId: matchId,
+      });
+      if (fromNetwork.items.length > 0) {
+        mergeItems(mapTweetCards(fromNetwork.items));
+        source = "network";
+      }
+    }
+
+    const domCards = await extractTweetCards(readPage, Math.max(limit, 20));
+    mergeItems(mapTweetCards(domCards));
+
+    const tweets = Array.from(merged.values()).slice(0, limit);
+    if (tweets.length === 0) {
+      return errorResult("UPSTREAM_CHANGED", "tweet thread content not found");
+    }
+    return {
+      tweets,
+      source,
+    };
+  });
+}
+
+async function readNotifications(page: Page, limit: number): Promise<TimelinePage> {
+  await waitForTweetSurface(page);
+  const cards = await extractNotificationCards(page, limit);
+  return {
+    items: cards.map(enrichNotificationItem),
+    source: "dom",
+    hasMore: false,
+    debug: {
+      reason: "notifications_dom",
+    },
+  };
 }
 
 async function readProfile(page: Page, handle: string): Promise<JsonValue> {
@@ -1486,6 +1797,1129 @@ async function waitForComposeConfirmation(
   return { confirmed: true };
 }
 
+async function ensureReplyComposerReady(page: Page): Promise<void> {
+  const composerSelectors = [
+    "div[data-testid='tweetTextarea_0']",
+    "div[role='textbox'][data-testid='tweetTextarea_0']",
+    "div[role='textbox'][aria-label*='Post text']",
+    "div[role='textbox'][aria-label*='Reply']",
+    "div[role='textbox'][aria-label*='Post your reply']",
+  ];
+  const openReplySelectors = [
+    "[data-testid='reply']",
+    "[data-testid='replyButton']",
+    "button[aria-label*='Reply']",
+    "div[role='button'][aria-label*='Reply']",
+  ];
+
+  for (const selector of composerSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 800 }).catch(() => null);
+    if (handle) {
+      await handle.dispose();
+      return;
+    }
+  }
+
+  await page
+    .evaluate((selectors) => {
+      for (const selector of selectors) {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (element) {
+          element.click();
+          return;
+        }
+      }
+    }, openReplySelectors)
+    .catch(() => {});
+
+  for (const selector of composerSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 2500 }).catch(() => null);
+    if (handle) {
+      await handle.dispose();
+      return;
+    }
+  }
+}
+
+async function composeReply(page: Page, text: string, dryRun: boolean): Promise<ReplyComposeDomResult> {
+  const composerSelectors = [
+    "div[data-testid='tweetTextarea_0']",
+    "div[role='textbox'][data-testid='tweetTextarea_0']",
+    "div[role='textbox'][aria-label*='Reply']",
+    "div[role='textbox'][aria-label*='Post your reply']",
+    "div[role='textbox'][aria-label*='Post text']",
+  ];
+  const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
+
+  let composerSelector: string | undefined;
+  for (const selector of composerSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 800 }).catch(() => null);
+    if (!handle) {
+      continue;
+    }
+    await handle.dispose().catch(() => {});
+    composerSelector = selector;
+    break;
+  }
+
+  if (!composerSelector) {
+    return { ok: false, reason: "composer_not_found" };
+  }
+
+  try {
+    await page.click(composerSelector);
+    await page.keyboard.press(selectAllShortcut).catch(() => {});
+    await page.keyboard.press("Backspace").catch(() => {});
+    await page.type(composerSelector, text, { delay: 12 });
+  } catch {
+    return { ok: false, reason: "compose_input_failed" };
+  }
+
+  const submitVisible = await waitForReplySubmitReady(page, 2_000);
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      submitVisible,
+    };
+  }
+
+  if (!submitVisible) {
+    return { ok: false, reason: "submit_not_found" };
+  }
+
+  return {
+    ok: true,
+    submitVisible: true,
+  };
+}
+
+async function waitForReplySubmitReady(page: Page, timeoutMs: number): Promise<boolean> {
+  try {
+    await page.waitForFunction(
+      ({ op }) => {
+        if (op !== "reply_submit_ready") {
+          return false;
+        }
+
+        const selectors = [
+          "[data-testid='tweetButtonInline']",
+          "[data-testid='tweetButton']",
+          "div[data-testid='toolBar'] [data-testid='tweetButtonInline']",
+        ];
+
+        const isEnabled = (element: HTMLElement | null): boolean => {
+          if (!element) {
+            return false;
+          }
+          if (element instanceof HTMLButtonElement) {
+            return !element.disabled;
+          }
+          const ariaDisabled = (element.getAttribute("aria-disabled") ?? "").toLowerCase();
+          return ariaDisabled !== "true";
+        };
+
+        const composerSelectors = [
+          "div[data-testid='tweetTextarea_0']",
+          "div[role='textbox'][data-testid='tweetTextarea_0']",
+          "div[role='textbox'][aria-label*='Reply']",
+          "div[role='textbox'][aria-label*='Post your reply']",
+          "div[role='textbox'][aria-label*='Post text']",
+        ];
+
+        const findNearestSubmit = (composer: HTMLElement | null): HTMLElement | null => {
+          if (!composer) {
+            return null;
+          }
+          const roots = [
+            composer.closest<HTMLElement>("[role='dialog']"),
+            composer.closest<HTMLElement>("form"),
+            composer.closest<HTMLElement>("article"),
+            composer.parentElement,
+            composer.parentElement?.parentElement,
+            document.body,
+          ];
+
+          for (const root of roots) {
+            if (!root) {
+              continue;
+            }
+            for (const selector of selectors) {
+              const element = root.querySelector<HTMLElement>(selector);
+              if (isEnabled(element)) {
+                return element;
+              }
+            }
+          }
+          return null;
+        };
+
+        let composer: HTMLElement | null = null;
+        for (const selector of composerSelectors) {
+          composer = document.querySelector<HTMLElement>(selector);
+          if (composer) {
+            break;
+          }
+        }
+
+        if (findNearestSubmit(composer)) {
+          return true;
+        }
+
+        for (const selector of selectors) {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (isEnabled(element)) {
+            return true;
+          }
+        }
+        return false;
+      },
+      { op: "reply_submit_ready" },
+      { timeout: Math.max(1_500, Math.min(timeoutMs, 6_000)) },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function submitReply(page: Page): Promise<SubmitDomResult> {
+  return await page.evaluate(({ op }) => {
+    if (op !== "reply_submit") {
+      return { ok: false, reason: "invalid_operation" };
+    }
+
+    const composerSelectors = [
+      "div[data-testid='tweetTextarea_0']",
+      "div[role='textbox'][data-testid='tweetTextarea_0']",
+      "div[role='textbox'][aria-label*='Reply']",
+      "div[role='textbox'][aria-label*='Post your reply']",
+      "div[role='textbox'][aria-label*='Post text']",
+    ];
+    const selectors = [
+      "[data-testid='tweetButtonInline']",
+      "[data-testid='tweetButton']",
+      "div[data-testid='toolBar'] [data-testid='tweetButtonInline']",
+    ];
+
+    const isEnabled = (element: HTMLElement | null): boolean => {
+      if (!element) {
+        return false;
+      }
+      if (element instanceof HTMLButtonElement) {
+        return !element.disabled;
+      }
+      const ariaDisabled = (element.getAttribute("aria-disabled") ?? "").toLowerCase();
+      return ariaDisabled !== "true";
+    };
+
+    const findNearestSubmit = (composer: HTMLElement | null): HTMLElement | null => {
+      if (!composer) {
+        return null;
+      }
+      const roots = [
+        composer.closest<HTMLElement>("[role='dialog']"),
+        composer.closest<HTMLElement>("form"),
+        composer.closest<HTMLElement>("article"),
+        composer.parentElement,
+        composer.parentElement?.parentElement,
+        document.body,
+      ];
+
+      for (const root of roots) {
+        if (!root) {
+          continue;
+        }
+        for (const selector of selectors) {
+          const element = root.querySelector<HTMLElement>(selector);
+          if (isEnabled(element)) {
+            return element;
+          }
+        }
+      }
+      return null;
+    };
+
+    let composer: HTMLElement | null = null;
+    for (const selector of composerSelectors) {
+      composer = document.querySelector<HTMLElement>(selector);
+      if (composer) {
+        break;
+      }
+    }
+
+    const nearestSubmit = findNearestSubmit(composer);
+    if (nearestSubmit) {
+      nearestSubmit.click();
+      return { ok: true };
+    }
+
+    for (const selector of selectors) {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!isEnabled(element)) {
+        continue;
+      }
+      element?.click();
+      return { ok: true };
+    }
+
+    return { ok: false, reason: "submit_not_found" };
+  }, { op: "reply_submit" });
+}
+
+async function waitForReplyConfirmation(
+  page: Page,
+  targetUrl: string,
+  text: string,
+  timeoutMs: number,
+): Promise<{ confirmed: boolean; statusUrl?: string }> {
+  const firstPassTimeoutMs = Math.max(2_500, Math.min(timeoutMs, 5_000));
+  const firstPass = await waitForComposeConfirmation(page, text, firstPassTimeoutMs);
+  if (firstPass.confirmed) {
+    return firstPass;
+  }
+
+  await page.waitForTimeout(1_000);
+  await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await waitForTweetSurface(page);
+
+  const secondPassTimeoutMs = Math.max(2_500, timeoutMs - firstPassTimeoutMs);
+  return await waitForComposeConfirmation(page, text, secondPassTimeoutMs);
+}
+
+async function waitForGrokSurface(page: Page): Promise<void> {
+  await page
+    .waitForFunction(() => {
+      const composer =
+        document.querySelector("textarea") ||
+        document.querySelector("[contenteditable='true'][role='textbox']") ||
+        document.querySelector("[role='textbox'][contenteditable='true']");
+      const messages =
+        document.querySelector("[data-message-author-role='assistant']") ||
+        document.querySelector("[data-testid*='assistant']") ||
+        document.querySelector("article");
+      return composer !== null || messages !== null;
+    }, undefined, { timeout: 12_000 })
+    .catch(() => {});
+  await page.waitForTimeout(800);
+}
+
+async function submitGrokPrompt(page: Page, prompt: string): Promise<GrokComposeDomResult> {
+  const composerSelectors = [
+    "textarea",
+    "[contenteditable='true'][role='textbox']",
+    "[role='textbox'][contenteditable='true']",
+  ];
+  const submitSelectors = [
+    "button[aria-label*='Grok something']",
+    "button[aria-label*='Send']",
+    "button[aria-label*='send']",
+    "button[data-testid*='send']",
+    "button[type='submit']",
+  ];
+  const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
+
+  let composerSelector: string | undefined;
+  for (const selector of composerSelectors) {
+    const handle = await page.waitForSelector(selector, { timeout: 1_200 }).catch(() => null);
+    if (!handle) {
+      continue;
+    }
+    await handle.dispose().catch(() => {});
+    composerSelector = selector;
+    break;
+  }
+
+  if (!composerSelector) {
+    return { ok: false, reason: "composer_not_found" };
+  }
+
+  try {
+    await page.click(composerSelector);
+    await page.keyboard.press(selectAllShortcut).catch(() => {});
+    await page.keyboard.press("Backspace").catch(() => {});
+    await page.type(composerSelector, prompt, { delay: 12 });
+  } catch {
+    return { ok: false, reason: "compose_input_failed" };
+  }
+
+  const submitSelector = await page.evaluate((selectors) => {
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
+
+    for (const selector of selectors) {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) {
+        continue;
+      }
+      if (element instanceof HTMLButtonElement && element.disabled) {
+        continue;
+      }
+      const ariaDisabled = (element.getAttribute("aria-disabled") ?? "").toLowerCase();
+      if (ariaDisabled === "true") {
+        continue;
+      }
+      const label = normalize(element.getAttribute("aria-label") ?? element.textContent ?? "");
+      if (label.includes("stop")) {
+        continue;
+      }
+      return selector;
+    }
+    return undefined;
+  }, submitSelectors);
+
+  if (!submitSelector) {
+    return { ok: false, reason: "submit_not_found" };
+  }
+
+  try {
+    await page.click(submitSelector);
+  } catch {
+    return { ok: false, reason: "submit_click_failed" };
+  }
+
+  return { ok: true };
+}
+
+async function prepareGrokSession(page: Page, conversationId?: string): Promise<void> {
+  const targetUrl =
+    typeof conversationId === "string" && conversationId.trim().length > 0
+      ? `https://x.com/i/grok?conversation=${encodeURIComponent(conversationId.trim())}`
+      : "https://x.com/i/grok";
+
+  if (!isSameLocation(page.url(), targetUrl)) {
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  }
+
+  await waitForGrokSurface(page);
+
+  if (conversationId && conversationId.trim().length > 0) {
+    return;
+  }
+
+  const currentConversationId = (() => {
+    try {
+      return new URL(page.url()).searchParams.get("conversation") ?? undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+
+  if (typeof (page as { locator?: unknown }).locator !== "function") {
+    return;
+  }
+
+  const newChatButton = page
+    .locator("button[aria-label*='New Chat'], button:has-text('New Chat')")
+    .first();
+  if ((await newChatButton.count().catch(() => 0)) === 0) {
+    return;
+  }
+
+  await newChatButton.click({ timeout: 2_000 }).catch(() => {});
+  await page
+    .waitForFunction(
+      ({ previousConversationId }) => {
+        const currentUrl = window.location.href;
+        try {
+          const conversation = new URL(currentUrl).searchParams.get("conversation") ?? undefined;
+          if (!previousConversationId) {
+            return conversation === undefined || conversation.length === 0;
+          }
+          return conversation !== previousConversationId;
+        } catch {
+          return false;
+        }
+      },
+      { previousConversationId: currentConversationId },
+      { timeout: 5_000 },
+    )
+    .catch(() => {});
+  await page.waitForTimeout(600);
+  await waitForGrokSurface(page);
+}
+
+async function askGrokViaNetwork(
+  page: Page,
+  prompt: string,
+): Promise<{ ok: true; response: string; url: string; conversationId?: string } | undefined> {
+  const captured = await captureRoutedResponseText(
+    page,
+    "https://grok.x.com/2/grok/add_response.json*",
+    async () => {
+      const submitResult = await submitGrokPrompt(page, prompt);
+      return submitResult.ok;
+    },
+  );
+
+  if (!captured || captured.status < 200 || captured.status >= 300) {
+    return undefined;
+  }
+
+  const responseText = captured.text;
+  const entries = parseNdjsonLines<{
+    conversationId?: string;
+    result?: {
+      message?: string;
+      messageTag?: string;
+    };
+  }>(responseText);
+  const finalParts = collectTextByTag(
+    entries.map((entry) => {
+      const output: { message?: string; messageTag?: string } = {};
+      if (typeof entry.result?.message === "string") {
+        output.message = entry.result.message;
+      }
+      if (typeof entry.result?.messageTag === "string") {
+        output.messageTag = entry.result.messageTag;
+      }
+      return output;
+    }),
+    "final",
+  );
+    let conversationId: string | undefined;
+    for (const entry of entries) {
+      if (!conversationId && typeof entry.conversationId === "string") {
+        conversationId = entry.conversationId;
+      }
+    }
+
+  const finalResponse = joinTextParts(finalParts).trim();
+  if (!finalResponse) {
+    return undefined;
+  }
+
+  const output: { ok: true; response: string; url: string; conversationId?: string } = {
+    ok: true,
+    response: finalResponse,
+    url: typeof conversationId === "string" ? `https://x.com/i/grok?conversation=${conversationId}` : page.url(),
+  };
+  if (typeof conversationId === "string") {
+    output.conversationId = conversationId;
+  }
+  return output;
+}
+
+async function waitForGrokResponse(
+  page: Page,
+  previousResponse: string | undefined,
+  prompt: string,
+  timeoutMs: number,
+): Promise<{ confirmed: boolean; response?: string }> {
+  try {
+    await page.waitForFunction(
+      ({ op, previous, promptText }) => {
+        if (op !== "grok_wait") {
+          return false;
+        }
+
+        const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+        const previousText = normalize(previous);
+        const normalizedPrompt = normalize(promptText);
+        const isIgnoredResponse = (value: string): boolean => {
+          const lower = value.toLowerCase();
+          return (
+            lower.length < 3 ||
+            lower.startsWith("see new posts") ||
+            lower.startsWith("thought for ") ||
+            lower.startsWith("agents thinking") ||
+            lower.startsWith("ask anything") ||
+            lower === "agents" ||
+            lower === "thinking" ||
+            lower === "expert" ||
+            lower.startsWith("grok") ||
+            lower.includes("explore ") ||
+            lower.includes("discuss ") ||
+            lower.includes("create images") ||
+            lower.includes("edit image") ||
+            lower.includes("latest news") ||
+            lower === normalizedPrompt.toLowerCase() ||
+            lower === previousText.toLowerCase()
+          );
+        };
+        const scope =
+          document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
+          document.querySelector<HTMLElement>("main");
+        if (!scope) {
+          return false;
+        }
+        const lines = (scope.innerText || scope.textContent || "")
+          .split(/\n+/)
+          .map((line) => normalize(line))
+          .filter((line) => line.length > 0);
+        const linePromptIndex = lines.lastIndexOf(normalizedPrompt);
+        if (linePromptIndex >= 0) {
+          const hasStopControl = Array.from(document.querySelectorAll<HTMLElement>("button")).some((button) => {
+            const label = normalize(button.getAttribute("aria-label") ?? button.textContent ?? "").toLowerCase();
+            return label.includes("stop");
+          });
+          let hasLineCandidate = false;
+          for (let index = linePromptIndex + 1; index < lines.length; index += 1) {
+            const candidate = lines[index];
+            if (!candidate || isIgnoredResponse(candidate)) {
+              continue;
+            }
+            hasLineCandidate = true;
+          }
+          if (!hasStopControl && hasLineCandidate) {
+            return true;
+          }
+        }
+        const entries: string[] = [];
+        for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
+          if (node.closest("button, a, textarea, nav")) {
+            continue;
+          }
+          const text = normalize(node.innerText || node.textContent || "");
+          if (!text) {
+            continue;
+          }
+          const childWithSameText = Array.from(node.children).some((child) => {
+            if (!(child instanceof HTMLElement)) {
+              return false;
+            }
+            return normalize(child.innerText || child.textContent || "") === text;
+          });
+          if (childWithSameText) {
+            continue;
+          }
+          if (entries[entries.length - 1] !== text) {
+            entries.push(text);
+          }
+        }
+
+        const hasStopControl = Array.from(document.querySelectorAll<HTMLElement>("button")).some((button) => {
+          const label = normalize(button.getAttribute("aria-label") ?? button.textContent ?? "").toLowerCase();
+          return label.includes("stop");
+        });
+
+        const promptIndex = entries.lastIndexOf(normalizedPrompt);
+        if (promptIndex < 0) {
+          return false;
+        }
+
+        let hasCandidate = false;
+        for (let index = promptIndex + 1; index < entries.length; index += 1) {
+          const candidate = entries[index];
+          if (!candidate || isIgnoredResponse(candidate)) {
+            continue;
+          }
+          hasCandidate = true;
+        }
+
+        return !hasStopControl && hasCandidate;
+      },
+      {
+        op: "grok_wait",
+        previous: (previousResponse ?? "").replace(/\s+/g, " ").trim(),
+        promptText: prompt,
+      },
+      { timeout: timeoutMs },
+    );
+  } catch {
+    return { confirmed: false };
+  }
+
+  const state = await page.evaluate(({ op, promptText, previousText }) => {
+    if (op !== "grok_extract_state") {
+      return undefined;
+    }
+
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const normalizedPrompt = normalize(promptText);
+    const normalizedPrevious = normalize(previousText);
+    const isIgnoredResponse = (value: string): boolean => {
+      const lower = value.toLowerCase();
+      return (
+        lower.length < 3 ||
+        lower.startsWith("see new posts") ||
+        lower.startsWith("thought for ") ||
+        lower.startsWith("agents thinking") ||
+        lower.startsWith("ask anything") ||
+        lower === "agents" ||
+        lower === "thinking" ||
+        lower === "expert" ||
+        lower.startsWith("grok") ||
+        lower.includes("explore ") ||
+        lower.includes("discuss ") ||
+        lower.includes("create images") ||
+        lower.includes("edit image") ||
+        lower.includes("latest news") ||
+        lower === normalizedPrompt.toLowerCase() ||
+        lower === normalizedPrevious.toLowerCase()
+      );
+    };
+    const scope =
+      document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
+      document.querySelector<HTMLElement>("main");
+    if (!scope) {
+      return undefined;
+    }
+    const lines = (scope.innerText || scope.textContent || "")
+      .split(/\n+/)
+      .map((line) => normalize(line))
+      .filter((line) => line.length > 0);
+    const lineResponseCandidates: string[] = [];
+    const linePromptIndex = lines.lastIndexOf(normalizedPrompt);
+    if (linePromptIndex >= 0) {
+      for (let index = linePromptIndex + 1; index < lines.length; index += 1) {
+        const candidate = lines[index];
+        if (!candidate || isIgnoredResponse(candidate)) {
+          continue;
+        }
+        lineResponseCandidates.push(candidate);
+      }
+    }
+    let responseForPrompt: string | undefined;
+    if (lineResponseCandidates.length > 0) {
+      responseForPrompt = lineResponseCandidates.sort((left, right) => right.length - left.length)[0];
+    }
+    if (responseForPrompt) {
+      let latestResponse = responseForPrompt;
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const candidate = lines[index];
+        if (!candidate || isIgnoredResponse(candidate)) {
+          continue;
+        }
+        latestResponse = candidate;
+        break;
+      }
+      return {
+        responseForPrompt,
+        latestResponse,
+      };
+    }
+
+    const entries: string[] = [];
+    for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
+      if (node.closest("button, a, textarea, nav")) {
+        continue;
+      }
+      const text = normalize(node.innerText || node.textContent || "");
+      if (!text) {
+        continue;
+      }
+      const childWithSameText = Array.from(node.children).some((child) => {
+        if (!(child instanceof HTMLElement)) {
+          return false;
+        }
+        return normalize(child.innerText || child.textContent || "") === text;
+      });
+      if (childWithSameText) {
+        continue;
+      }
+      if (entries[entries.length - 1] !== text) {
+        entries.push(text);
+      }
+    }
+
+    const responseCandidates: string[] = [];
+    const promptIndex = entries.lastIndexOf(normalizedPrompt);
+    if (promptIndex >= 0) {
+      for (let index = promptIndex + 1; index < entries.length; index += 1) {
+        const candidate = entries[index];
+        if (!candidate || isIgnoredResponse(candidate)) {
+          continue;
+        }
+        responseCandidates.push(candidate);
+      }
+    }
+
+    responseForPrompt = undefined;
+    if (responseCandidates.length > 0) {
+      responseForPrompt = responseCandidates.sort((left, right) => right.length - left.length)[0];
+    }
+
+    let latestResponse: string | undefined;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const candidate = entries[index];
+      if (!candidate || isIgnoredResponse(candidate)) {
+        continue;
+      }
+      latestResponse = candidate;
+      break;
+    }
+
+    return {
+      responseForPrompt,
+      latestResponse,
+    };
+  }, {
+    op: "grok_extract_state",
+    promptText: prompt,
+    previousText: previousResponse ?? "",
+  });
+
+  if (state && typeof state === "object" && typeof state.responseForPrompt === "string" && state.responseForPrompt.length > 0) {
+    await page.waitForTimeout(600);
+    const settledState = await page.evaluate(({ op, promptText, previousText }) => {
+      if (op !== "grok_extract_state") {
+        return undefined;
+      }
+
+      const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+      const normalizedPrompt = normalize(promptText);
+      const normalizedPrevious = normalize(previousText);
+      const isIgnoredResponse = (value: string): boolean => {
+        const lower = value.toLowerCase();
+        return (
+          lower.length < 3 ||
+          lower.startsWith("see new posts") ||
+          lower.startsWith("thought for ") ||
+          lower.startsWith("agents thinking") ||
+          lower.startsWith("ask anything") ||
+          lower === "agents" ||
+          lower === "thinking" ||
+          lower === "expert" ||
+          lower.startsWith("grok") ||
+          lower.includes("explore ") ||
+          lower.includes("discuss ") ||
+          lower.includes("create images") ||
+          lower.includes("edit image") ||
+          lower.includes("latest news") ||
+          lower === normalizedPrompt.toLowerCase() ||
+          lower === normalizedPrevious.toLowerCase()
+        );
+      };
+      const scope =
+        document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
+        document.querySelector<HTMLElement>("main");
+      if (!scope) {
+        return undefined;
+      }
+      const lines = (scope.innerText || scope.textContent || "")
+        .split(/\n+/)
+        .map((line) => normalize(line))
+        .filter((line) => line.length > 0);
+      const lineResponseCandidates: string[] = [];
+      const linePromptIndex = lines.lastIndexOf(normalizedPrompt);
+      if (linePromptIndex >= 0) {
+        for (let index = linePromptIndex + 1; index < lines.length; index += 1) {
+          const candidate = lines[index];
+          if (!candidate || isIgnoredResponse(candidate)) {
+            continue;
+          }
+          lineResponseCandidates.push(candidate);
+        }
+      }
+      if (lineResponseCandidates.length > 0) {
+        return {
+          responseForPrompt: lineResponseCandidates.sort((left, right) => right.length - left.length)[0],
+        };
+      }
+
+      const entries: string[] = [];
+      for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
+        if (node.closest("button, a, textarea, nav")) {
+          continue;
+        }
+        const text = normalize(node.innerText || node.textContent || "");
+        if (!text) {
+          continue;
+        }
+        const childWithSameText = Array.from(node.children).some((child) => {
+          if (!(child instanceof HTMLElement)) {
+            return false;
+          }
+          return normalize(child.innerText || child.textContent || "") === text;
+        });
+        if (childWithSameText) {
+          continue;
+        }
+        if (entries[entries.length - 1] !== text) {
+          entries.push(text);
+        }
+      }
+
+      const responseCandidates: string[] = [];
+      const promptIndex = entries.lastIndexOf(normalizedPrompt);
+      if (promptIndex >= 0) {
+        for (let index = promptIndex + 1; index < entries.length; index += 1) {
+          const candidate = entries[index];
+          if (!candidate || isIgnoredResponse(candidate)) {
+            continue;
+          }
+          responseCandidates.push(candidate);
+        }
+      }
+
+      let responseForPrompt: string | undefined;
+      if (responseCandidates.length > 0) {
+        responseForPrompt = responseCandidates.sort((left, right) => right.length - left.length)[0];
+      }
+
+      return {
+        responseForPrompt,
+      };
+    }, {
+      op: "grok_extract_state",
+      promptText: prompt,
+      previousText: previousResponse ?? "",
+    });
+
+    if (
+      settledState &&
+      typeof settledState === "object" &&
+      typeof settledState.responseForPrompt === "string" &&
+      settledState.responseForPrompt.length > 0
+    ) {
+      return {
+        confirmed: true,
+        response: settledState.responseForPrompt,
+      };
+    }
+  }
+
+  if (state && typeof state === "object" && typeof state.responseForPrompt === "string" && state.responseForPrompt.length > 0) {
+    return {
+      confirmed: true,
+      response: state.responseForPrompt,
+    };
+  }
+  return { confirmed: false };
+}
+
+async function readLatestGrokResponse(page: Page): Promise<string | undefined> {
+  const state = await page.evaluate(({ op }) => {
+    if (op !== "grok_extract_state") {
+      return undefined;
+    }
+
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const isIgnoredResponse = (value: string): boolean => {
+      const lower = value.toLowerCase();
+      return (
+        lower.length < 3 ||
+        lower.startsWith("see new posts") ||
+        lower.startsWith("thought for ") ||
+        lower.startsWith("agents thinking") ||
+        lower.startsWith("ask anything") ||
+        lower === "agents" ||
+        lower === "thinking" ||
+        lower === "expert" ||
+        lower.startsWith("grok") ||
+        lower.includes("explore ")
+      );
+    };
+    const scope =
+      document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
+      document.querySelector<HTMLElement>("main");
+    if (!scope) {
+      return undefined;
+    }
+    const lines = (scope.innerText || scope.textContent || "")
+      .split(/\n+/)
+      .map((line) => normalize(line))
+      .filter((line) => line.length > 0);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const candidate = lines[index];
+      if (!candidate || isIgnoredResponse(candidate)) {
+        continue;
+      }
+      return { latestResponse: candidate };
+    }
+
+    const entries: string[] = [];
+    for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
+      if (node.closest("button, a, textarea, nav")) {
+        continue;
+      }
+      const text = normalize(node.innerText || node.textContent || "");
+      if (!text || isIgnoredResponse(text)) {
+        continue;
+      }
+      const childWithSameText = Array.from(node.children).some((child) => {
+        if (!(child instanceof HTMLElement)) {
+          return false;
+        }
+        return normalize(child.innerText || child.textContent || "") === text;
+      });
+      if (childWithSameText) {
+        continue;
+      }
+      if (entries[entries.length - 1] !== text) {
+        entries.push(text);
+      }
+    }
+
+    let latestResponse: string | undefined;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const candidate = entries[index];
+      if (!candidate || isIgnoredResponse(candidate)) {
+        continue;
+      }
+      latestResponse = candidate;
+      break;
+    }
+
+    return { latestResponse };
+  }, { op: "grok_extract_state" });
+
+  if (state && typeof state === "object" && typeof state.latestResponse === "string") {
+    return state.latestResponse;
+  }
+  return undefined;
+}
+
+function logGrokPhase(phase: string, details?: Record<string, JsonValue>): void {
+  const payload: Record<string, JsonValue> = {
+    phase,
+  };
+  if (details) {
+    for (const [key, value] of Object.entries(details)) {
+      if (value !== undefined) {
+        payload[key] = value;
+      }
+    }
+  }
+  process.stderr.write(`[adapter-x grok] ${JSON.stringify(payload)}\n`);
+}
+
+async function askGrok(
+  page: Page,
+  prompt: string,
+  timeoutMs: number,
+  conversationId?: string,
+): Promise<JsonValue> {
+  logGrokPhase("start", { timeoutMs, promptLength: prompt.length });
+  try {
+    const targetUrl =
+      typeof conversationId === "string" && conversationId.trim().length > 0
+        ? `https://x.com/i/grok?conversation=${encodeURIComponent(conversationId.trim())}`
+        : "https://x.com/i/grok";
+    return await withEphemeralPage(page, targetUrl, async (grokPage) => {
+      logGrokPhase("page_opened", { url: grokPage.url() });
+      await prepareGrokSession(grokPage, conversationId);
+      logGrokPhase("surface_ready");
+      const networkResult = await askGrokViaNetwork(grokPage, prompt);
+      logGrokPhase("network_result", {
+        ok: networkResult?.ok === true,
+        responseLength: networkResult?.response.length ?? 0,
+      });
+      if (networkResult?.ok) {
+        const output: Record<string, JsonValue> = {
+          ok: true,
+          response: networkResult.response,
+          url: networkResult.url,
+        };
+        if (networkResult.conversationId) {
+          output.conversationId = networkResult.conversationId;
+        }
+        return output;
+      }
+      await grokPage.goto("https://x.com/i/grok", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+      await waitForGrokSurface(grokPage);
+      const previousResponse = await readLatestGrokResponse(grokPage);
+      logGrokPhase("previous_response_read", {
+        hasPreviousResponse: previousResponse !== undefined,
+        previousResponseLength: previousResponse?.length ?? 0,
+      });
+      const submitResult = await submitGrokPrompt(grokPage, prompt);
+      const submitLogDetails: Record<string, JsonValue> = {
+        ok: submitResult.ok,
+      };
+      if (submitResult.reason !== undefined) {
+        submitLogDetails.reason = submitResult.reason;
+      }
+      logGrokPhase("submit_result", submitLogDetails);
+      if (!submitResult.ok) {
+        return errorResult("UPSTREAM_CHANGED", "grok controls not found", {
+          reason: submitResult.reason ?? "unknown",
+        });
+      }
+
+      logGrokPhase("wait_start", { timeoutMs });
+      const confirmation = await waitForGrokResponse(grokPage, previousResponse, prompt, timeoutMs);
+      logGrokPhase("wait_result", {
+        confirmed: confirmation.confirmed,
+        responseLength: confirmation.response?.length ?? 0,
+      });
+      if (!confirmation.confirmed || !confirmation.response) {
+        return errorResult("ACTION_UNCONFIRMED", "grok response was not confirmed");
+      }
+
+      logGrokPhase("success", {
+        responseLength: confirmation.response.length,
+        url: grokPage.url(),
+      });
+      const output: Record<string, JsonValue> = {
+        ok: true,
+        response: confirmation.response,
+        url: grokPage.url(),
+      };
+      if (conversationId) {
+        output.conversationId = conversationId;
+      }
+      return output;
+    });
+  } catch (error) {
+    const details: Record<string, JsonValue> = {};
+    if (error instanceof Error) {
+      details.name = error.name;
+      details.message = error.message;
+    } else if (error !== undefined) {
+      details.message = String(error);
+    }
+    logGrokPhase("error", details);
+    return errorResult("UPSTREAM_CHANGED", "grok execution threw", details);
+  }
+}
+
+async function replyToTweet(
+  page: Page,
+  targetUrl: string,
+  text: string,
+  dryRun: boolean,
+  timeoutMs: number,
+): Promise<JsonValue> {
+  return await withEphemeralPage(page, targetUrl, async (replyPage) => {
+    await waitForTweetSurface(replyPage);
+    await ensureReplyComposerReady(replyPage);
+    const composeResult = await composeReply(replyPage, text, dryRun);
+    if (!composeResult.ok) {
+      return errorResult("UPSTREAM_CHANGED", "reply controls not found", {
+        reason: composeResult.reason ?? "unknown",
+      });
+    }
+    if (composeResult.dryRun) {
+      return {
+        ok: true,
+        dryRun: true,
+        submitVisible: composeResult.submitVisible === true,
+        replyToUrl: targetUrl,
+      };
+    }
+
+    const submitReady = await waitForReplySubmitReady(replyPage, timeoutMs);
+    if (!submitReady) {
+      return errorResult("UPSTREAM_CHANGED", "reply controls not ready", {
+        reason: "submit_not_ready",
+      });
+    }
+
+    const submitResult = await submitReply(replyPage);
+    if (!submitResult.ok) {
+      return errorResult("UPSTREAM_CHANGED", "reply controls not found", {
+        reason: submitResult.reason ?? "unknown",
+      });
+    }
+
+    const confirmation = await waitForReplyConfirmation(replyPage, targetUrl, text, timeoutMs);
+    if (!confirmation.confirmed) {
+      return errorResult("ACTION_UNCONFIRMED", "reply submit was not confirmed in timeline");
+    }
+
+    const result: Record<string, JsonValue> = {
+      ok: true,
+      confirmed: true,
+      replyToUrl: targetUrl,
+    };
+    if (confirmation.statusUrl !== undefined) {
+      result.statusUrl = confirmation.statusUrl;
+    }
+    return result;
+  });
+}
+
 async function requireAuthenticated(page: Page): Promise<
   | {
       ok: true;
@@ -1520,6 +2954,7 @@ async function requireAuthenticated(page: Page): Promise<
 
 export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
   const composeConfirmTimeoutMs = options?.composeConfirmTimeoutMs ?? DEFAULT_COMPOSE_CONFIRM_TIMEOUT_MS;
+  const grokResponseTimeoutMs = options?.grokResponseTimeoutMs ?? DEFAULT_GROK_RESPONSE_TIMEOUT_MS;
   const maxPostLength = options?.maxPostLength ?? DEFAULT_MAX_POST_LENGTH;
 
   return {
@@ -1578,6 +3013,21 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         return await readTweetByUrl(page, targetUrl);
       }
 
+      if (name === "tweet.thread.get") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const targetUrl = url || (id ? `https://x.com/i/web/status/${id}` : "");
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const limit = normalizeTimelineLimit(args);
+        return await readTweetThreadByUrl(page, targetUrl, limit);
+      }
+
       if (name === "favorites.list") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
@@ -1590,6 +3040,33 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
             ? await readTimelineWithMode(readPage, "bookmarks", limit, cursor)
             : await readTimelineWithMode(readPage, "bookmarks", limit);
         });
+      }
+
+      if (name === "notifications.list") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const limit = normalizeTimelineLimit(args);
+        return await withCachedReadOnlyPage(page, "notifications", "https://x.com/notifications", async (readPage) => {
+          return await readNotifications(readPage, limit);
+        });
+      }
+
+      if (name === "mentions.list") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const limit = normalizeTimelineLimit(args);
+        return await withCachedReadOnlyPage(
+          page,
+          "notifications:mentions",
+          "https://x.com/notifications/mentions",
+          async (readPage) => {
+            return await readNotifications(readPage, limit);
+          },
+        );
       }
 
       if (name === "timeline.user.list") {
@@ -1688,6 +3165,46 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
           result.statusUrl = confirmation.statusUrl;
         }
         return result;
+      }
+
+      if (name === "tweet.reply") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+
+        const text = typeof args.text === "string" ? args.text.trim() : "";
+        if (!text) {
+          return errorResult("VALIDATION_ERROR", "text is required");
+        }
+        if (text.length > maxPostLength) {
+          return errorResult("VALIDATION_ERROR", `text exceeds max length ${maxPostLength}`);
+        }
+
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const targetUrl = url || (id ? `https://x.com/i/web/status/${id}` : "");
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+
+        const dryRun = args.dryRun === true;
+        return await replyToTweet(page, targetUrl, text, dryRun, composeConfirmTimeoutMs);
+      }
+
+      if (name === "grok.chat") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+
+        const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+        if (!prompt) {
+          return errorResult("VALIDATION_ERROR", "prompt is required");
+        }
+
+        const conversationId = typeof args.conversationId === "string" ? args.conversationId.trim() : "";
+        return await askGrok(page, prompt, grokResponseTimeoutMs, conversationId || undefined);
       }
 
       return errorResult("TOOL_NOT_FOUND", `unknown tool: ${name}`);

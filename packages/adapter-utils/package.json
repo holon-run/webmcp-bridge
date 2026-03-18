@@ -1,8 +1,8 @@
 {
-  "name": "@webmcp-bridge/adapter-x",
+  "name": "@webmcp-bridge/adapter-utils",
   "version": "0.4.3",
   "type": "module",
-  "description": "Fallback WebMCP adapter for X/Twitter when native WebMCP is unavailable.",
+  "description": "Shared low-level utilities for webmcp-bridge fallback adapters.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -14,32 +14,32 @@
   "files": [
     "dist"
   ],
-  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/adapter-x",
+  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/adapter-utils",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/holon-run/webmcp-bridge.git",
-    "directory": "packages/adapter-x"
+    "directory": "packages/adapter-utils"
   },
   "bugs": {
     "url": "https://github.com/holon-run/webmcp-bridge/issues"
   },
   "keywords": [
     "webmcp",
-    "mcp",
     "adapter",
-    "x",
-    "twitter",
-    "playwright"
+    "utilities",
+    "stream",
+    "dom"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@webmcp-bridge/adapter-utils": "workspace:*",
-    "@webmcp-bridge/core": "workspace:*",
-    "@webmcp-bridge/playwright": "workspace:*",
     "playwright": "^1.58.2"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
 }

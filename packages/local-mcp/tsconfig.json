@@ -4,6 +4,7 @@
     "baseUrl": "../..",
     "rootDir": "../..",
     "paths": {
+      "@webmcp-bridge/adapter-utils": ["packages/adapter-utils/src/index.ts"],
       "@webmcp-bridge/core": ["packages/core/src/index.ts"],
       "@webmcp-bridge/playwright": ["packages/playwright/src/index.ts"],
       "@webmcp-bridge/local-mcp": ["packages/local-mcp/src/index.ts"],

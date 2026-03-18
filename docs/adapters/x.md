@@ -9,15 +9,25 @@
 - `timeline.user.list`: read a specific user's timeline tweet cards.
 - `search.tweets.list`: read search result tweet cards.
 - `tweet.get`: read one tweet by URL or ID.
+- `tweet.thread.get`: read one tweet thread by URL or ID.
 - `favorites.list`: read bookmarks/favorites tweet cards.
+- `notifications.list`: read the main notifications feed.
+- `mentions.list`: read the mentions tab from notifications.
 - `user.get`: read a user profile summary by handle.
 - `tweet.create`: submit a text post with optional `dryRun`.
+- `tweet.reply`: reply to one tweet by URL or ID, with optional `dryRun`.
+- `grok.chat`: send one prompt to Grok and return the assistant reply.
 
 `timeline.home.list`, `timeline.user.list`, `search.tweets.list`, and `favorites.list` support incremental pagination with:
 
 - input: `limit`, optional `cursor`
 - output: `items`, `source` (`network` or `dom`), `hasMore`, optional `nextCursor`
 - when `source=dom`, `debug.reason` explains fallback cause (for example `no_template`, `http_error_403`, `empty_result`)
+
+`notifications.list` and `mentions.list` currently expose:
+
+- input: `limit`
+- output: `items`, `source=dom`, `hasMore=false`
 
 `search.tweets.list` input:
 
@@ -88,8 +98,88 @@ Search tweets:
 }
 ```
 
+Read a tweet thread:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "tweet.thread.get",
+    "arguments": { "id": "2033895522382319922", "limit": 10 }
+  }
+}
+```
+
+List notifications:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "notifications.list",
+    "arguments": { "limit": 10 }
+  }
+}
+```
+
+List mentions:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "mentions.list",
+    "arguments": { "limit": 10 }
+  }
+}
+```
+
+Reply to a tweet:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "tweet.reply",
+    "arguments": {
+      "url": "https://x.com/jack/status/20",
+      "text": "Thanks, this is useful."
+    }
+  }
+}
+```
+
+Chat with Grok:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "grok.chat",
+    "arguments": { "prompt": "Summarize the latest replies to my last post." }
+  }
+}
+```
+
+Continue an existing Grok conversation:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "grok.chat",
+    "arguments": {
+      "prompt": "Continue from the previous answer in one sentence.",
+      "conversationId": "2034141763959722111"
+    }
+  }
+}
+```
+
 ## Known limits
 
 - Selector-based implementation; upstream UI changes may require selector updates.
-- Text-only compose scope in `0.1.x`.
+- Text-only compose and reply scope in `0.1.x`.
+- `grok.chat` starts a new conversation by default; pass `conversationId` to continue an existing chat.
+- `notifications.list` and `mentions.list` are currently DOM-backed and do not expose cursor pagination yet.
 - Requires user already logged in on web session.
