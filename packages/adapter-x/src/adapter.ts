@@ -5,6 +5,7 @@
 
 import type { JsonValue } from "@webmcp-bridge/core";
 import type { SiteAdapter, WebMcpToolDefinition } from "@webmcp-bridge/playwright";
+import { collectTextByTag, joinTextParts, parseNdjsonLines } from "@webmcp-bridge/adapter-utils";
 import type { Page } from "playwright";
 
 type XAuthState = "authenticated" | "auth_required" | "challenge_required";
@@ -2396,33 +2397,37 @@ async function askGrokViaNetwork(
     }
 
     const responseText = await response.text().catch(() => "");
-    const finalParts: string[] = [];
-    let conversationId: string | undefined;
-    for (const rawLine of responseText.split("\n")) {
-      const line = rawLine.trim();
-      if (!line) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(line) as {
-          conversationId?: string;
-          result?: {
-            message?: string;
-            messageTag?: string;
-          };
+    const entries = parseNdjsonLines<
+      {
+        conversationId?: string;
+        result?: {
+          message?: string;
+          messageTag?: string;
         };
-        if (!conversationId && typeof parsed.conversationId === "string") {
-          conversationId = parsed.conversationId;
-        }
-        if (parsed?.result?.messageTag === "final" && typeof parsed.result.message === "string") {
-          finalParts.push(parsed.result.message);
-        }
-      } catch {
-        continue;
+      }
+    >(responseText);
+    const finalParts = collectTextByTag(
+      entries
+        .map((entry) => {
+          const output: { message?: string; messageTag?: string } = {};
+          if (typeof entry.result?.message === "string") {
+            output.message = entry.result.message;
+          }
+          if (typeof entry.result?.messageTag === "string") {
+            output.messageTag = entry.result.messageTag;
+          }
+          return output;
+        }),
+      "final",
+    );
+    let conversationId: string | undefined;
+    for (const entry of entries) {
+      if (!conversationId && typeof entry.conversationId === "string") {
+        conversationId = entry.conversationId;
       }
     }
 
-    const finalResponse = finalParts.join("").trim();
+    const finalResponse = joinTextParts(finalParts).trim();
     if (response.status() >= 200 && response.status() < 300 && finalResponse) {
       const nextResult: { response: string; conversationId?: string } = {
         response: finalResponse,
