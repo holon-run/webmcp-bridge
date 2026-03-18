@@ -2252,29 +2252,26 @@ async function askGrokViaNetwork(
   }
 
   const responseText = captured.text;
-    const entries = parseNdjsonLines<
-      {
-        conversationId?: string;
-        result?: {
-          message?: string;
-          messageTag?: string;
-        };
+  const entries = parseNdjsonLines<{
+    conversationId?: string;
+    result?: {
+      message?: string;
+      messageTag?: string;
+    };
+  }>(responseText);
+  const finalParts = collectTextByTag(
+    entries.map((entry) => {
+      const output: { message?: string; messageTag?: string } = {};
+      if (typeof entry.result?.message === "string") {
+        output.message = entry.result.message;
       }
-    >(responseText);
-    const finalParts = collectTextByTag(
-      entries
-        .map((entry) => {
-          const output: { message?: string; messageTag?: string } = {};
-          if (typeof entry.result?.message === "string") {
-            output.message = entry.result.message;
-          }
-          if (typeof entry.result?.messageTag === "string") {
-            output.messageTag = entry.result.messageTag;
-          }
-          return output;
-        }),
-      "final",
-    );
+      if (typeof entry.result?.messageTag === "string") {
+        output.messageTag = entry.result.messageTag;
+      }
+      return output;
+    }),
+    "final",
+  );
     let conversationId: string | undefined;
     for (const entry of entries) {
       if (!conversationId && typeof entry.conversationId === "string") {
