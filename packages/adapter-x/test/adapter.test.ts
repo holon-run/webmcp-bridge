@@ -26,6 +26,16 @@ type Behavior = {
 function createMockPage(partial: Partial<Behavior> = {}) {
   let replyConfirmAttempts = 0;
   let grokSubmitted = false;
+  let routedHandler:
+    | ((
+        route: {
+          request(): { method(): string };
+          continue(): Promise<void>;
+          fetch(): Promise<{ status(): number; text(): Promise<string> }>;
+          fulfill(): Promise<void>;
+        },
+      ) => Promise<void>)
+    | undefined;
   const behavior: Behavior = {
     authState: "authenticated",
     authSignals: ["authenticated_ui"],
@@ -44,8 +54,31 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     ...partial,
   };
 
+  const grokNetworkResponseText = behavior.confirmGrok
+    ? `{"conversationId":"mock-conversation","result":{"message":"${behavior.grokResponse}","messageTag":"final"}}\n`
+    : "";
+
+  const triggerGrokRoute = async (): Promise<void> => {
+    if (!routedHandler) {
+      return;
+    }
+    await routedHandler({
+      request: () => ({ method: () => "POST" }),
+      continue: async () => {},
+      fetch: async () => ({
+        status: () => 200,
+        text: async () => grokNetworkResponseText,
+      }),
+      fulfill: async () => {},
+    });
+  };
+
   const readPage = {
     evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (Array.isArray(arg) && arg.every((item) => typeof item === "string")) {
+        return arg[0];
+      }
+
       if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
         return undefined;
       }
@@ -125,13 +158,22 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       return undefined;
     }),
     addInitScript: vi.fn(async () => {}),
-    click: vi.fn(async () => {}),
+    click: vi.fn(async (selector?: string) => {
+      if (typeof selector === "string" && selector.includes("button")) {
+        grokSubmitted = true;
+        await triggerGrokRoute();
+      }
+    }),
     goto: vi.fn(async () => {}),
     type: vi.fn(async () => {}),
     waitForSelector: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
     waitForTimeout: vi.fn(async () => {}),
-    route: vi.fn(async () => {}),
-    unroute: vi.fn(async () => {}),
+    route: vi.fn(async (_pattern: string, handler: typeof routedHandler) => {
+      routedHandler = handler;
+    }),
+    unroute: vi.fn(async () => {
+      routedHandler = undefined;
+    }),
     waitForFunction: vi.fn(async (_fn: unknown, arg?: unknown) => {
       if (typeof arg === "string") {
         replyConfirmAttempts += 1;
@@ -150,7 +192,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         !Array.isArray(arg) &&
         (arg as Record<string, unknown>).op === "reply_submit_ready"
       ) {
-        if (!behavior.confirmReply) {
+        if (!behavior.replyComposeResult.ok) {
           throw new Error("timeout");
         }
         return true;
@@ -179,6 +221,10 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   const page = {
     addInitScript: vi.fn(async () => {}),
     evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (Array.isArray(arg) && arg.every((item) => typeof item === "string")) {
+        return arg[0];
+      }
+
       if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
         return undefined;
       }
@@ -257,11 +303,20 @@ function createMockPage(partial: Partial<Behavior> = {}) {
 
       return undefined;
     }),
-    click: vi.fn(async () => {}),
+    click: vi.fn(async (selector?: string) => {
+      if (typeof selector === "string" && selector.includes("button")) {
+        grokSubmitted = true;
+        await triggerGrokRoute();
+      }
+    }),
     waitForSelector: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
     waitForTimeout: vi.fn(async () => {}),
-    route: vi.fn(async () => {}),
-    unroute: vi.fn(async () => {}),
+    route: vi.fn(async (_pattern: string, handler: typeof routedHandler) => {
+      routedHandler = handler;
+    }),
+    unroute: vi.fn(async () => {
+      routedHandler = undefined;
+    }),
     waitForLoadState: vi.fn(async () => {}),
     reload: vi.fn(async () => {}),
     type: vi.fn(async () => {}),
@@ -278,7 +333,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         !Array.isArray(arg) &&
         (arg as Record<string, unknown>).op === "reply_submit_ready"
       ) {
-        if (!behavior.confirmReply) {
+        if (!behavior.replyComposeResult.ok) {
           throw new Error("timeout");
         }
         return true;
@@ -579,8 +634,9 @@ describe("createXAdapter", () => {
     expect(readPage.goto).toHaveBeenCalledWith("https://x.com/i/grok", expect.anything());
     expect(result).toEqual({
       ok: true,
+      conversationId: "mock-conversation",
       response: "Grok says hello from the mock adapter.",
-      url: "https://x.com/i/bookmarks",
+      url: "https://x.com/i/grok?conversation=mock-conversation",
     });
   });
 

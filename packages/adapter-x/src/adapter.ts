@@ -2204,6 +2204,10 @@ async function prepareGrokSession(page: Page, conversationId?: string): Promise<
     }
   })();
 
+  if (typeof (page as { locator?: unknown }).locator !== "function") {
+    return;
+  }
+
   const newChatButton = page
     .locator("button[aria-label*='New Chat'], button:has-text('New Chat')")
     .first();
