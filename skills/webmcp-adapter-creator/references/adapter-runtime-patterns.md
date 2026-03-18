@@ -143,3 +143,27 @@ Examples of site-specific details that should stay in the adapter:
 - product button labels
 
 When documenting or extracting shared helpers, keep this boundary explicit.
+
+## 9. Prefer A Small Shared Utility Layer For Cross-Site Pieces
+
+If several adapters need the same low-level mechanics, put them in a shared adapter utility package instead of copying them between site adapters.
+
+Good candidates for that package:
+
+- text normalization and dedupe helpers
+- streamed NDJSON parsing helpers
+- routed-response capture helpers around `page.route(...)/route.fetch()`
+- request-template data structures and simple cache helpers
+- generic request-capture script builders for page-side fetch/XHR recording
+
+Keep these out of the shared package:
+
+- site endpoint names
+- query ids
+- site-specific request matchers
+- response parsers tied to one product
+- button labels and DOM selectors with product semantics
+
+Use the shared package for low-level mechanics, then keep matching, templating, and response interpretation inside the site adapter.
+
+If you discover a reusable helper while building an adapter and it looks broadly useful, consider contributing it back to the `webmcp-bridge` repository as a focused PR.

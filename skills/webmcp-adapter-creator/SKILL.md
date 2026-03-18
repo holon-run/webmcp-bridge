@@ -51,6 +51,7 @@ If the user only needs to connect to an existing site through the bridge, use `$
    - for assistant/chat products, prefer intercepting the product's real request/response path over reading rendered text
    - if network execution is unavailable or the template is missing, fall back to DOM extraction when safe
    - include `source` and `reason` fields so callers can see which path ran
+   - when a helper is cross-site and not product-specific, prefer putting it in a shared adapter utility package instead of copying it into one adapter
 8. Add contract and integration coverage:
    - package-local unit tests for tool behavior and validation
    - local-mcp integration tests for full bridge execution
