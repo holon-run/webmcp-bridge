@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyHeaderAllowlist,
+  buildRequestCaptureInitScript,
   collectTextByTag,
   captureRoutedResponseText,
   dedupeStrings,
@@ -14,7 +15,9 @@ import {
   joinTextParts,
   normalizeText,
   parseNdjsonLines,
+  selectLatestRequestTemplate,
   TemplateCache,
+  toRequestTemplate,
 } from "../src/index.js";
 
 describe("adapter-utils", () => {
@@ -58,6 +61,51 @@ describe("adapter-utils", () => {
     expect(cache.get("timeline")).toEqual({ url: "/graphql/home" });
     expect(cache.delete("timeline")).toBe(true);
     expect(cache.get("timeline")).toBeUndefined();
+  });
+
+  it("converts captured entries and selects the latest matching template", () => {
+    expect(
+      toRequestTemplate({
+        url: "/graphql/home",
+        method: "POST",
+        headers: { authorization: "Bearer token" },
+        body: "{\"count\":20}",
+      }),
+    ).toEqual({
+      url: "/graphql/home",
+      method: "POST",
+      headers: { authorization: "Bearer token" },
+      body: "{\"count\":20}",
+    });
+
+    expect(
+      selectLatestRequestTemplate(
+        [
+          { url: "/graphql/home", method: "GET" },
+          { url: "/graphql/search", method: "POST" },
+          { url: "/graphql/home?cursor=1", method: "POST", headers: { authorization: "Bearer token" } },
+        ],
+        (entry) => typeof entry.url === "string" && entry.url.includes("/graphql/home"),
+      ),
+    ).toEqual({
+      url: "/graphql/home?cursor=1",
+      method: "POST",
+      headers: { authorization: "Bearer token" },
+    });
+  });
+
+  it("builds a request capture init script with generic hooks", () => {
+    const script = buildRequestCaptureInitScript({
+      globalKey: "__TEST_CAPTURE__",
+      shouldCaptureSource: "((url, method) => method === 'POST' && url.includes('/graphql/'))",
+      enrichEntrySource: "((entry) => ({ ...entry, op: 'TestOp' }))",
+      maxEntries: 10,
+    });
+
+    expect(script).toContain("__TEST_CAPTURE__");
+    expect(script).toContain("method === 'POST'");
+    expect(script).toContain("op: 'TestOp'");
+    expect(script).toContain("state.entries.length > maxEntries");
   });
 
   it("creates explicit network and dom fallback results", () => {

@@ -6,10 +6,13 @@
 import type { JsonValue } from "@webmcp-bridge/core";
 import type { SiteAdapter, WebMcpToolDefinition } from "@webmcp-bridge/playwright";
 import {
+  buildRequestCaptureInitScript,
   captureRoutedResponseText,
   collectTextByTag,
   joinTextParts,
   parseNdjsonLines,
+  type RequestTemplate,
+  TemplateCache,
 } from "@webmcp-bridge/adapter-utils";
 import type { Page } from "playwright";
 
@@ -60,20 +63,9 @@ const AUTH_STABILIZE_ATTEMPTS = 6;
 const AUTH_STABILIZE_DELAY_MS = 750;
 const AUTH_WARMUP_TIMEOUT_MS = 12_000;
 
-const CAPTURE_INJECT_SCRIPT = String.raw`
-(() => {
-  const globalAny = window;
-  if (globalAny.__WEBMCP_X_CAPTURE__) {
-    return;
-  }
-
-  const state = {
-    enabled: true,
-    entries: [],
-  };
-
-  const now = () => Date.now();
-  const isGraphQLTimelineUrl = (url) => {
+const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
+  globalKey: "__WEBMCP_X_CAPTURE__",
+  shouldCaptureSource: String.raw`((url) => {
     if (typeof url !== "string") return false;
     return (
       url.includes("/i/api/graphql/") &&
@@ -88,144 +80,22 @@ const CAPTURE_INJECT_SCRIPT = String.raw`
         url.includes("/SearchTimeline")
       )
     );
-  };
-
-  const detectOperation = (url) => {
-    if (url.includes("/HomeTimeline")) return "HomeTimeline";
-    if (url.includes("/BookmarksAll")) return "BookmarksAll";
-    if (url.includes("/Bookmarks")) return "Bookmarks";
-    if (url.includes("/TweetDetail")) return "TweetDetail";
-    if (url.includes("/UserTweetsAndReplies")) return "UserTweetsAndReplies";
-    if (url.includes("/UserMedia")) return "UserMedia";
-    if (url.includes("/UserTweets")) return "UserTweets";
-    if (url.includes("/SearchTimeline")) return "SearchTimeline";
-    return "Unknown";
-  };
-
-  const pickHeaders = (headersLike) => {
-    const output = {};
-    if (!headersLike) return output;
-    try {
-      const headers = new Headers(headersLike);
-      headers.forEach((value, key) => {
-        output[String(key).toLowerCase()] = String(value);
-      });
-      return output;
-    } catch {
-      if (typeof headersLike === "object") {
-        for (const [k, v] of Object.entries(headersLike)) {
-          output[String(k).toLowerCase()] = String(v);
-        }
-      }
-      return output;
-    }
-  };
-
-  const appendEntry = (entry) => {
-    state.entries.push(entry);
-    if (state.entries.length > 80) {
-      state.entries.splice(0, state.entries.length - 80);
-    }
-  };
-
-  const originalFetch = globalAny.fetch?.bind(globalAny);
-  if (typeof originalFetch === "function") {
-    globalAny.fetch = async (...args) => {
-      const input = args[0];
-      const init = args[1] || {};
-      const url = typeof input === "string" ? input : input?.url || "";
-      const method = String(init.method || (typeof input !== "string" && input?.method) || "GET").toUpperCase();
-      const headers = pickHeaders(init.headers || (typeof input !== "string" ? input?.headers : undefined));
-      const body = typeof init.body === "string" ? init.body : undefined;
-      const shouldCapture = isGraphQLTimelineUrl(url);
-      const response = await originalFetch(...args);
-
-      if (shouldCapture) {
-        let responseJson;
-        try {
-          responseJson = await response.clone().json();
-        } catch {
-          responseJson = undefined;
-        }
-        appendEntry({
-          ts: now(),
-          op: detectOperation(url),
-          url,
-          method,
-          headers,
-          body,
-          ok: response.ok,
-          status: response.status,
-          responseJson,
-        });
-      }
-      return response;
-    };
-  }
-
-  const OriginalXMLHttpRequest = globalAny.XMLHttpRequest;
-  const xhrProto = OriginalXMLHttpRequest?.prototype;
-  if (xhrProto && !xhrProto.__webmcpCapturePatched) {
-    const originalOpen = xhrProto.open;
-    const originalSend = xhrProto.send;
-    const originalSetRequestHeader = xhrProto.setRequestHeader;
-
-    xhrProto.open = function(method, url, ...rest) {
-      this.__webmcpCapture = {
-        method: String(method || "GET").toUpperCase(),
-        url: String(url || ""),
-        headers: {},
-      };
-      return originalOpen.call(this, method, url, ...rest);
-    };
-
-    xhrProto.setRequestHeader = function(key, value) {
-      try {
-        const capture = this.__webmcpCapture;
-        if (capture && capture.headers && typeof key === "string") {
-          capture.headers[String(key).toLowerCase()] = String(value);
-        }
-      } catch {}
-      return originalSetRequestHeader.call(this, key, value);
-    };
-
-    xhrProto.send = function(body) {
-      try {
-        this.addEventListener("loadend", () => {
-          const capture = this.__webmcpCapture || {};
-          const url = typeof capture.url === "string" ? capture.url : "";
-          if (!isGraphQLTimelineUrl(url)) {
-            return;
-          }
-          let responseJson;
-          try {
-            const text = typeof this.responseText === "string" ? this.responseText : "";
-            responseJson = text ? JSON.parse(text) : undefined;
-          } catch {
-            responseJson = undefined;
-          }
-          appendEntry({
-            ts: now(),
-            op: detectOperation(url),
-            url,
-            method: typeof capture.method === "string" ? capture.method : "GET",
-            headers: capture.headers || {},
-            body: typeof body === "string" ? body : undefined,
-            ok: this.status >= 200 && this.status < 300,
-            status: Number(this.status || 0),
-            responseJson,
-          });
-        });
-      } catch {}
-      return originalSend.call(this, body);
-    };
-
-    xhrProto.__webmcpCapturePatched = true;
-  }
-
-  globalAny.__WEBMCP_X_CAPTURE__ = state;
-})();
-`;
+  })`,
+  enrichEntrySource: String.raw`((entry) => {
+    const url = typeof entry?.url === "string" ? entry.url : "";
+    let op = "Unknown";
+    if (url.includes("/HomeTimeline")) op = "HomeTimeline";
+    else if (url.includes("/BookmarksAll")) op = "BookmarksAll";
+    else if (url.includes("/Bookmarks")) op = "Bookmarks";
+    else if (url.includes("/TweetDetail")) op = "TweetDetail";
+    else if (url.includes("/UserTweetsAndReplies")) op = "UserTweetsAndReplies";
+    else if (url.includes("/UserMedia")) op = "UserMedia";
+    else if (url.includes("/UserTweets")) op = "UserTweets";
+    else if (url.includes("/SearchTimeline")) op = "SearchTimeline";
+    return { ...entry, op };
+  })`,
+  maxEntries: 80,
+});
 
 const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
   {
@@ -785,12 +655,6 @@ function enrichNotificationItem(item: TimelineItem): TimelineItem {
 
 type ReadPageKey = string;
 type ProcessTemplateBucket = TimelineMode;
-type NetworkTemplate = {
-  url: string;
-  method: string;
-  headers: Record<string, string>;
-  body?: string;
-};
 
 type ReadPageCacheEntry = {
   key: string;
@@ -803,7 +667,7 @@ type ReadPageCacheState = {
 };
 
 const READ_PAGE_CACHE = new WeakMap<Page, ReadPageCacheState>();
-const PROCESS_TEMPLATE_CACHE = new Map<ProcessTemplateBucket, NetworkTemplate>();
+const PROCESS_TEMPLATE_CACHE = new TemplateCache<ProcessTemplateBucket, RequestTemplate>();
 
 async function readTimelineViaNetwork(
   page: Page,
@@ -989,10 +853,13 @@ async function readTimelineViaNetwork(
         return result;
       };
 
-      const sanitizeHeaders = (headers: Record<string, string>): Record<string, string> => {
+      const sanitizeHeaders = (headers?: Record<string, string>): Record<string, string> => {
         const blockedPrefixes = ["sec-", ":"];
         const blockedExact = new Set(["host", "content-length", "cookie", "origin", "referer", "connection"]);
         const output: Record<string, string> = {};
+        if (!headers) {
+          return output;
+        }
         for (const [key, value] of Object.entries(headers)) {
           const k = key.toLowerCase();
           if (blockedExact.has(k)) {
@@ -1067,12 +934,7 @@ async function readTimelineViaNetwork(
         nextCursor?: string;
         source: "network" | "dom";
         reason?: string;
-        selectedTemplate?: {
-          url: string;
-          method: string;
-          headers: Record<string, string>;
-          body?: string;
-        };
+        selectedTemplate?: RequestTemplate;
       } = {
         items: parsed.items.slice(0, limit),
         source: parsed.items.length > 0 ? ("network" as const) : ("dom" as const),
@@ -1120,16 +982,19 @@ async function readTimelineViaNetwork(
   if (
     selectedTemplate &&
     typeof selectedTemplate.url === "string" &&
-    typeof selectedTemplate.method === "string" &&
-    typeof selectedTemplate.headers === "object" &&
-    selectedTemplate.headers !== null &&
-    !Array.isArray(selectedTemplate.headers)
+    typeof selectedTemplate.method === "string"
   ) {
-    const cacheValue: NetworkTemplate = {
+    const cacheValue: RequestTemplate = {
       url: selectedTemplate.url,
       method: selectedTemplate.method,
-      headers: selectedTemplate.headers as Record<string, string>,
     };
+    if (
+      typeof selectedTemplate.headers === "object" &&
+      selectedTemplate.headers !== null &&
+      !Array.isArray(selectedTemplate.headers)
+    ) {
+      cacheValue.headers = selectedTemplate.headers as Record<string, string>;
+    }
     if (typeof selectedTemplate.body === "string") {
       cacheValue.body = selectedTemplate.body;
     }
