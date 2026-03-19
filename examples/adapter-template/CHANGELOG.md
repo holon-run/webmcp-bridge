@@ -1,5 +1,13 @@
 # @webmcp-bridge/example-adapter-template
 
+## 0.1.4
+
+### Patch Changes
+
+- Updated dependencies
+  - @webmcp-bridge/core@0.5.0
+  - @webmcp-bridge/playwright@0.5.0
+
 ## 0.1.3
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@webmcp-bridge/adapter-utils",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "type": "module",
   "description": "Shared low-level utilities for webmcp-bridge fallback adapters.",
   "main": "dist/index.js",

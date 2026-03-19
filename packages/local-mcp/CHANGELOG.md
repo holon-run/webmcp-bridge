@@ -1,5 +1,21 @@
 # @webmcp-bridge/local-mcp
 
+## 0.5.0
+
+### Minor Changes
+
+- Release the latest native-first bridge updates together, including board resource subscriptions,
+  the new adapter-utils package, richer X adapter coverage for conversations, replies, Grok chat,
+  and file upload/download support, plus local-mcp/runtime contract updates required by these flows.
+
+### Patch Changes
+
+- Updated dependencies
+  - @webmcp-bridge/core@0.5.0
+  - @webmcp-bridge/playwright@0.5.0
+  - @webmcp-bridge/adapter-x@0.5.0
+  - @webmcp-bridge/adapter-fixture@0.5.0
+
 ## 0.4.3
 
 ### Patch Changes
