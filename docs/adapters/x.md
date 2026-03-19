@@ -12,6 +12,7 @@
 - `tweet.conversation.get`: read one tweet conversation by URL or ID.
 - `tweet.replies.list`: read reply tweets for one focal tweet by URL or ID.
 - `tweet.thread.get`: read one tweet thread by URL or ID.
+- `tweet.media.download`: download media for one tweet by URL or ID.
 - `favorites.list`: read bookmarks/favorites tweet cards.
 - `notifications.list`: read the main notifications feed.
 - `mentions.list`: read the mentions tab from notifications.
@@ -31,6 +32,11 @@
 - input: `limit`
 - output: `items`, `source=dom`, `hasMore=false`
 
+`tweet.get`, `tweet.conversation.get`, `tweet.replies.list`, and `tweet.thread.get` may include:
+
+- `media`: zero or more media entries
+- each media entry includes `type`, `url`, and optional `previewUrl`, `width`, `height`, `durationMs`, `variants`
+
 `tweet.conversation.get` and `tweet.replies.list` expose:
 
 - input: `url | id`, `limit`, optional `cursor`
@@ -41,6 +47,12 @@
 
 - input: `url | id`, `limit`
 - output: `root`, `focal`, `tweets`, `source`, optional `incomplete`, optional `nextCursor`
+
+`tweet.media.download` exposes:
+
+- input: `url | id`, optional `mediaIndex`
+- output: `tweet`, `items`
+- each `items[]` entry includes `mediaIndex`, `media`, `artifact`
 
 `search.tweets.list` input:
 
@@ -143,6 +155,18 @@ Read a tweet thread:
   "params": {
     "name": "tweet.thread.get",
     "arguments": { "id": "2033895522382319922", "limit": 10 }
+  }
+}
+```
+
+Download tweet media:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "tweet.media.download",
+    "arguments": { "id": "1628605836938604544" }
   }
 }
 ```
@@ -251,6 +275,7 @@ When Grok returns a downloadable `data:` link, `grok.chat` materializes it into 
 
 - Selector-based implementation; upstream UI changes may require selector updates.
 - `tweet.conversation.get` models the detail-page conversation view; `tweet.thread.get` derives the same-author thread chain from that conversation instead of returning the full reply tree.
+- `tweet.media.download` currently materializes media into local temp paths and returns artifact metadata; it does not yet integrate with native browser download events.
 - Text-only compose and reply scope in `0.1.x`.
 - `grok.chat` starts a new conversation by default; pass `conversationId` to continue an existing chat.
 - `grok.chat` attachments currently support local file-path uploads only, via `attachmentPaths`.

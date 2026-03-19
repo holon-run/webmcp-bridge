@@ -12,8 +12,8 @@ import { createXAdapter } from "../src/index.js";
 type Behavior = {
   authState: "authenticated" | "auth_required" | "challenge_required";
   authSignals: string[];
-  timelineItems: Array<{ id: string; text: string; url?: string }>;
-  timelineDomBatches?: Array<Array<{ id: string; text: string; url?: string }>>;
+  timelineItems: Array<{ id: string; text: string; url?: string; media?: Array<Record<string, unknown>> }>;
+  timelineDomBatches?: Array<Array<{ id: string; text: string; url?: string; media?: Array<Record<string, unknown>> }>>;
   networkNextCursor?: string;
   requireFallbackTemplate?: boolean;
   composeResult: { ok: boolean; dryRun?: boolean; reason?: string; submitVisible?: boolean };
@@ -426,6 +426,7 @@ describe("createXAdapter", () => {
   afterEach(async () => {
     await Promise.all(Array.from(tempDirs, (dir) => rm(dir, { recursive: true, force: true })));
     tempDirs.clear();
+    vi.restoreAllMocks();
   });
 
   it("publishes tool schemas", async () => {
@@ -448,6 +449,7 @@ describe("createXAdapter", () => {
         "tweet.conversation.get",
         "tweet.replies.list",
         "tweet.thread.get",
+        "tweet.media.download",
         "favorites.list",
         "notifications.list",
         "mentions.list",
@@ -848,6 +850,133 @@ describe("createXAdapter", () => {
         message: "url or id is required",
       },
     });
+  });
+
+  it("returns media metadata from tweet.get", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "123",
+          text: "tweet with media",
+          url: "https://x.com/a/status/123",
+          media: [
+            {
+              type: "photo",
+              url: "https://pbs.twimg.com/media/test-photo.jpg",
+              width: 1200,
+              height: 900,
+            },
+            {
+              type: "video",
+              url: "https://video.twimg.com/ext_tw_video/test.mp4",
+              previewUrl: "https://pbs.twimg.com/ext_tw_video_thumb/test.jpg",
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.get", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toEqual({
+      tweet: {
+        id: "123",
+        text: "tweet with media",
+        url: "https://x.com/a/status/123",
+        media: [
+          {
+            type: "photo",
+            url: "https://pbs.twimg.com/media/test-photo.jpg",
+            width: 1200,
+            height: 900,
+          },
+          {
+            type: "video",
+            url: "https://video.twimg.com/ext_tw_video/test.mp4",
+            previewUrl: "https://pbs.twimg.com/ext_tw_video_thumb/test.jpg",
+          },
+        ],
+      },
+    });
+  });
+
+  it("matches the focal tweet by id instead of returning the first conversation item", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        { id: "1", text: "root tweet", url: "https://x.com/a/status/1" },
+        { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.get", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toEqual({
+      tweet: {
+        id: "123",
+        text: "focal tweet",
+        url: "https://x.com/a/status/123",
+      },
+    });
+  });
+
+  it("downloads tweet media into local artifacts", async () => {
+    const adapter = createXAdapter();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(Buffer.from("image-bytes"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "123",
+          text: "tweet with media",
+          url: "https://x.com/a/status/123",
+          media: [
+            {
+              type: "photo",
+              url: "https://pbs.twimg.com/media/test-photo",
+              width: 1200,
+              height: 900,
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.media.download", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toMatchObject({
+      tweet: {
+        id: "123",
+        text: "tweet with media",
+        url: "https://x.com/a/status/123",
+      },
+      items: [
+        {
+          mediaIndex: 0,
+          media: {
+            type: "photo",
+            url: "https://pbs.twimg.com/media/test-photo",
+            width: 1200,
+            height: 900,
+          },
+          artifact: {
+            kind: "file",
+            mediaIndex: 0,
+            mimeType: "image/jpeg",
+          },
+        },
+      ],
+    });
+    const items = (result as { items?: Array<{ artifact?: { path: string } }> }).items ?? [];
+    expect(items[0]?.artifact?.path).toMatch(/123-media-1\.jpg$/);
+    if (items[0]?.artifact?.path) {
+      tempDirs.add(dirname(items[0].artifact.path));
+    }
   });
 
   it("returns validation error for tweet.thread.get without id/url", async () => {
