@@ -168,11 +168,63 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
+    name: "tweet.conversation.get",
+    description: "Read one tweet conversation by url or id",
+    inputSchema: {
+      type: "object",
+      description: "Fetch the focal tweet with its visible ancestors and replies from a tweet detail conversation.",
+      properties: {
+        url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
+        id: { type: "string", description: "Tweet id. Used when url is not provided." },
+        limit: {
+          type: "integer",
+          description: `Maximum number of reply tweets to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
+        },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by previous call as nextCursor.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "tweet.replies.list",
+    description: "List replies for one tweet by url or id",
+    inputSchema: {
+      type: "object",
+      description: "Fetch reply tweets for one focal tweet. Supports cursor pagination when the upstream detail response exposes a reply cursor.",
+      properties: {
+        url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
+        id: { type: "string", description: "Tweet id. Used when url is not provided." },
+        limit: {
+          type: "integer",
+          description: `Maximum number of replies to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
+          minimum: 1,
+          maximum: MAX_TIMELINE_LIMIT,
+        },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by previous call as nextCursor.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
     name: "tweet.thread.get",
     description: "Read one tweet thread by url or id",
     inputSchema: {
       type: "object",
-      description: "Fetch the focal tweet and nearby replies from a tweet detail thread.",
+      description: "Fetch the same-author thread chain around one focal tweet.",
       properties: {
         url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
         id: { type: "string", description: "Tweet id. Used when url is not provided." },
@@ -788,6 +840,46 @@ function normalizeInlineText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function cleanTweetSurfaceText(value: string): string {
+  return normalizeInlineText(
+    value
+      .replace(/\bPromote\b/gi, " ")
+      .replace(/\bShow translation\b/gi, " ")
+      .replace(/\bRelevant View activity\b/gi, " ")
+      .replace(/\bPost your reply\b/gi, " ")
+      .replace(/\bReply\b$/gi, " ")
+      .replace(/\bShow more replies\b/gi, " "),
+  );
+}
+
+function canonicalizeStatusUrl(input: string | undefined, fallbackId?: string): string | undefined {
+  if (!input) {
+    return undefined;
+  }
+  try {
+    const url = new URL(input);
+    const segments = url.pathname.split("/").filter(Boolean);
+    const statusIndex = segments.findIndex((segment) => segment === "status");
+    if (statusIndex < 0) {
+      return input;
+    }
+    const statusId = segments[statusIndex + 1] ?? fallbackId;
+    if (!statusId) {
+      return input;
+    }
+    if (segments[0] === "i" && segments[1] === "web") {
+      return `${url.origin}/i/web/status/${statusId}`;
+    }
+    const handle = segments[0];
+    if (!handle) {
+      return `${url.origin}/i/web/status/${statusId}`;
+    }
+    return `${url.origin}/${handle}/status/${statusId}`;
+  } catch {
+    return input;
+  }
+}
+
 function enrichNotificationItem(item: TimelineItem): TimelineItem {
   const text = normalizeInlineText(item.text);
   const summary = item.summary ? normalizeInlineText(item.summary) : undefined;
@@ -1216,6 +1308,44 @@ async function extractTweetCards(
 ): Promise<Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string }>> {
   const cards = await page.evaluate(({ maxItems }: { maxItems: number }) => {
     const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const cleanText = (value: string): string => {
+      return normalize(
+        value
+          .replace(/\bPromote\b/gi, " ")
+          .replace(/\bShow translation\b/gi, " ")
+          .replace(/\bRelevant View activity\b/gi, " ")
+          .replace(/\bPost your reply\b/gi, " ")
+          .replace(/\bReply\b$/gi, " ")
+          .replace(/\bShow more replies\b/gi, " "),
+      );
+    };
+    const canonicalizeStatusUrl = (input?: string, fallbackId?: string): string | undefined => {
+      if (!input) {
+        return undefined;
+      }
+      try {
+        const url = new URL(input);
+        const segments = url.pathname.split("/").filter(Boolean);
+        const statusIndex = segments.findIndex((segment) => segment === "status");
+        if (statusIndex < 0) {
+          return input;
+        }
+        const statusId = segments[statusIndex + 1] ?? fallbackId;
+        if (!statusId) {
+          return input;
+        }
+        if (segments[0] === "i" && segments[1] === "web") {
+          return `${url.origin}/i/web/status/${statusId}`;
+        }
+        const handle = segments[0];
+        if (!handle) {
+          return `${url.origin}/i/web/status/${statusId}`;
+        }
+        return `${url.origin}/${handle}/status/${statusId}`;
+      } catch {
+        return input;
+      }
+    };
     const dedupe = new Set<string>();
     const items: Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string }> = [];
     const pushItem = (item: { id: string; text: string; url?: string; author?: string; createdAt?: string }): void => {
@@ -1230,12 +1360,13 @@ async function extractTweetCards(
     const articles = Array.from(document.querySelectorAll<HTMLElement>("article"));
     for (const article of articles) {
       const statusAnchor = article.querySelector<HTMLAnchorElement>("a[href*='/status/']");
-      const url = statusAnchor?.href;
+      const matchedId = statusAnchor?.href?.match(/status\/(\d+)/)?.[1];
+      const url = canonicalizeStatusUrl(statusAnchor?.href, matchedId);
       const id = url?.match(/status\/(\d+)/)?.[1] ?? `article-${items.length + 1}`;
 
-      const textNodes = Array.from(article.querySelectorAll<HTMLElement>("[data-testid='tweetText'], div[lang], div[dir='auto']"));
-      const mergedText = normalize(textNodes.map((n) => n.textContent || "").join(" "));
-      const fallbackText = normalize(article.textContent || "");
+      const tweetTextNode = article.querySelector<HTMLElement>("[data-testid='tweetText']");
+      const mergedText = cleanText(tweetTextNode?.innerText || tweetTextNode?.textContent || "");
+      const fallbackText = cleanText(article.innerText || article.textContent || "");
       const text = mergedText || fallbackText;
       if (!text) {
         continue;
@@ -1266,12 +1397,14 @@ async function extractTweetCards(
         if (items.length >= maxItems) {
           break;
         }
-        const text = normalize(cell.innerText || cell.textContent || "");
+        const tweetTextNode = cell.querySelector<HTMLElement>("[data-testid='tweetText']");
+        const text = cleanText(tweetTextNode?.innerText || tweetTextNode?.textContent || cell.innerText || cell.textContent || "");
         if (!text || text.length < 16) {
           continue;
         }
         const statusAnchor = cell.querySelector<HTMLAnchorElement>("a[href*='/status/']");
-        const url = statusAnchor?.href;
+        const matchedId = statusAnchor?.href?.match(/status\/(\d+)/)?.[1];
+        const url = canonicalizeStatusUrl(statusAnchor?.href, matchedId);
         const id = url?.match(/status\/(\d+)/)?.[1] ?? `cell-${items.length + 1}`;
         const item: { id: string; text: string; url?: string } = { id, text };
         if (url) {
@@ -1282,7 +1415,7 @@ async function extractTweetCards(
     }
 
     if (items.length === 0) {
-      const bodyText = normalize(document.body?.innerText || "");
+      const bodyText = cleanText(document.body?.innerText || "");
       if (bodyText) {
         const snippet = bodyText.slice(0, 280);
         pushItem({
@@ -1585,6 +1718,114 @@ function mapTweetCards(items: TweetCard[]): TimelineItem[] {
   });
 }
 
+function getTimelineStatusId(item: TimelineItem): string {
+  if (item.id && !item.id.startsWith("article-") && !item.id.startsWith("cell-")) {
+    return item.id;
+  }
+  return item.url?.match(/status\/(\d+)/)?.[1] ?? "";
+}
+
+function getTimelineDedupeKey(item: TimelineItem): string {
+  const statusId = getTimelineStatusId(item);
+  if (statusId) {
+    return `id:${statusId}`;
+  }
+  if (item.url) {
+    return `url:${item.url}`;
+  }
+  return `text:${item.text}`;
+}
+
+function pickPreferredTimelineItem(current: TimelineItem | undefined, next: TimelineItem): TimelineItem {
+  if (!current) {
+    return next;
+  }
+  const score = (item: TimelineItem): number => {
+    let total = item.text.length;
+    if (item.url) {
+      total += 10;
+      if (canonicalizeStatusUrl(item.url, item.id) === item.url) {
+        total += 20;
+      }
+    }
+    if (item.text.includes("Post your reply") || item.text.includes("Relevant View activity")) {
+      total -= 80;
+    }
+    return total;
+  };
+  const currentScore = score(current);
+  const nextScore = score(next);
+  return nextScore > currentScore ? next : current;
+}
+
+function mergeTimelineItems(items: TimelineItem[]): TimelineItem[] {
+  const order: string[] = [];
+  const merged = new Map<string, TimelineItem>();
+  for (const item of items) {
+    const key = getTimelineDedupeKey(item);
+    if (!merged.has(key)) {
+      order.push(key);
+    }
+    merged.set(key, pickPreferredTimelineItem(merged.get(key), item));
+  }
+  return order.map((key) => merged.get(key)).filter((item): item is TimelineItem => Boolean(item));
+}
+
+function extractHandleFromStatusUrl(url?: string): string {
+  if (!url) {
+    return "";
+  }
+  try {
+    const parsed = new URL(url);
+    const [, handle = ""] = parsed.pathname.split("/");
+    return handle.replace(/^@+/, "").trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function buildConversationPayload(
+  items: TimelineItem[],
+  focalStatusId: string,
+  source: "network" | "dom",
+  nextCursor?: string,
+  debugReason?: string,
+): JsonValue {
+  const focalIndex = items.findIndex((item) => getTimelineStatusId(item) === focalStatusId);
+  if (focalIndex < 0) {
+    return errorResult("UPSTREAM_CHANGED", "focal tweet not found in conversation");
+  }
+  const focal = items[focalIndex];
+  if (!focal) {
+    return errorResult("UPSTREAM_CHANGED", "focal tweet not found in conversation");
+  }
+  const ancestors = items.slice(0, focalIndex);
+  const replies = items.slice(focalIndex + 1);
+  const output: {
+    focal: TimelineItem;
+    ancestors: TimelineItem[];
+    replies: TimelineItem[];
+    source: "network" | "dom";
+    hasMore: boolean;
+    nextCursor?: string;
+    debug?: { reason: string };
+  } = {
+    focal,
+    ancestors,
+    replies,
+    source,
+    hasMore: false,
+  };
+  if (nextCursor) {
+    output.nextCursor = nextCursor;
+    output.hasMore = true;
+  }
+  if (source === "dom" && debugReason) {
+    output.debug = { reason: debugReason };
+  }
+  return output;
+}
+
 function toTimelinePageFromNetwork(input: {
   items: TweetCard[];
   source: "network" | "dom";
@@ -1658,17 +1899,17 @@ function buildSearchUrl(query: string, mode: "top" | "latest"): string {
 async function readTweetByUrl(page: Page, url: string): Promise<JsonValue> {
   return await withEphemeralReadOnlyPage(page, url, async (readPage) => {
     const matchId = url.match(/status\/(\d+)/)?.[1];
-      if (matchId) {
-        const fromNetwork = await readTimelineViaNetwork(readPage, {
-          mode: "tweet",
-          limit: 1,
-          tweetId: matchId,
-        });
-        const first = fromNetwork.items[0];
-        if (first) {
-          return { tweet: first };
-        }
+    if (matchId) {
+      const fromNetwork = await readTimelineViaNetwork(readPage, {
+        mode: "tweet",
+        limit: 1,
+        tweetId: matchId,
+      });
+      const first = fromNetwork.items[0];
+      if (first) {
+        return { tweet: first };
       }
+    }
     const cards = await extractTweetCards(readPage, 1);
     const tweet = cards[0];
     if (!tweet) {
@@ -1678,66 +1919,138 @@ async function readTweetByUrl(page: Page, url: string): Promise<JsonValue> {
   });
 }
 
-async function readTweetThreadByUrl(page: Page, url: string, limit: number): Promise<JsonValue> {
+async function readTweetConversationByUrl(page: Page, url: string, limit: number, cursor?: string): Promise<JsonValue> {
   return await withEphemeralReadOnlyPage(page, url, async (readPage) => {
     const matchId = url.match(/status\/(\d+)/)?.[1];
-    const merged = new Map<string, TimelineItem>();
+    if (!matchId) {
+      return errorResult("VALIDATION_ERROR", "tweet id could not be derived from url");
+    }
+
+    const merged: TimelineItem[] = [];
     let source: "network" | "dom" = "dom";
 
-    const getThreadKey = (item: TimelineItem): string => {
-      if (item.id && !item.id.startsWith("article-") && !item.id.startsWith("cell-")) {
-        return `id:${item.id}`;
-      }
-      if (item.url) {
-        const statusId = item.url.match(/status\/(\d+)/)?.[1];
-        if (statusId) {
-          return `id:${statusId}`;
-        }
-        return `url:${item.url}`;
-      }
-      return `text:${item.text}`;
+    const request: { mode: "tweet"; limit: number; cursor?: string; tweetId: string } = {
+      mode: "tweet",
+      limit,
+      tweetId: matchId,
     };
-
-    const pickPreferredItem = (current: TimelineItem | undefined, next: TimelineItem): TimelineItem => {
-      if (!current) {
-        return next;
-      }
-      const currentScore = (current.url ? 10 : 0) + current.text.length;
-      const nextScore = (next.url ? 10 : 0) + next.text.length;
-      return nextScore > currentScore ? next : current;
-    };
-
-    const mergeItems = (items: TimelineItem[]): void => {
-      for (const item of items) {
-        const key = getThreadKey(item);
-        merged.set(key, pickPreferredItem(merged.get(key), item));
-      }
-    };
-
-    if (matchId) {
-      const fromNetwork = await readTimelineViaNetwork(readPage, {
-        mode: "tweet",
-        limit,
-        tweetId: matchId,
-      });
-      if (fromNetwork.items.length > 0) {
-        mergeItems(mapTweetCards(fromNetwork.items));
-        source = "network";
-      }
+    if (cursor) {
+      request.cursor = cursor;
+    }
+    const fromNetwork = await readTimelineViaNetwork(readPage, request);
+    if (fromNetwork.items.length > 0) {
+      merged.push(...mapTweetCards(fromNetwork.items));
+      source = "network";
     }
 
-    const domCards = await extractTweetCards(readPage, Math.max(limit, 20));
-    mergeItems(mapTweetCards(domCards));
+    if (!cursor) {
+      const domCards = await extractTweetCards(readPage, Math.max(limit + 1, 20));
+      merged.push(...mapTweetCards(domCards));
+    }
 
-    const tweets = Array.from(merged.values()).slice(0, limit);
-    if (tweets.length === 0) {
+    const conversationItems = mergeTimelineItems(merged);
+    if (conversationItems.length === 0) {
       return errorResult("UPSTREAM_CHANGED", "tweet thread content not found");
     }
-    return {
-      tweets,
+    return buildConversationPayload(
+      conversationItems,
+      matchId,
       source,
-    };
+      fromNetwork.nextCursor,
+      fromNetwork.reason ?? (source === "dom" ? "dom_fallback" : undefined),
+    );
   });
+}
+
+async function readTweetRepliesByUrl(page: Page, url: string, limit: number, cursor?: string): Promise<JsonValue> {
+  const conversation = await readTweetConversationByUrl(page, url, limit, cursor);
+  if (!conversation || typeof conversation !== "object" || !("focal" in conversation) || !("replies" in conversation)) {
+    return conversation;
+  }
+  const typed = conversation as {
+    focal: TimelineItem;
+    replies: TimelineItem[];
+    source: "network" | "dom";
+    hasMore: boolean;
+    nextCursor?: string;
+    debug?: { reason: string };
+  };
+  const output: {
+    focal: TimelineItem;
+    items: TimelineItem[];
+    source: "network" | "dom";
+    hasMore: boolean;
+    nextCursor?: string;
+    debug?: { reason: string };
+  } = {
+    focal: typed.focal,
+    items: typed.replies.slice(0, limit),
+    source: typed.source,
+    hasMore: typed.hasMore,
+  };
+  if (typed.nextCursor) {
+    output.nextCursor = typed.nextCursor;
+  }
+  if (typed.debug) {
+    output.debug = typed.debug;
+  }
+  return output;
+}
+
+async function readTweetThreadByUrl(page: Page, url: string, limit: number): Promise<JsonValue> {
+  const conversation = await readTweetConversationByUrl(page, url, Math.max(limit, 20));
+  if (!conversation || typeof conversation !== "object" || !("focal" in conversation)) {
+    return conversation;
+  }
+  const typed = conversation as {
+    focal: TimelineItem;
+    ancestors: TimelineItem[];
+    replies: TimelineItem[];
+    source: "network" | "dom";
+    hasMore: boolean;
+    nextCursor?: string;
+    debug?: { reason: string };
+  };
+  const focalHandle = extractHandleFromStatusUrl(typed.focal.url);
+  const threadItems = mergeTimelineItems(
+    [...typed.ancestors, typed.focal, ...typed.replies].filter((item) => {
+      if (!focalHandle) {
+        return true;
+      }
+      return extractHandleFromStatusUrl(item.url) === focalHandle;
+    }),
+  ).slice(0, limit);
+  if (threadItems.length === 0) {
+    return errorResult("UPSTREAM_CHANGED", "tweet thread content not found");
+  }
+  const root = threadItems[0];
+  if (!root) {
+    return errorResult("UPSTREAM_CHANGED", "tweet thread content not found");
+  }
+  const output: {
+    root: TimelineItem;
+    focal: TimelineItem;
+    tweets: TimelineItem[];
+    source: "network" | "dom";
+    incomplete?: boolean;
+    nextCursor?: string;
+    debug?: { reason: string };
+  } = {
+    root,
+    focal: typed.focal,
+    tweets: threadItems,
+    source: typed.source,
+  };
+  if (typed.hasMore) {
+    output.incomplete = true;
+  }
+  if (typed.nextCursor) {
+    output.nextCursor = typed.nextCursor;
+  }
+  if (typed.debug) {
+    output.debug = typed.debug;
+  }
+  return output;
 }
 
 async function readNotifications(page: Page, limit: number): Promise<TimelinePage> {
@@ -3297,6 +3610,38 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         }
         const limit = normalizeTimelineLimit(args);
         return await readTweetThreadByUrl(page, targetUrl, limit);
+      }
+
+      if (name === "tweet.conversation.get") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const targetUrl = url || (id ? `https://x.com/i/web/status/${id}` : "");
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const limit = normalizeTimelineLimit(args);
+        const cursor = typeof args.cursor === "string" ? args.cursor.trim() : "";
+        return await readTweetConversationByUrl(page, targetUrl, limit, cursor || undefined);
+      }
+
+      if (name === "tweet.replies.list") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const targetUrl = url || (id ? `https://x.com/i/web/status/${id}` : "");
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const limit = normalizeTimelineLimit(args);
+        const cursor = typeof args.cursor === "string" ? args.cursor.trim() : "";
+        return await readTweetRepliesByUrl(page, targetUrl, limit, cursor || undefined);
       }
 
       if (name === "favorites.list") {

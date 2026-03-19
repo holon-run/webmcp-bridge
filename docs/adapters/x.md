@@ -9,6 +9,8 @@
 - `timeline.user.list`: read a specific user's timeline tweet cards.
 - `search.tweets.list`: read search result tweet cards.
 - `tweet.get`: read one tweet by URL or ID.
+- `tweet.conversation.get`: read one tweet conversation by URL or ID.
+- `tweet.replies.list`: read reply tweets for one focal tweet by URL or ID.
 - `tweet.thread.get`: read one tweet thread by URL or ID.
 - `favorites.list`: read bookmarks/favorites tweet cards.
 - `notifications.list`: read the main notifications feed.
@@ -28,6 +30,17 @@
 
 - input: `limit`
 - output: `items`, `source=dom`, `hasMore=false`
+
+`tweet.conversation.get` and `tweet.replies.list` expose:
+
+- input: `url | id`, `limit`, optional `cursor`
+- `tweet.conversation.get` output: `focal`, `ancestors`, `replies`, `source`, `hasMore`, optional `nextCursor`
+- `tweet.replies.list` output: `focal`, `items`, `source`, `hasMore`, optional `nextCursor`
+
+`tweet.thread.get` exposes:
+
+- input: `url | id`, `limit`
+- output: `root`, `focal`, `tweets`, `source`, optional `incomplete`, optional `nextCursor`
 
 `search.tweets.list` input:
 
@@ -94,6 +107,30 @@ Search tweets:
   "params": {
     "name": "search.tweets.list",
     "arguments": { "query": "playwright", "mode": "latest", "limit": 10 }
+  }
+}
+```
+
+Read a tweet conversation:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "tweet.conversation.get",
+    "arguments": { "id": "2033895522382319922", "limit": 10 }
+  }
+}
+```
+
+List replies for a tweet:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "tweet.replies.list",
+    "arguments": { "id": "2033895522382319922", "limit": 10 }
   }
 }
 ```
@@ -213,6 +250,7 @@ When Grok returns a downloadable `data:` link, `grok.chat` materializes it into 
 ## Known limits
 
 - Selector-based implementation; upstream UI changes may require selector updates.
+- `tweet.conversation.get` models the detail-page conversation view; `tweet.thread.get` derives the same-author thread chain from that conversation instead of returning the full reply tree.
 - Text-only compose and reply scope in `0.1.x`.
 - `grok.chat` starts a new conversation by default; pass `conversationId` to continue an existing chat.
 - `grok.chat` attachments currently support local file-path uploads only, via `attachmentPaths`.
