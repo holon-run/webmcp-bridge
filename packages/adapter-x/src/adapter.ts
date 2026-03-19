@@ -840,18 +840,6 @@ function normalizeInlineText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function cleanTweetSurfaceText(value: string): string {
-  return normalizeInlineText(
-    value
-      .replace(/\bPromote\b/gi, " ")
-      .replace(/\bShow translation\b/gi, " ")
-      .replace(/\bRelevant View activity\b/gi, " ")
-      .replace(/\bPost your reply\b/gi, " ")
-      .replace(/\bReply\b$/gi, " ")
-      .replace(/\bShow more replies\b/gi, " "),
-  );
-}
-
 function canonicalizeStatusUrl(input: string | undefined, fallbackId?: string): string | undefined {
   if (!input) {
     return undefined;
@@ -1777,7 +1765,11 @@ function extractHandleFromStatusUrl(url?: string): string {
   }
   try {
     const parsed = new URL(url);
-    const [, handle = ""] = parsed.pathname.split("/");
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments[0] === "i" && segments[1] === "web") {
+      return "";
+    }
+    const handle = segments[0] ?? "";
     return handle.replace(/^@+/, "").trim().toLowerCase();
   } catch {
     return "";
@@ -1787,6 +1779,7 @@ function extractHandleFromStatusUrl(url?: string): string {
 function buildConversationPayload(
   items: TimelineItem[],
   focalStatusId: string,
+  replyLimit: number,
   source: "network" | "dom",
   nextCursor?: string,
   debugReason?: string,
@@ -1800,7 +1793,8 @@ function buildConversationPayload(
     return errorResult("UPSTREAM_CHANGED", "focal tweet not found in conversation");
   }
   const ancestors = items.slice(0, focalIndex);
-  const replies = items.slice(focalIndex + 1);
+  const allReplies = items.slice(focalIndex + 1);
+  const replies = allReplies.slice(0, replyLimit);
   const output: {
     focal: TimelineItem;
     ancestors: TimelineItem[];
@@ -1814,7 +1808,7 @@ function buildConversationPayload(
     ancestors,
     replies,
     source,
-    hasMore: false,
+    hasMore: allReplies.length > replyLimit,
   };
   if (nextCursor) {
     output.nextCursor = nextCursor;
@@ -1955,6 +1949,7 @@ async function readTweetConversationByUrl(page: Page, url: string, limit: number
     return buildConversationPayload(
       conversationItems,
       matchId,
+      limit,
       source,
       fromNetwork.nextCursor,
       fromNetwork.reason ?? (source === "dom" ? "dom_fallback" : undefined),
@@ -2021,8 +2016,8 @@ async function readTweetThreadByUrl(page: Page, url: string, limit: number): Pro
     }),
   ).slice(0, limit);
   if (threadItems.length === 0) {
-    return errorResult("UPSTREAM_CHANGED", "tweet thread content not found");
-  }
+      return errorResult("UPSTREAM_CHANGED", "tweet conversation content not found");
+    }
   const root = threadItems[0];
   if (!root) {
     return errorResult("UPSTREAM_CHANGED", "tweet thread content not found");
