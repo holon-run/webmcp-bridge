@@ -20,6 +20,8 @@
 - `tweet.create`: submit a text post with optional `dryRun`.
 - `tweet.reply`: reply to one tweet by URL or ID, with optional `dryRun`.
 - `grok.chat`: send one prompt to Grok, optionally upload local files, and return the assistant reply.
+- `article.publishMarkdown`: publish one X article from a local markdown file, with optional cover image.
+- `article.delete`: delete one X article draft or published article by edit URL, public URL, or ID.
 
 `timeline.home.list`, `timeline.user.list`, `search.tweets.list`, and `favorites.list` support incremental pagination with:
 
@@ -55,6 +57,19 @@
 - each `items[]` entry includes `mediaIndex`, `media`, `artifact`
 - each `artifact` includes `path`, `name`, `mimeType`, `mediaIndex`, `sourceUrl`
 - `artifact.path` is a local temporary file path created by the adapter on the current machine
+
+`article.publishMarkdown` exposes:
+
+- input: `markdownPath`, optional `title`, optional `coverImagePath`, optional `dryRun`
+- `markdownPath` and `coverImagePath` are local absolute file paths
+- the adapter derives the title from the first markdown heading when `title` is omitted
+- markdown image syntax with local file paths is supported; local inline images are uploaded through the article editor
+- output: `ok`, optional `dryRun`, `title`, `editUrl`, optional `articleId`, optional `articleUrl`
+
+`article.delete` exposes:
+
+- input: `url | id`, optional `dryRun`
+- output: `ok`, optional `dryRun`, optional `confirmed`
 
 `search.tweets.list` input:
 
@@ -254,6 +269,35 @@ Chat with Grok and upload one local file:
 }
 ```
 
+Publish one article from markdown:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "article.publishMarkdown",
+    "arguments": {
+      "markdownPath": "/tmp/post.md",
+      "coverImagePath": "/tmp/cover.png"
+    }
+  }
+}
+```
+
+Delete one article:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "article.delete",
+    "arguments": {
+      "id": "2035000000000000000"
+    }
+  }
+}
+```
+
 When Grok returns a downloadable `data:` link, `grok.chat` materializes it into a local artifact path:
 
 ```json
@@ -280,6 +324,7 @@ When Grok returns a downloadable `data:` link, `grok.chat` materializes it into 
 - `tweet.media.download` currently materializes media into local temp paths and returns artifact metadata; it does not yet integrate with native browser download events.
 - `tweet.media.download` only fetches `https` media from expected X media hosts (`pbs.twimg.com`, `video.twimg.com`).
 - Text-only compose and reply scope in `0.1.x`.
+- `article.publishMarkdown` currently relies on X article editor selectors and markdown paste behavior; if X changes the editor, selector updates may be required.
 - `grok.chat` starts a new conversation by default; pass `conversationId` to continue an existing chat.
 - `grok.chat` attachments currently support local file-path uploads only, via `attachmentPaths`.
 - `grok.chat` marks each `attachmentPaths` item with `x-uxc-kind: "file-path"` so schema-aware clients can treat them as local file references.

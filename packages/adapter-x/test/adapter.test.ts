@@ -26,6 +26,15 @@ type Behavior = {
   grokResponse?: string;
   grokRawResponse?: string;
   statusUrl?: string;
+  articleEditUrl: string;
+  articlePublicUrl: string;
+  articleOpenOk: boolean;
+  articlePasteOk: boolean;
+  articleCoverTriggerOk: boolean;
+  articleInlineTriggerOk: boolean;
+  articlePlaceMarkerOk: boolean;
+  articlePublishConfirmed: boolean;
+  articleDeleteConfirmed: boolean;
 };
 
 function createMockPage(partial: Partial<Behavior> = {}) {
@@ -33,6 +42,10 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   let grokSubmitted = false;
   let uploadedFiles: string[] = [];
   let detailScrollCount = 0;
+  let currentUrl = "https://x.com/home";
+  let articleTitle = "";
+  let articleMarkdown = "";
+  let articleDeleteMenuOpen = false;
   let routedHandler:
     | ((
         route: {
@@ -58,6 +71,15 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     confirmGrok: true,
     grokResponse: "Grok mock response",
     statusUrl: "https://x.com/example/status/123",
+    articleEditUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+    articlePublicUrl: "https://x.com/i/articles/2035000000000000000",
+    articleOpenOk: true,
+    articlePasteOk: true,
+    articleCoverTriggerOk: true,
+    articleInlineTriggerOk: true,
+    articlePlaceMarkerOk: true,
+    articlePublishConfirmed: true,
+    articleDeleteConfirmed: true,
     ...partial,
   };
 
@@ -173,16 +195,92 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         return behavior.statusUrl;
       }
 
+      if (command.op === "article_open_new") {
+        if (!behavior.articleOpenOk) {
+          return false;
+        }
+        currentUrl = behavior.articleEditUrl;
+        return true;
+      }
+
+      if (command.op === "article_set_title") {
+        articleTitle = typeof command.value === "string" ? command.value : "";
+        return true;
+      }
+
+      if (command.op === "article_paste_markdown") {
+        if (!behavior.articlePasteOk) {
+          return false;
+        }
+        articleMarkdown = typeof command.markdownText === "string" ? command.markdownText : "";
+        return true;
+      }
+
+      if (command.op === "article_trigger_cover_upload") {
+        return behavior.articleCoverTriggerOk;
+      }
+
+      if (command.op === "article_trigger_inline_upload") {
+        return behavior.articleInlineTriggerOk;
+      }
+
+      if (command.op === "article_place_marker") {
+        return behavior.articlePlaceMarkerOk;
+      }
+
+      if (command.op === "article_click_publish") {
+        if (!behavior.articlePublishConfirmed) {
+          return false;
+        }
+        currentUrl = behavior.articlePublicUrl;
+        return true;
+      }
+
+      if (command.op === "article_collect_publish_details") {
+        return {
+          currentUrl,
+          editUrl: behavior.articleEditUrl,
+          publicUrl: behavior.articlePublishConfirmed ? behavior.articlePublicUrl : undefined,
+        };
+      }
+
+      if (command.op === "article_open_delete_menu") {
+        articleDeleteMenuOpen = true;
+        return true;
+      }
+
+      if (command.op === "article_click_delete_menu_item") {
+        return articleDeleteMenuOpen;
+      }
+
+      if (command.op === "article_confirm_delete") {
+        if (behavior.articleDeleteConfirmed) {
+          currentUrl = "https://x.com/compose/articles";
+        }
+        return undefined;
+      }
+
       return undefined;
     }),
     addInitScript: vi.fn(async () => {}),
     click: vi.fn(async (selector?: string) => {
+      if (selector === "a[data-testid='empty_state_button_text']" || selector === "button[aria-label='create']" || selector === "a:has-text('Write')") {
+        if (!behavior.articleOpenOk) {
+          throw new Error("not found");
+        }
+        currentUrl = behavior.articleEditUrl;
+        return;
+      }
       if (typeof selector === "string" && selector.includes("button")) {
         grokSubmitted = true;
         await triggerGrokRoute();
       }
     }),
-    goto: vi.fn(async () => {}),
+    goto: vi.fn(async (url?: string) => {
+      if (typeof url === "string") {
+        currentUrl = url;
+      }
+    }),
     type: vi.fn(async () => {}),
     waitForSelector: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
     waitForTimeout: vi.fn(async () => {}),
@@ -239,7 +337,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     }),
     reload: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
-    url: vi.fn(() => "https://x.com/i/bookmarks"),
+    url: vi.fn(() => currentUrl),
     isClosed: vi.fn(() => false),
     keyboard: {
       press: vi.fn(async () => {}),
@@ -371,6 +469,12 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       ) {
         return true;
       }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && (arg as Record<string, unknown>).op === "article_wait_editor") {
+        if (!behavior.articleOpenOk) {
+          throw new Error("timeout");
+        }
+        return true;
+      }
       if (typeof arg === "string") {
         if (!behavior.confirmCompose) {
           throw new Error("timeout");
@@ -394,14 +498,40 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         }
         return true;
       }
+      if (
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        Array.isArray((arg as Record<string, unknown>).snippets)
+      ) {
+        if (!behavior.articlePasteOk) {
+          throw new Error("timeout");
+        }
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "previousUrl" in (arg as Record<string, unknown>)) {
+        if (!behavior.articlePublishConfirmed) {
+          throw new Error("timeout");
+        }
+        return true;
+      }
+      if (arg === undefined) {
+        if (!behavior.articleDeleteConfirmed && articleDeleteMenuOpen) {
+          throw new Error("timeout");
+        }
+      }
       if (!behavior.confirmCompose) {
         throw new Error("timeout");
       }
       return true;
     }),
-    goto: vi.fn(async () => {}),
+    goto: vi.fn(async (url?: string) => {
+      if (typeof url === "string") {
+        currentUrl = url;
+      }
+    }),
     close: vi.fn(async () => {}),
-    url: vi.fn(() => "https://x.com/home"),
+    url: vi.fn(() => currentUrl),
     isClosed: vi.fn(() => false),
     keyboard: {
       press: vi.fn(async () => {}),
@@ -417,6 +547,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     newPage,
     behavior,
     getUploadedFiles: () => uploadedFiles,
+    getArticleDraftState: () => ({ title: articleTitle, markdown: articleMarkdown, url: currentUrl }),
   };
 }
 
@@ -837,6 +968,92 @@ describe("createXAdapter", () => {
         code: "ACTION_UNCONFIRMED",
         message: "grok response was not confirmed",
       },
+    });
+  });
+
+  it("returns validation error for article.publishMarkdown without markdownPath", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool({ name: "article.publishMarkdown", input: {} }, { page: page as never });
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "markdownPath is required",
+      },
+    });
+  });
+
+  it("publishes one article from markdown with cover and inline images", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-publish-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    const coverPath = join(tempDir, "cover.png");
+    const inlinePath = join(tempDir, "inline.png");
+    await writeFile(
+      markdownPath,
+      "# Mock title\n\nBody text before image.\n\n![inline](./inline.png)\n\nBody text after image.\n",
+    );
+    await writeFile(coverPath, "cover-bytes");
+    await writeFile(inlinePath, "inline-bytes");
+    const { page, getUploadedFiles, getArticleDraftState } = createMockPage();
+
+    const result = await adapter.callTool(
+      {
+        name: "article.publishMarkdown",
+        input: {
+          markdownPath,
+          coverImagePath: coverPath,
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      confirmed: true,
+      title: "Mock title",
+      articleId: "2035000000000000000",
+      articleUrl: "https://x.com/i/articles/2035000000000000000",
+      editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+    });
+    expect(getUploadedFiles()).toEqual([inlinePath]);
+    expect(getArticleDraftState()).toMatchObject({
+      title: "Mock title",
+      markdown: expect.stringContaining("[[WEBMCP_INLINE_IMAGE_1]]"),
+    });
+  });
+
+  it("supports dryRun for article.delete", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "article.delete", input: { id: "2035000000000000000", dryRun: true } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      dryRun: true,
+      deleteVisible: true,
+    });
+  });
+
+  it("deletes one article by id", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "article.delete", input: { id: "2035000000000000000" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      confirmed: true,
     });
   });
 
