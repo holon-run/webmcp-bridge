@@ -1417,6 +1417,62 @@ async function extractTweetCards(
   return cards;
 }
 
+async function scrollTweetDetailSurface(page: Page): Promise<boolean> {
+  return await page.evaluate(({ op }) => {
+    void op;
+    const viewportHeight = window.innerHeight || 0;
+    const scrollHeight = Math.max(document.documentElement?.scrollHeight ?? 0, document.body?.scrollHeight ?? 0);
+    const beforeY = window.scrollY;
+    const maxScrollY = Math.max(0, scrollHeight - viewportHeight);
+    const delta = Math.max(Math.floor(viewportHeight * 0.9), 900);
+    const targetY = Math.min(beforeY + delta, maxScrollY);
+    window.scrollTo({ top: targetY, behavior: "instant" });
+    return targetY > beforeY;
+  }, { op: "scroll_tweet_detail_surface" });
+}
+
+async function extractTweetCardsAcrossScroll(
+  page: Page,
+  limit: number,
+): Promise<Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string }>> {
+  let merged = mergeTimelineItems(mapTweetCards(await extractTweetCards(page, limit)));
+  let stagnantIterations = 0;
+
+  for (let attempt = 0; attempt < 6 && merged.length < limit; attempt += 1) {
+    const didScroll = await scrollTweetDetailSurface(page);
+    if (!didScroll) {
+      break;
+    }
+    await page.waitForTimeout(1_000);
+    const nextCards = mergeTimelineItems([...merged, ...mapTweetCards(await extractTweetCards(page, limit))]);
+    if (nextCards.length <= merged.length) {
+      stagnantIterations += 1;
+      if (stagnantIterations >= 2) {
+        break;
+      }
+    } else {
+      stagnantIterations = 0;
+    }
+    merged = nextCards;
+  }
+
+  const hasCanonicalStatusItem = merged.some((item) => Boolean(item.url?.includes("/status/")));
+  if (hasCanonicalStatusItem) {
+    merged = merged.filter((item) => !item.id.startsWith("fallback-body-"));
+  }
+
+  return merged.slice(0, limit).map((item) => {
+    const nextItem: { id: string; text: string; url?: string } = {
+      id: item.id,
+      text: item.text,
+    };
+    if (item.url) {
+      nextItem.url = item.url;
+    }
+    return nextItem;
+  });
+}
+
 async function extractNotificationCards(
   page: Page,
   limit: number,
@@ -1938,13 +1994,13 @@ async function readTweetConversationByUrl(page: Page, url: string, limit: number
     }
 
     if (!cursor) {
-      const domCards = await extractTweetCards(readPage, Math.max(limit + 1, 20));
+      const domCards = await extractTweetCardsAcrossScroll(readPage, Math.max(limit + 1, 20));
       merged.push(...mapTweetCards(domCards));
     }
 
     const conversationItems = mergeTimelineItems(merged);
     if (conversationItems.length === 0) {
-      return errorResult("UPSTREAM_CHANGED", "tweet thread content not found");
+      return errorResult("UPSTREAM_CHANGED", "tweet conversation content not found");
     }
     return buildConversationPayload(
       conversationItems,

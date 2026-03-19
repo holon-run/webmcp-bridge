@@ -13,6 +13,7 @@ type Behavior = {
   authState: "authenticated" | "auth_required" | "challenge_required";
   authSignals: string[];
   timelineItems: Array<{ id: string; text: string; url?: string }>;
+  timelineDomBatches?: Array<Array<{ id: string; text: string; url?: string }>>;
   networkNextCursor?: string;
   requireFallbackTemplate?: boolean;
   composeResult: { ok: boolean; dryRun?: boolean; reason?: string; submitVisible?: boolean };
@@ -31,6 +32,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   let replyConfirmAttempts = 0;
   let grokSubmitted = false;
   let uploadedFiles: string[] = [];
+  let detailScrollCount = 0;
   let routedHandler:
     | ((
         route: {
@@ -121,7 +123,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (typeof command.maxItems === "number") {
-        return behavior.timelineItems.slice(0, command.maxItems);
+        const domItems =
+          behavior.timelineDomBatches?.[Math.min(detailScrollCount, behavior.timelineDomBatches.length - 1)] ?? behavior.timelineItems;
+        return domItems.slice(0, command.maxItems);
       }
 
       if (command.op === "extract_notifications" && typeof command.maxItems === "number") {
@@ -143,6 +147,14 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       if (command.op === "grok_submit") {
         grokSubmitted = true;
         return behavior.grokComposeResult;
+      }
+
+      if (command.op === "scroll_tweet_detail_surface") {
+        if (behavior.timelineDomBatches && detailScrollCount < behavior.timelineDomBatches.length - 1) {
+          detailScrollCount += 1;
+          return true;
+        }
+        return false;
       }
 
       if (command.op === "grok_extract_state") {
@@ -278,7 +290,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (typeof command.maxItems === "number") {
-        return behavior.timelineItems.slice(0, command.maxItems);
+        const domItems =
+          behavior.timelineDomBatches?.[Math.min(detailScrollCount, behavior.timelineDomBatches.length - 1)] ?? behavior.timelineItems;
+        return domItems.slice(0, command.maxItems);
       }
 
       if (command.op === "extract_notifications" && typeof command.maxItems === "number") {
@@ -300,6 +314,14 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       if (command.op === "grok_submit") {
         grokSubmitted = true;
         return behavior.grokComposeResult;
+      }
+
+      if (command.op === "scroll_tweet_detail_surface") {
+        if (behavior.timelineDomBatches && detailScrollCount < behavior.timelineDomBatches.length - 1) {
+          detailScrollCount += 1;
+          return true;
+        }
+        return false;
       }
 
       if (command.op === "grok_extract_state") {
@@ -978,6 +1000,49 @@ describe("createXAdapter", () => {
       source: "network",
       incomplete: true,
       nextCursor: "cursor-next",
+    });
+  });
+
+  it("extends tweet thread with scrolled dom cards when network detail is truncated", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+        { id: "124", text: "part 2", url: "https://x.com/a/status/124" },
+        { id: "125", text: "part 3", url: "https://x.com/a/status/125" },
+      ],
+      timelineDomBatches: [
+        [
+          { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+          { id: "124", text: "part 2", url: "https://x.com/a/status/124" },
+          { id: "125", text: "part 3", url: "https://x.com/a/status/125" },
+        ],
+        [
+          { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+          { id: "124", text: "part 2", url: "https://x.com/a/status/124" },
+          { id: "125", text: "part 3", url: "https://x.com/a/status/125" },
+          { id: "126", text: "part 4", url: "https://x.com/a/status/126" },
+          { id: "127", text: "part 5", url: "https://x.com/a/status/127" },
+        ],
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "tweet.thread.get", input: { id: "123", limit: 5 } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      root: { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+      focal: { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+      tweets: [
+        { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+        { id: "124", text: "part 2", url: "https://x.com/a/status/124" },
+        { id: "125", text: "part 3", url: "https://x.com/a/status/125" },
+        { id: "126", text: "part 4", url: "https://x.com/a/status/126" },
+        { id: "127", text: "part 5", url: "https://x.com/a/status/127" },
+      ],
+      source: "network",
     });
   });
 
