@@ -17,7 +17,9 @@ import {
   selectedElementIdsFromAppState,
   toExcalidrawAppState,
 } from "./excalidraw.js";
+import { BoardInteractionsState } from "./interactions-state.js";
 import { ensureModelContext } from "./model-context.js";
+import { BOARD_RESOURCE_URIS, registerBoardResources } from "./resources.js";
 import { BoardSceneState } from "./scene-state.js";
 import { registerBoardTools } from "./tools.js";
 
@@ -106,42 +108,56 @@ type SceneApi = {
 
 export function App(): React.ReactElement {
   const [sceneState, setSceneState] = useState<BoardSceneState | undefined>(undefined);
+  const [interactionsState, setInteractionsState] = useState<BoardInteractionsState | undefined>(undefined);
   const [version, setVersion] = useState(0);
+  const [interactionsVersion, setInteractionsVersion] = useState(0);
   const [renderTick, setRenderTick] = useState(0);
   const [modelContextReady, setModelContextReady] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Loading board state...");
   const [debugTick, setDebugTick] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [interactionDraft, setInteractionDraft] = useState("");
   const sceneApiRef = useRef<SceneApi | undefined>(undefined);
   const lastAppliedSnapshotRef = useRef("");
 
   useEffect(() => {
     let mounted = true;
-    let unsubscribe: (() => void) | undefined;
+    let unsubscribeScene: (() => void) | undefined;
+    let unsubscribeInteractions: (() => void) | undefined;
 
-    void BoardSceneState.load().then((loadedState) => {
-      if (!mounted) {
-        return;
-      }
-      setSceneState(loadedState);
-      setStatusMessage("Loading tools...");
-      unsubscribe = loadedState.subscribe(() => {
-        setVersion((value) => value + 1);
-      });
-    });
+    void Promise.all([BoardSceneState.load(), BoardInteractionsState.load()]).then(
+      ([loadedSceneState, loadedInteractionsState]) => {
+        if (!mounted) {
+          return;
+        }
+        setSceneState(loadedSceneState);
+        setInteractionsState(loadedInteractionsState);
+        setStatusMessage("Loading tools...");
+        unsubscribeScene = loadedSceneState.subscribe(() => {
+          setVersion((value) => value + 1);
+        });
+        unsubscribeInteractions = loadedInteractionsState.subscribe(() => {
+          setInteractionsVersion((value) => value + 1);
+        });
+      },
+    );
 
     return () => {
       mounted = false;
-      unsubscribe?.();
+      unsubscribeScene?.();
+      unsubscribeInteractions?.();
     };
   }, []);
 
   useEffect(() => {
-    if (!sceneState) {
+    if (!sceneState || !interactionsState) {
       return;
     }
     const modelContext = ensureModelContext(globalThis);
-    void registerBoardTools(modelContext, sceneState, () => sceneApiRef.current)
+    void Promise.all([
+      registerBoardTools(modelContext, sceneState, () => sceneApiRef.current),
+      registerBoardResources(modelContext, sceneState, interactionsState),
+    ])
       .then(() => {
         setModelContextReady(true);
         setStatusMessage("navigator.modelContext ready");
@@ -151,7 +167,30 @@ export function App(): React.ReactElement {
         setModelContextReady(false);
         setStatusMessage(`tool registration failed: ${message}`);
       });
-  }, [sceneState]);
+  }, [sceneState, interactionsState]);
+
+  useEffect(() => {
+    if (!sceneState) {
+      return;
+    }
+    const modelContext = ensureModelContext(globalThis);
+    void Promise.all([
+      modelContext.notifyResourceUpdated(BOARD_RESOURCE_URIS.scene),
+      modelContext.notifyResourceUpdated(BOARD_RESOURCE_URIS.selection),
+    ]).catch(() => {
+      // Ignore resource notifications until a bridge client is ready.
+    });
+  }, [sceneState, version]);
+
+  useEffect(() => {
+    if (!interactionsState) {
+      return;
+    }
+    const modelContext = ensureModelContext(globalThis);
+    void modelContext.notifyResourceUpdated(BOARD_RESOURCE_URIS.interactions).catch(() => {
+      // Ignore resource notifications until a bridge client is ready.
+    });
+  }, [interactionsState, interactionsVersion]);
 
   useEffect(() => {
     if (!sceneState || !sceneApiRef.current) {
@@ -215,6 +254,7 @@ export function App(): React.ReactElement {
     [snapshot],
   );
   const derivedDocument = useMemo(() => (snapshot ? deriveDocumentFromScene(snapshot) : { version: 1 as const, nodes: [], edges: [] }), [snapshot]);
+  const interactions = useMemo(() => interactionsState?.getSnapshot().items ?? [], [interactionsState, interactionsVersion]);
   const bridgeTargetUrl = useMemo(() => {
     if (typeof globalThis.location === "undefined") {
       return "http://127.0.0.1:4173";
@@ -232,7 +272,7 @@ export function App(): React.ReactElement {
     globalThis.document.title = snapshot.title;
   }, [snapshot]);
 
-  if (!sceneState || !snapshot) {
+  if (!sceneState || !interactionsState || !snapshot) {
     return (
       <div style={styles.loadingShell}>
         <div style={styles.loadingCard}>
@@ -399,6 +439,58 @@ export function App(): React.ReactElement {
             <h2 style={styles.cardTitle}>Current Focus</h2>
             <p style={styles.helperText}>Selected nodes: {selection.nodeIds.join(", ") || "none"}</p>
             <p style={styles.helperText}>Selected edges: {selection.edgeIds.join(", ") || "none"}</p>
+          </section>
+          <section style={styles.card}>
+            <p style={styles.cardEyebrow}>Interactions</p>
+            <h2 style={styles.cardTitle}>Resource Feed</h2>
+            <textarea
+              style={styles.textarea}
+              placeholder="Describe what the host should help with for the current selection..."
+              value={interactionDraft}
+              onChange={(event) => {
+                setInteractionDraft(event.target.value);
+              }}
+            />
+            <div style={styles.debugActions}>
+              <button
+                style={styles.secondaryButton}
+                onClick={() => {
+                  const body = interactionDraft.trim();
+                  if (!body) {
+                    return;
+                  }
+                  interactionsState.appendInteraction({
+                    kind: "message",
+                    body,
+                    selection,
+                    audience: "host",
+                    intent: "request_action",
+                    requiresResponse: true,
+                  });
+                  setInteractionDraft("");
+                }}
+              >
+                Submit To Host
+              </button>
+            </div>
+            <ul style={styles.toolList}>
+              {interactions.length === 0 ? (
+                <li>No interactions yet.</li>
+              ) : (
+                interactions
+                  .slice()
+                  .reverse()
+                  .slice(0, 4)
+                  .map((interaction) => (
+                    <li key={interaction.id}>
+                      {interaction.intent === "request_action" ? "request" : interaction.kind}: {interaction.body}
+                    </li>
+                  ))
+              )}
+            </ul>
+            <p style={styles.helperText}>
+              New entries are exposed through the <code>board://local/interactions</code> resource and carry the current selection.
+            </p>
           </section>
           <section style={styles.card}>
             <p style={styles.cardEyebrow}>Tools</p>
@@ -654,6 +746,18 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "14px",
     lineHeight: 1.5,
   },
+  textarea: {
+    width: "100%",
+    minHeight: "96px",
+    resize: "vertical",
+    borderRadius: "14px",
+    border: "1px solid rgba(148, 163, 184, 0.35)",
+    background: "rgba(248, 250, 252, 0.96)",
+    color: "#0f172a",
+    padding: "12px 14px",
+    font: "inherit",
+    boxSizing: "border-box",
+  },
   metaList: {
     margin: 0,
   },
@@ -675,5 +779,15 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     flexWrap: "wrap",
     marginTop: "12px",
+  },
+  secondaryButton: {
+    border: "1px solid rgba(15, 23, 42, 0.1)",
+    background: "rgba(255, 255, 255, 0.92)",
+    color: "#0f172a",
+    borderRadius: "999px",
+    padding: "10px 14px",
+    font: "inherit",
+    fontWeight: 600,
+    cursor: "pointer",
   },
 };

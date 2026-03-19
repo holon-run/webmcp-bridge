@@ -18,6 +18,16 @@ export type BridgeToolDefinition = {
   execute: (input: JsonValue) => Promise<JsonValue>;
 };
 
+export type BridgeResourceDefinition = {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+  read: () => Promise<JsonValue>;
+};
+
+export type BridgeResourceDescriptor = Omit<BridgeResourceDefinition, "read">;
+
 export type BridgeTransport = {
   call: (name: string, input: JsonValue) => Promise<JsonValue>;
 };
@@ -27,6 +37,11 @@ export type ModelContextLike = {
   clearContext: () => Promise<void>;
   registerTool: (tool: BridgeToolDefinition) => Promise<void>;
   unregisterTool: (name: string) => Promise<void>;
+  registerResource: (resource: BridgeResourceDefinition) => Promise<void>;
+  unregisterResource: (uri: string) => Promise<void>;
+  listResources: () => Promise<BridgeResourceDescriptor[]>;
+  readResource: (uri: string) => Promise<JsonValue>;
+  notifyResourceUpdated: (uri: string) => Promise<void>;
 };
 
 export type BridgeInstallTarget = {
@@ -41,5 +56,7 @@ export type BridgeHandle = {
   mode: "native" | "shim";
   listTools: () => ReadonlyArray<BridgeToolDefinition>;
   invokeTool: (name: string, input: JsonValue) => Promise<JsonValue>;
+  listResources: () => ReadonlyArray<BridgeResourceDescriptor>;
+  readResource: (uri: string) => Promise<JsonValue>;
   uninstall: () => void;
 };

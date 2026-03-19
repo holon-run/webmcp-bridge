@@ -49,12 +49,24 @@ export type McpToolCallParams = {
 export type McpInitializeResult = {
   protocolVersion: string;
   capabilities: {
-    tools: Record<string, never>;
+    tools: {
+      listChanged: boolean;
+    };
+    resources?: {
+      subscribe?: boolean;
+    };
   };
   serverInfo: {
     name: string;
     version: string;
   };
+};
+
+export type McpResourceDefinition = {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
 };
 
 export type McpToolListResult = {
@@ -68,4 +80,17 @@ export type McpToolCallResult = {
   }>;
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
+};
+
+export type McpResourceListResult = {
+  resources: McpResourceDefinition[];
+};
+
+export type McpReadResourceResult = {
+  contents: Array<{
+    uri: string;
+    mimeType?: string;
+    text?: string;
+    blob?: string;
+  }>;
 };

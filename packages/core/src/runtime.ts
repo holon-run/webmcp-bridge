@@ -4,6 +4,8 @@
  */
 
 import type {
+  BridgeResourceDefinition,
+  BridgeResourceDescriptor,
   BridgeToolDefinition,
   BridgeTransport,
   JsonValue,
@@ -14,12 +16,26 @@ export type BridgeRuntime = {
   modelContext: ModelContextLike;
   listTools: () => ReadonlyArray<BridgeToolDefinition>;
   invokeTool: (name: string, input: JsonValue) => Promise<JsonValue>;
+  listResources: () => ReadonlyArray<BridgeResourceDescriptor>;
+  readResource: (uri: string) => Promise<JsonValue>;
+  onResourceUpdated: (listener: (uri: string) => void) => () => void;
   clear: () => void;
 };
 
 export function createBridgeRuntime(transport?: BridgeTransport): BridgeRuntime {
   const contexts: JsonValue[] = [];
   const tools = new Map<string, BridgeToolDefinition>();
+  const resources = new Map<string, BridgeResourceDefinition>();
+  const resourceListeners = new Set<(uri: string) => void>();
+
+  const toResourceDescriptor = (
+    resource: BridgeResourceDefinition,
+  ): BridgeResourceDescriptor => ({
+    uri: resource.uri,
+    name: resource.name,
+    ...(resource.description !== undefined ? { description: resource.description } : {}),
+    ...(resource.mimeType !== undefined ? { mimeType: resource.mimeType } : {}),
+  });
 
   const invokeTool = async (name: string, input: JsonValue): Promise<JsonValue> => {
     const localTool = tools.get(name);
@@ -39,6 +55,7 @@ export function createBridgeRuntime(transport?: BridgeTransport): BridgeRuntime 
     clearContext: async () => {
       contexts.splice(0, contexts.length);
       tools.clear();
+      resources.clear();
     },
     registerTool: async (tool) => {
       if (!tool.name.trim()) {
@@ -52,15 +69,53 @@ export function createBridgeRuntime(transport?: BridgeTransport): BridgeRuntime 
     unregisterTool: async (name) => {
       tools.delete(name);
     },
+    registerResource: async (resource) => {
+      if (!resource.uri.trim()) {
+        throw new Error("resource.uri is required");
+      }
+      resources.set(resource.uri, resource);
+    },
+    unregisterResource: async (uri) => {
+      resources.delete(uri);
+    },
+    listResources: async () => Array.from(resources.values()).map(toResourceDescriptor),
+    readResource: async (uri) => {
+      const resource = resources.get(uri);
+      if (!resource) {
+        throw new Error(`resource not found: ${uri}`);
+      }
+      return await resource.read();
+    },
+    notifyResourceUpdated: async (uri) => {
+      for (const listener of resourceListeners) {
+        listener(uri);
+      }
+    },
   };
 
   return {
     modelContext,
     listTools: () => Array.from(tools.values()),
     invokeTool,
+    listResources: () => Array.from(resources.values()).map(toResourceDescriptor),
+    readResource: async (uri) => {
+      const resource = resources.get(uri);
+      if (!resource) {
+        throw new Error(`resource not found: ${uri}`);
+      }
+      return await resource.read();
+    },
+    onResourceUpdated: (listener) => {
+      resourceListeners.add(listener);
+      return () => {
+        resourceListeners.delete(listener);
+      };
+    },
     clear: () => {
       contexts.splice(0, contexts.length);
       tools.clear();
+      resources.clear();
+      resourceListeners.clear();
     },
   };
 }

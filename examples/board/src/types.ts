@@ -62,6 +62,42 @@ export type DiagramSelection = {
   edgeIds: string[];
 };
 
+export type InteractionKind = "message" | "annotation";
+
+export type InteractionAudience = "human" | "host" | "both";
+
+export type InteractionIntent = "inform" | "request_action";
+
+export type InteractionAuthor = "user" | "assistant" | "system";
+
+export type InteractionAnchor = {
+  nodeIds: string[];
+  edgeIds: string[];
+};
+
+export type BoardInteraction = {
+  id: string;
+  kind: InteractionKind;
+  body: string;
+  author: InteractionAuthor;
+  createdAt: string;
+  anchors: InteractionAnchor;
+  routing: {
+    audience: InteractionAudience;
+  };
+  intent: InteractionIntent;
+  requiresResponse: boolean;
+};
+
+export type BoardInteractionsSnapshot = {
+  version: 1;
+  appId: "board";
+  sessionId: string;
+  resourceVersion: number;
+  updatedAt: string;
+  items: BoardInteraction[];
+};
+
 export type DiagramSummary = {
   nodeCount: number;
   edgeCount: number;
@@ -144,6 +180,14 @@ export type WebMcpToolDefinition = {
   execute: (input: JsonValue) => Promise<JsonValue>;
 };
 
+export type WebMcpResourceDefinition = {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+  read: () => Promise<JsonValue>;
+};
+
 export type WebMcpModelContext = {
   provideContext: (context: JsonValue) => Promise<void>;
   clearContext: () => Promise<void>;
@@ -151,6 +195,11 @@ export type WebMcpModelContext = {
   unregisterTool: (name: string) => Promise<void>;
   listTools: () => Promise<WebMcpToolDefinition[]>;
   callTool: (name: string, input: JsonValue) => Promise<JsonValue>;
+  registerResource: (resource: WebMcpResourceDefinition) => Promise<void>;
+  unregisterResource: (uri: string) => Promise<void>;
+  listResources: () => Promise<Array<Omit<WebMcpResourceDefinition, "read">>>;
+  readResource: (uri: string) => Promise<JsonValue>;
+  notifyResourceUpdated: (uri: string) => Promise<void>;
 };
 
 export type ExcalidrawNodeCustomData = {

@@ -4,7 +4,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { defineLocalTool, installModelContextBridge, isNativeModelContext } from "../src/index.js";
+import {
+  defineLocalResource,
+  defineLocalTool,
+  installModelContextBridge,
+  isNativeModelContext,
+} from "../src/index.js";
 import type { BridgeInstallTarget } from "../src/index.js";
 
 describe("installModelContextBridge", () => {
@@ -20,6 +25,22 @@ describe("installModelContextBridge", () => {
     const result = await handle.invokeTool("ping", {});
     expect(result).toEqual({ ok: true });
 
+    await target.navigator.modelContext?.registerResource(
+      defineLocalResource("board://local/scene", async () => ({ title: "Board" }), {
+        name: "Board Scene",
+        mimeType: "application/json",
+      }),
+    );
+
+    expect(handle.listResources()).toEqual([
+      {
+        uri: "board://local/scene",
+        name: "Board Scene",
+        mimeType: "application/json",
+      },
+    ]);
+    await expect(handle.readResource("board://local/scene")).resolves.toEqual({ title: "Board" });
+
     handle.uninstall();
     expect(target.navigator.modelContext).toBeUndefined();
   });
@@ -32,6 +53,11 @@ describe("installModelContextBridge", () => {
           clearContext: async () => {},
           registerTool: async () => {},
           unregisterTool: async () => {},
+          registerResource: async () => {},
+          unregisterResource: async () => {},
+          listResources: async () => [],
+          readResource: async () => ({ ok: true }),
+          notifyResourceUpdated: async () => {},
         },
       },
     };
@@ -39,5 +65,40 @@ describe("installModelContextBridge", () => {
     expect(isNativeModelContext(target)).toBe(true);
     const handle = installModelContextBridge(target);
     expect(handle.mode).toBe("native");
+  });
+
+  it("refreshes native resource descriptors when available", async () => {
+    const target = {
+      navigator: {
+        modelContext: {
+          provideContext: async () => {},
+          clearContext: async () => {},
+          registerTool: async () => {},
+          unregisterTool: async () => {},
+          registerResource: async () => {},
+          unregisterResource: async () => {},
+          listResources: async () => [
+            {
+              uri: "board://local/interactions",
+              name: "Board Interactions",
+              mimeType: "application/json",
+            },
+          ],
+          readResource: async () => ({ ok: true }),
+          notifyResourceUpdated: async () => {},
+        },
+      },
+    };
+
+    const handle = installModelContextBridge(target);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(handle.listResources()).toEqual([
+      {
+        uri: "board://local/interactions",
+        name: "Board Interactions",
+        mimeType: "application/json",
+      },
+    ]);
   });
 });

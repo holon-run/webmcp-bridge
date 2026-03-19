@@ -21,6 +21,9 @@ const runtimeHandle = {
   gateway: {
     listTools: vi.fn(async () => []),
     callTool: vi.fn(async () => ({ ok: true })),
+    listResources: vi.fn(async () => []),
+    readResource: vi.fn(async () => ({ ok: true })),
+    onResourceUpdated: vi.fn(() => () => {}),
   },
   openWindow: vi.fn(async () => "focused" as const),
   ownerSessionEnded: Promise.resolve(),

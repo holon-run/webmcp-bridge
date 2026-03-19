@@ -7,7 +7,11 @@ import { PassThrough } from "node:stream";
 import type { JsonValue } from "@webmcp-bridge/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpJsonRpcResponse } from "../src/mcp-types.js";
-import { createLocalMcpStdioServer, type LocalMcpStdioServer } from "../src/server.js";
+import {
+  createLocalMcpStdioServer,
+  type LocalMcpGateway,
+  type LocalMcpStdioServer,
+} from "../src/server.js";
 
 async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void> {
   const start = Date.now();
@@ -26,15 +30,43 @@ describe("createLocalMcpStdioServer", () => {
   const frames: Array<Record<string, unknown>> = [];
   let outputBuffer = "";
 
-  const gateway = {
-    listTools: vi.fn(async () => [
-      {
-        name: "ping",
-        description: "ping",
-      },
-    ]),
-    callTool: vi.fn(async (name: string): Promise<JsonValue> => ({ ok: true, name })),
+  type GatewayReadResourcePayload = {
+    version: number;
+    items: Array<{
+      id: string;
+      body: string;
+    }>;
   };
+
+  const listTools = vi.fn<LocalMcpGateway["listTools"]>(async () => [
+    {
+      name: "ping",
+      description: "ping",
+    },
+  ]);
+  const callTool = vi.fn<LocalMcpGateway["callTool"]>(
+    async (name: string): Promise<JsonValue> => ({ ok: true, name }),
+  );
+  const listResources = vi.fn<LocalMcpGateway["listResources"]>(async () => [
+    {
+      uri: "board://local/interactions",
+      name: "Board Interactions",
+      mimeType: "application/json",
+    },
+  ]);
+  const readResource = vi.fn<(uri: string) => Promise<GatewayReadResourcePayload>>(async () => ({
+    version: 1,
+    items: [],
+  }));
+  const onResourceUpdated = vi.fn<LocalMcpGateway["onResourceUpdated"]>(() => () => {});
+
+  const gateway = {
+    listTools,
+    callTool,
+    listResources,
+    readResource,
+    onResourceUpdated,
+  } satisfies LocalMcpGateway;
   const bridgeControl = {
     getState: vi.fn(() => ({
       site: "board",
@@ -51,8 +83,11 @@ describe("createLocalMcpStdioServer", () => {
     output = new PassThrough();
     frames.length = 0;
     outputBuffer = "";
-    gateway.listTools.mockClear();
-    gateway.callTool.mockClear();
+    listTools.mockClear();
+    callTool.mockClear();
+    listResources.mockClear();
+    readResource.mockClear();
+    onResourceUpdated.mockClear();
     bridgeControl.getState.mockClear();
     bridgeControl.openWindow.mockClear();
     bridgeControl.closeBridge.mockClear();
@@ -129,6 +164,9 @@ describe("createLocalMcpStdioServer", () => {
         tools: {
           listChanged: true,
         },
+        resources: {
+          subscribe: true,
+        },
       },
     });
   });
@@ -141,7 +179,7 @@ describe("createLocalMcpStdioServer", () => {
       params: {},
     });
 
-    expect(gateway.listTools).toHaveBeenCalledOnce();
+    expect(listTools).toHaveBeenCalledOnce();
     expect("result" in response ? response.result : undefined).toMatchObject({
       tools: [{ name: "bridge.open" }, { name: "bridge.close" }, { name: "ping" }],
     });
@@ -159,7 +197,7 @@ describe("createLocalMcpStdioServer", () => {
     });
 
     expect(bridgeControl.openWindow).toHaveBeenCalledOnce();
-    expect(gateway.callTool).not.toHaveBeenCalled();
+    expect(callTool).not.toHaveBeenCalled();
     expect("result" in response ? response.result : undefined).toMatchObject({
       structuredContent: {
         ok: true,
@@ -241,7 +279,7 @@ describe("createLocalMcpStdioServer", () => {
       },
     });
     await waitFor(() => bridgeControl.closeBridge.mock.calls.length === 1);
-    expect(gateway.callTool).not.toHaveBeenCalled();
+    expect(callTool).not.toHaveBeenCalled();
   });
 
   it("proxies tools/call to gateway", async () => {
@@ -257,7 +295,7 @@ describe("createLocalMcpStdioServer", () => {
       },
     });
 
-    expect(gateway.callTool).toHaveBeenCalledWith("ping", { ping: true });
+    expect(callTool).toHaveBeenCalledWith("ping", { ping: true });
     expect("result" in response ? response.result : undefined).toMatchObject({
       content: [],
       structuredContent: { ok: true, name: "ping" },
@@ -265,7 +303,7 @@ describe("createLocalMcpStdioServer", () => {
   });
 
   it("passes through MCP CallToolResult payload without remapping", async () => {
-    gateway.callTool.mockResolvedValueOnce({
+    callTool.mockResolvedValueOnce({
       content: [{ type: "text", text: "ok" }],
       structuredContent: { ok: true },
       isError: false,
@@ -289,7 +327,7 @@ describe("createLocalMcpStdioServer", () => {
   });
 
   it("does not pass through invalid CallToolResult-like payload", async () => {
-    gateway.callTool.mockResolvedValueOnce({
+    callTool.mockResolvedValueOnce({
       structuredContent: "invalid",
     });
 
@@ -335,9 +373,140 @@ describe("createLocalMcpStdioServer", () => {
     expect(frames.length).toBe(beforeCount);
   });
 
+  it("proxies resources/list to gateway", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "6",
+      method: "resources/list",
+      params: {},
+    });
+
+    expect(listResources).toHaveBeenCalledOnce();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      resources: [{ uri: "board://local/interactions", name: "Board Interactions" }],
+    });
+  });
+
+  it("proxies resources/read to gateway", async () => {
+    readResource.mockResolvedValueOnce({
+      version: 1,
+      items: [{ id: "interaction-1", body: "Expand selection" }],
+    });
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "7",
+      method: "resources/read",
+      params: {
+        uri: "board://local/interactions",
+      },
+    });
+
+    expect(readResource).toHaveBeenCalledWith("board://local/interactions");
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      contents: [
+        {
+          uri: "board://local/interactions",
+          mimeType: "application/json",
+        },
+      ],
+    });
+    const result =
+      "result" in response
+        ? (response.result as { contents?: Array<{ text?: string }> })
+        : undefined;
+    const text = result?.contents?.[0]?.text;
+    expect(typeof text).toBe("string");
+    expect(String(text)).toContain("Expand selection");
+  });
+
+  it("caches resource mime types across repeated reads", async () => {
+    readResource.mockResolvedValue({
+      version: 1,
+      items: [{ id: "interaction-1", body: "Expand selection" }],
+    });
+
+    await request({
+      jsonrpc: "2.0",
+      id: "7-cache-1",
+      method: "resources/read",
+      params: {
+        uri: "board://local/interactions",
+      },
+    });
+
+    await request({
+      jsonrpc: "2.0",
+      id: "7-cache-2",
+      method: "resources/read",
+      params: {
+        uri: "board://local/interactions",
+      },
+    });
+
+    expect(listResources).toHaveBeenCalledOnce();
+    expect(readResource).toHaveBeenCalledTimes(2);
+  });
+
+  it("emits resources/updated after a subscribed resource changes", async () => {
+    const notifyResourceUpdated = onResourceUpdated.mock.calls[0]?.[0] as
+      | ((uri: string) => void)
+      | undefined;
+    expect(notifyResourceUpdated).toBeTypeOf("function");
+
+    await request({
+      jsonrpc: "2.0",
+      id: "8-init",
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          resources: {
+            subscribe: true,
+          },
+        },
+        clientInfo: {
+          name: "test-client",
+          version: "0.1.0-test",
+        },
+      },
+    });
+
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      })}\n`,
+    );
+
+    await request({
+      jsonrpc: "2.0",
+      id: "8-sub",
+      method: "resources/subscribe",
+      params: {
+        uri: "board://local/interactions",
+      },
+    });
+
+    notifyResourceUpdated?.("board://local/interactions");
+
+    await waitFor(() =>
+      frames.some((frame) => frame.method === "notifications/resources/updated"),
+    );
+    const notification = frames.find(
+      (frame) => frame.method === "notifications/resources/updated",
+    );
+    expect(notification).toMatchObject({
+      params: {
+        uri: "board://local/interactions",
+      },
+    });
+  });
+
   it("emits tools/list_changed after a tool call mutates available tools", async () => {
-    gateway.listTools.mockResolvedValueOnce([{ name: "navigate", description: "navigate" }]);
-    gateway.listTools.mockResolvedValueOnce([
+    listTools.mockResolvedValueOnce([{ name: "navigate", description: "navigate" }]);
+    listTools.mockResolvedValueOnce([
       { name: "navigate", description: "navigate" },
       { name: "search_entities", description: "search entities" },
     ]);
