@@ -420,6 +420,34 @@ describe("createLocalMcpStdioServer", () => {
     expect(String(text)).toContain("Expand selection");
   });
 
+  it("caches resource mime types across repeated reads", async () => {
+    readResource.mockResolvedValue({
+      version: 1,
+      items: [{ id: "interaction-1", body: "Expand selection" }],
+    });
+
+    await request({
+      jsonrpc: "2.0",
+      id: "7-cache-1",
+      method: "resources/read",
+      params: {
+        uri: "board://local/interactions",
+      },
+    });
+
+    await request({
+      jsonrpc: "2.0",
+      id: "7-cache-2",
+      method: "resources/read",
+      params: {
+        uri: "board://local/interactions",
+      },
+    });
+
+    expect(listResources).toHaveBeenCalledOnce();
+    expect(readResource).toHaveBeenCalledTimes(2);
+  });
+
   it("emits resources/updated after a subscribed resource changes", async () => {
     const notifyResourceUpdated = onResourceUpdated.mock.calls[0]?.[0] as
       | ((uri: string) => void)

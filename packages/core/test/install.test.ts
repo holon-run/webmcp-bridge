@@ -66,4 +66,39 @@ describe("installModelContextBridge", () => {
     const handle = installModelContextBridge(target);
     expect(handle.mode).toBe("native");
   });
+
+  it("refreshes native resource descriptors when available", async () => {
+    const target = {
+      navigator: {
+        modelContext: {
+          provideContext: async () => {},
+          clearContext: async () => {},
+          registerTool: async () => {},
+          unregisterTool: async () => {},
+          registerResource: async () => {},
+          unregisterResource: async () => {},
+          listResources: async () => [
+            {
+              uri: "board://local/interactions",
+              name: "Board Interactions",
+              mimeType: "application/json",
+            },
+          ],
+          readResource: async () => ({ ok: true }),
+          notifyResourceUpdated: async () => {},
+        },
+      },
+    };
+
+    const handle = installModelContextBridge(target);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(handle.listResources()).toEqual([
+      {
+        uri: "board://local/interactions",
+        name: "Board Interactions",
+        mimeType: "application/json",
+      },
+    ]);
+  });
 });

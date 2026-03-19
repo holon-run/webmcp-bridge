@@ -85,7 +85,7 @@ function parseInteractionsSnapshot(raw: string): BoardInteractionsSnapshot | und
     });
     return {
       version: 1,
-      appId: candidate.appId === BOARD_APP_ID ? BOARD_APP_ID : BOARD_APP_ID,
+      appId: BOARD_APP_ID,
       sessionId: typeof candidate.sessionId === "string" ? candidate.sessionId : BOARD_SESSION_ID,
       resourceVersion:
         typeof candidate.resourceVersion === "number" && Number.isFinite(candidate.resourceVersion)

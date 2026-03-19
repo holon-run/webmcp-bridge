@@ -148,6 +148,29 @@ describe("createWebMcpPageGateway", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("isolates resource update listener failures", async () => {
+    const { page, exposedFunctions } = createMockPage("polyfill", []);
+    const onError = vi.fn();
+    const gateway = await createWebMcpPageGateway(page as never, { onError });
+    const failingListener = vi.fn(() => {
+      throw new Error("listener failed");
+    });
+    const healthyListener = vi.fn();
+    gateway.onResourceUpdated(failingListener);
+    gateway.onResourceUpdated(healthyListener);
+
+    const resourceUpdatedHandler = [...exposedFunctions.entries()].find(([name]) =>
+      name.startsWith("__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED__"),
+    )?.[1];
+    expect(resourceUpdatedHandler).toBeTypeOf("function");
+
+    await resourceUpdatedHandler?.("board://local/interactions");
+
+    expect(failingListener).toHaveBeenCalledWith("board://local/interactions");
+    expect(healthyListener).toHaveBeenCalledWith("board://local/interactions");
+    expect(onError).toHaveBeenCalledOnce();
+  });
+
   it("injects polyfill listTools support for page-hosted providers", async () => {
     const { page } = createMockPage("polyfill", []);
     await createWebMcpPageGateway(page as never);

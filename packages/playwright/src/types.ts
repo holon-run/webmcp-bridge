@@ -49,6 +49,7 @@ export type CreateWebMcpPageGatewayOptions = {
   fallbackAdapter?: SiteAdapter;
   preferNative?: boolean;
   reinjectOnNavigate?: boolean;
+  onError?: (error: unknown) => void;
 };
 
 export type WebMcpPageGateway = {

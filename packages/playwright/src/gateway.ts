@@ -222,7 +222,11 @@ export async function createWebMcpPageGateway(
   });
   await page.exposeFunction(resourceUpdatedName, async (uri: string) => {
     for (const listener of resourceUpdatedListeners) {
-      listener(uri);
+      try {
+        listener(uri);
+      } catch (error) {
+        options?.onError?.(error);
+      }
     }
   });
 

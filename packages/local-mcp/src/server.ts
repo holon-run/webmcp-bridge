@@ -60,6 +60,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private closed = false;
   private lastToolsSignature: string | undefined;
   private readonly subscribedResourceUris = new Set<string>();
+  private readonly resourceMimeTypes = new Map<string, string | undefined>();
   private readonly unsubscribeResourceUpdates: () => void;
 
   constructor(options: LocalMcpStdioServerOptions) {
@@ -108,7 +109,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     });
 
     this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-      const resources = await options.gateway.listResources();
+      const resources = await this.listResources(options.gateway);
       return {
         resources: resources.map((resource) => this.toMcpResourceDefinition(resource)),
       };
@@ -117,7 +118,13 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       const resource = await options.gateway.readResource(request.params.uri);
       return {
-        contents: [this.toMcpResourceContents(request.params.uri, resource, await this.resolveResourceMimeType(options.gateway, request.params.uri))],
+        contents: [
+          this.toMcpResourceContents(
+            request.params.uri,
+            resource,
+            await this.resolveResourceMimeType(options.gateway, request.params.uri),
+          ),
+        ],
       };
     });
 
@@ -288,8 +295,21 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     gateway: LocalMcpGateway,
     uri: string,
   ): Promise<string | undefined> {
-    const resources = await gateway.listResources();
+    if (this.resourceMimeTypes.has(uri)) {
+      return this.resourceMimeTypes.get(uri);
+    }
+    const resources = await this.listResources(gateway);
     return resources.find((resource) => resource.uri === uri)?.mimeType;
+  }
+
+  private async listResources(
+    gateway: LocalMcpGateway,
+  ): Promise<ReadonlyArray<WebMcpResourceDefinition>> {
+    const resources = await gateway.listResources();
+    for (const resource of resources) {
+      this.resourceMimeTypes.set(resource.uri, resource.mimeType);
+    }
+    return resources;
   }
 
   private async notifyResourceUpdated(uri: string): Promise<void> {

@@ -8,6 +8,7 @@ import type {
   BridgeHandle,
   BridgeInstallTarget,
   BridgeResourceDefinition,
+  BridgeResourceDescriptor,
   BridgeToolDefinition,
   BridgeTransport,
   JsonValue,
@@ -40,22 +41,41 @@ export function installModelContextBridge(
   const native = target.navigator.modelContext;
 
   if (preferNative && isNativeModelContext(target) && native) {
+    const nativeAny = native as unknown as {
+      callTool?: (toolName: string, payload: JsonValue) => Promise<JsonValue>;
+      listResources?: () => Promise<unknown> | unknown;
+      readResource?: (resourceUri: string) => Promise<JsonValue>;
+    };
+    let nativeResources: BridgeResourceDescriptor[] = [];
+    const refreshNativeResources = (): void => {
+      if (typeof nativeAny.listResources !== "function") {
+        nativeResources = [];
+        return;
+      }
+      void Promise.resolve(nativeAny.listResources())
+        .then((resources) => {
+          nativeResources = toNativeResourceDescriptors(resources);
+        })
+        .catch(() => {
+          nativeResources = [];
+        });
+    };
+    refreshNativeResources();
     return {
       mode: "native",
       listTools: () => [],
       invokeTool: async (name: string, input: JsonValue) => {
-        const nativeAny = native as unknown as { callTool?: (toolName: string, payload: JsonValue) => Promise<JsonValue> };
         if (typeof nativeAny.callTool !== "function") {
           throw new Error("native modelContext callTool is not available");
         }
         return await nativeAny.callTool(name, input);
       },
-      listResources: () => [],
+      listResources: () => [...nativeResources],
       readResource: async (uri: string) => {
-        const nativeAny = native as unknown as { readResource?: (resourceUri: string) => Promise<JsonValue> };
         if (typeof nativeAny.readResource !== "function") {
           throw new Error("native modelContext readResource is not available");
         }
+        refreshNativeResources();
         return await nativeAny.readResource(uri);
       },
       uninstall: () => {
@@ -109,6 +129,38 @@ export function defineLocalTool(
     tool.description = description;
   }
   return tool;
+}
+
+function toNativeResourceDescriptors(value: unknown): BridgeResourceDescriptor[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry): BridgeResourceDescriptor[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const candidate = entry as {
+      uri?: unknown;
+      name?: unknown;
+      description?: unknown;
+      mimeType?: unknown;
+    };
+    if (typeof candidate.uri !== "string" || !candidate.uri.trim()) {
+      return [];
+    }
+    return [
+      {
+        uri: candidate.uri,
+        name: typeof candidate.name === "string" && candidate.name.trim() ? candidate.name : candidate.uri,
+        ...(typeof candidate.description === "string" && candidate.description.trim()
+          ? { description: candidate.description }
+          : {}),
+        ...(typeof candidate.mimeType === "string" && candidate.mimeType.trim()
+          ? { mimeType: candidate.mimeType }
+          : {}),
+      },
+    ];
+  });
 }
 
 export function defineLocalResource(
