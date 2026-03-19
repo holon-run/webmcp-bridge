@@ -12,7 +12,8 @@ import { createXAdapter } from "../src/index.js";
 type Behavior = {
   authState: "authenticated" | "auth_required" | "challenge_required";
   authSignals: string[];
-  timelineItems: Array<{ id: string; text: string; url?: string }>;
+  timelineItems: Array<{ id: string; text: string; url?: string; media?: Array<Record<string, unknown>> }>;
+  timelineDomBatches?: Array<Array<{ id: string; text: string; url?: string; media?: Array<Record<string, unknown>> }>>;
   networkNextCursor?: string;
   requireFallbackTemplate?: boolean;
   composeResult: { ok: boolean; dryRun?: boolean; reason?: string; submitVisible?: boolean };
@@ -31,6 +32,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   let replyConfirmAttempts = 0;
   let grokSubmitted = false;
   let uploadedFiles: string[] = [];
+  let detailScrollCount = 0;
   let routedHandler:
     | ((
         route: {
@@ -121,7 +123,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (typeof command.maxItems === "number") {
-        return behavior.timelineItems.slice(0, command.maxItems);
+        const domItems =
+          behavior.timelineDomBatches?.[Math.min(detailScrollCount, behavior.timelineDomBatches.length - 1)] ?? behavior.timelineItems;
+        return domItems.slice(0, command.maxItems);
       }
 
       if (command.op === "extract_notifications" && typeof command.maxItems === "number") {
@@ -143,6 +147,14 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       if (command.op === "grok_submit") {
         grokSubmitted = true;
         return behavior.grokComposeResult;
+      }
+
+      if (command.op === "scroll_tweet_detail_surface") {
+        if (behavior.timelineDomBatches && detailScrollCount < behavior.timelineDomBatches.length - 1) {
+          detailScrollCount += 1;
+          return true;
+        }
+        return false;
       }
 
       if (command.op === "grok_extract_state") {
@@ -278,7 +290,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (typeof command.maxItems === "number") {
-        return behavior.timelineItems.slice(0, command.maxItems);
+        const domItems =
+          behavior.timelineDomBatches?.[Math.min(detailScrollCount, behavior.timelineDomBatches.length - 1)] ?? behavior.timelineItems;
+        return domItems.slice(0, command.maxItems);
       }
 
       if (command.op === "extract_notifications" && typeof command.maxItems === "number") {
@@ -300,6 +314,14 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       if (command.op === "grok_submit") {
         grokSubmitted = true;
         return behavior.grokComposeResult;
+      }
+
+      if (command.op === "scroll_tweet_detail_surface") {
+        if (behavior.timelineDomBatches && detailScrollCount < behavior.timelineDomBatches.length - 1) {
+          detailScrollCount += 1;
+          return true;
+        }
+        return false;
       }
 
       if (command.op === "grok_extract_state") {
@@ -404,6 +426,7 @@ describe("createXAdapter", () => {
   afterEach(async () => {
     await Promise.all(Array.from(tempDirs, (dir) => rm(dir, { recursive: true, force: true })));
     tempDirs.clear();
+    vi.restoreAllMocks();
   });
 
   it("publishes tool schemas", async () => {
@@ -426,6 +449,7 @@ describe("createXAdapter", () => {
         "tweet.conversation.get",
         "tweet.replies.list",
         "tweet.thread.get",
+        "tweet.media.download",
         "favorites.list",
         "notifications.list",
         "mentions.list",
@@ -828,6 +852,243 @@ describe("createXAdapter", () => {
     });
   });
 
+  it("returns media metadata from tweet.get", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "123",
+          text: "tweet with media",
+          url: "https://x.com/a/status/123",
+          media: [
+            {
+              type: "photo",
+              url: "https://pbs.twimg.com/media/test-photo.jpg",
+              width: 1200,
+              height: 900,
+            },
+            {
+              type: "video",
+              url: "https://video.twimg.com/ext_tw_video/test.mp4",
+              previewUrl: "https://pbs.twimg.com/ext_tw_video_thumb/test.jpg",
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.get", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toEqual({
+      tweet: {
+        id: "123",
+        text: "tweet with media",
+        url: "https://x.com/a/status/123",
+        media: [
+          {
+            type: "photo",
+            url: "https://pbs.twimg.com/media/test-photo.jpg",
+            width: 1200,
+            height: 900,
+          },
+          {
+            type: "video",
+            url: "https://video.twimg.com/ext_tw_video/test.mp4",
+            previewUrl: "https://pbs.twimg.com/ext_tw_video_thumb/test.jpg",
+          },
+        ],
+      },
+    });
+  });
+
+  it("matches the focal tweet by id instead of returning the first conversation item", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        { id: "1", text: "root tweet", url: "https://x.com/a/status/1" },
+        { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.get", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toEqual({
+      tweet: {
+        id: "123",
+        text: "focal tweet",
+        url: "https://x.com/a/status/123",
+      },
+    });
+  });
+
+  it("downloads tweet media into local artifacts", async () => {
+    const adapter = createXAdapter();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(Buffer.from("image-bytes"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "123",
+          text: "tweet with media",
+          url: "https://x.com/a/status/123",
+          media: [
+            {
+              type: "photo",
+              url: "https://pbs.twimg.com/media/test-photo",
+              width: 1200,
+              height: 900,
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.media.download", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toMatchObject({
+      tweet: {
+        id: "123",
+        text: "tweet with media",
+        url: "https://x.com/a/status/123",
+      },
+      items: [
+        {
+          mediaIndex: 0,
+          media: {
+            type: "photo",
+            url: "https://pbs.twimg.com/media/test-photo",
+            width: 1200,
+            height: 900,
+          },
+          artifact: {
+            kind: "file",
+            mediaIndex: 0,
+            mimeType: "image/jpeg",
+          },
+        },
+      ],
+    });
+    const items = (result as { items?: Array<{ artifact?: { path: string } }> }).items ?? [];
+    expect(items[0]?.artifact?.path).toMatch(/123-media-1\.jpg$/);
+    if (items[0]?.artifact?.path) {
+      tempDirs.add(dirname(items[0].artifact.path));
+    }
+  });
+
+  it("returns no-media error when tweet.media.download finds no media", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [{ id: "123", text: "tweet without media", url: "https://x.com/a/status/123" }],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.media.download", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toEqual({
+      error: {
+        code: "NO_MEDIA",
+        message: "tweet has no downloadable media",
+      },
+    });
+  });
+
+  it("validates tweet.media.download mediaIndex range", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "123",
+          text: "tweet with media",
+          url: "https://x.com/a/status/123",
+          media: [{ type: "photo", url: "https://pbs.twimg.com/media/test-photo.jpg" }],
+        },
+      ],
+    });
+
+    const negative = await adapter.callTool(
+      { name: "tweet.media.download", input: { id: "123", mediaIndex: -1 } },
+      { page: page as never },
+    );
+    expect(negative).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "mediaIndex must be a non-negative integer",
+      },
+    });
+
+    const outOfRange = await adapter.callTool(
+      { name: "tweet.media.download", input: { id: "123", mediaIndex: 2 } },
+      { page: page as never },
+    );
+    expect(outOfRange).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "mediaIndex is out of range",
+      },
+    });
+  });
+
+  it("surfaces HTTP_ERROR when media download returns non-200", async () => {
+    const adapter = createXAdapter();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("blocked", {
+        status: 403,
+        headers: { "content-type": "text/plain" },
+      }),
+    );
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "123",
+          text: "tweet with media",
+          url: "https://x.com/a/status/123",
+          media: [{ type: "photo", url: "https://pbs.twimg.com/media/test-photo.jpg" }],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.media.download", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toEqual({
+      error: {
+        code: "HTTP_ERROR",
+        message: "media download returned HTTP 403",
+        details: {
+          url: "https://pbs.twimg.com/media/test-photo.jpg?name=orig",
+        },
+      },
+    });
+  });
+
+  it("rejects tweet media URLs on unsupported hosts", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "123",
+          text: "tweet with media",
+          url: "https://x.com/a/status/123",
+          media: [{ type: "photo", url: "https://example.com/media/test-photo.jpg" }],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.media.download", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "media URL is not on an allowed host",
+        details: {
+          url: "https://example.com/media/test-photo.jpg",
+        },
+      },
+    });
+  });
+
   it("returns validation error for tweet.thread.get without id/url", async () => {
     const adapter = createXAdapter();
     const { page } = createMockPage();
@@ -974,6 +1235,51 @@ describe("createXAdapter", () => {
         { id: "1", text: "root tweet", url: "https://x.com/a/status/1" },
         { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
         { id: "2", text: "same author reply", url: "https://x.com/a/status/2" },
+      ],
+      source: "network",
+      incomplete: true,
+      nextCursor: "cursor-next",
+    });
+  });
+
+  it("extends tweet thread with scrolled dom cards when network detail is truncated", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+        { id: "124", text: "part 2", url: "https://x.com/a/status/124" },
+        { id: "125", text: "part 3", url: "https://x.com/a/status/125" },
+      ],
+      timelineDomBatches: [
+        [
+          { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+          { id: "124", text: "part 2", url: "https://x.com/a/status/124" },
+          { id: "125", text: "part 3", url: "https://x.com/a/status/125" },
+        ],
+        [
+          { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+          { id: "124", text: "part 2", url: "https://x.com/a/status/124" },
+          { id: "125", text: "part 3", url: "https://x.com/a/status/125" },
+          { id: "126", text: "part 4", url: "https://x.com/a/status/126" },
+          { id: "127", text: "part 5", url: "https://x.com/a/status/127" },
+        ],
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "tweet.thread.get", input: { id: "123", limit: 5 } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      root: { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+      focal: { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+      tweets: [
+        { id: "123", text: "part 1", url: "https://x.com/a/status/123" },
+        { id: "124", text: "part 2", url: "https://x.com/a/status/124" },
+        { id: "125", text: "part 3", url: "https://x.com/a/status/125" },
+        { id: "126", text: "part 4", url: "https://x.com/a/status/126" },
+        { id: "127", text: "part 5", url: "https://x.com/a/status/127" },
       ],
       source: "network",
       incomplete: true,

@@ -14,7 +14,7 @@ import {
   type RequestTemplate,
   TemplateCache,
 } from "@webmcp-bridge/adapter-utils";
-import { mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, isAbsolute, join } from "node:path";
 import type { Page } from "playwright";
@@ -63,6 +63,31 @@ type GrokArtifact = {
   mimeType?: string;
 };
 
+type TweetMediaVariant = {
+  url: string;
+  contentType?: string;
+  bitrate?: number;
+};
+
+type TweetMedia = {
+  type: "photo" | "video" | "animated_gif";
+  url: string;
+  previewUrl?: string;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  variants?: TweetMediaVariant[];
+};
+
+type TweetMediaArtifact = {
+  kind: "file";
+  name: string;
+  path: string;
+  mimeType?: string;
+  mediaIndex: number;
+  sourceUrl: string;
+};
+
 export type CreateXAdapterOptions = {
   composeConfirmTimeoutMs?: number;
   grokResponseTimeoutMs?: number;
@@ -79,6 +104,8 @@ const AUTH_STABILIZE_ATTEMPTS = 6;
 const AUTH_STABILIZE_DELAY_MS = 750;
 const AUTH_WARMUP_TIMEOUT_MS = 12_000;
 const GROK_ARTIFACT_DIR_PREFIX = "webmcp-bridge-grok-";
+const TWEET_MEDIA_ARTIFACT_DIR_PREFIX = "webmcp-bridge-x-media-";
+const ALLOWED_TWEET_MEDIA_HOSTS = new Set(["pbs.twimg.com", "video.twimg.com"]);
 
 const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
   globalKey: "__WEBMCP_X_CAPTURE__",
@@ -233,6 +260,27 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
           description: `Maximum number of thread tweets to return. Default ${DEFAULT_TIMELINE_LIMIT}, max ${MAX_TIMELINE_LIMIT}.`,
           minimum: 1,
           maximum: MAX_TIMELINE_LIMIT,
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "tweet.media.download",
+    description: "Download media for one tweet by url or id",
+    inputSchema: {
+      type: "object",
+      description: "Download one tweet's media to local artifact paths. Defaults to all media when mediaIndex is omitted.",
+      properties: {
+        url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
+        id: { type: "string", description: "Tweet id. Used when url is not provided." },
+        mediaIndex: {
+          type: "integer",
+          description: "Optional zero-based media index to download. Omit to download all media items.",
+          minimum: 0,
         },
       },
       additionalProperties: false,
@@ -523,6 +571,29 @@ function inferArtifactNameFromLabel(label: string, mimeType?: string): string {
   return extname(base) ? base : `${base}${extension}`;
 }
 
+function inferArtifactNameFromUrl(url: string, fallbackBase: string, mimeType?: string): string {
+  try {
+    const parsed = new URL(url);
+    const pathnameName = basename(parsed.pathname);
+    const format = parsed.searchParams.get("format")?.trim();
+    if (pathnameName) {
+      const safePathName = sanitizeArtifactName(pathnameName);
+      if (extname(safePathName)) {
+        return safePathName;
+      }
+      if (format) {
+        return `${safePathName}.${sanitizeArtifactName(format).replace(/^\.+/, "")}`;
+      }
+    }
+    if (format) {
+      return `${sanitizeArtifactName(fallbackBase)}.${sanitizeArtifactName(format).replace(/^\.+/, "")}`;
+    }
+  } catch {
+    // Fall through to MIME-based fallback.
+  }
+  return inferArtifactNameFromLabel(fallbackBase, mimeType);
+}
+
 function parseDataUri(uri: string): { mimeType?: string; buffer: Buffer } | undefined {
   if (!uri.startsWith("data:")) {
     return undefined;
@@ -544,6 +615,87 @@ function parseDataUri(uri: string): { mimeType?: string; buffer: Buffer } | unde
   } catch {
     return undefined;
   }
+}
+
+function toTweetMediaArray(value: unknown): TweetMedia[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const output: TweetMedia[] = [];
+  for (const rawEntry of value) {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      continue;
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    const type = entry.type;
+    const url = entry.url;
+    if (
+      (type !== "photo" && type !== "video" && type !== "animated_gif")
+      || typeof url !== "string"
+      || url.trim().length === 0
+    ) {
+      continue;
+    }
+    const media: TweetMedia = {
+      type,
+      url,
+    };
+    if (typeof entry.previewUrl === "string" && entry.previewUrl.trim()) {
+      media.previewUrl = entry.previewUrl;
+    }
+    if (typeof entry.width === "number" && Number.isFinite(entry.width)) {
+      media.width = entry.width;
+    }
+    if (typeof entry.height === "number" && Number.isFinite(entry.height)) {
+      media.height = entry.height;
+    }
+    if (typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)) {
+      media.durationMs = entry.durationMs;
+    }
+    if (Array.isArray(entry.variants)) {
+      const variants = entry.variants.flatMap((rawVariant) => {
+        if (!rawVariant || typeof rawVariant !== "object" || Array.isArray(rawVariant)) {
+          return [];
+        }
+        const variantRecord = rawVariant as Record<string, unknown>;
+        if (typeof variantRecord.url !== "string" || !variantRecord.url.trim()) {
+          return [];
+        }
+        const variant: TweetMediaVariant = { url: variantRecord.url };
+        if (typeof variantRecord.contentType === "string" && variantRecord.contentType.trim()) {
+          variant.contentType = variantRecord.contentType;
+        }
+        if (typeof variantRecord.bitrate === "number" && Number.isFinite(variantRecord.bitrate)) {
+          variant.bitrate = variantRecord.bitrate;
+        }
+        return [variant];
+      });
+      if (variants.length > 0) {
+        media.variants = variants;
+      }
+    }
+    output.push(media);
+  }
+  return output;
+}
+
+function normalizeTweetMediaForDownload(media: TweetMedia): TweetMedia {
+  if (media.type !== "photo") {
+    return media;
+  }
+  try {
+    const parsed = new URL(media.url);
+    if (parsed.hostname.includes("pbs.twimg.com") && !parsed.searchParams.has("name")) {
+      parsed.searchParams.set("name", "orig");
+      return {
+        ...media,
+        url: parsed.toString(),
+      };
+    }
+  } catch {
+    return media;
+  }
+  return media;
 }
 
 async function materializeGrokArtifacts(
@@ -601,6 +753,94 @@ async function materializeGrokArtifacts(
     output.artifacts = artifacts;
   }
   return output;
+}
+
+async function materializeTweetMediaArtifacts(
+  tweet: TimelineItem,
+  mediaEntries: Array<{ mediaIndex: number; media: TweetMedia }>,
+): Promise<TweetMediaArtifact[]> {
+  let artifactDir: string | undefined;
+  const reservedNames = new Set<string>();
+  const artifacts: TweetMediaArtifact[] = [];
+
+  try {
+    for (const entry of mediaEntries) {
+      const normalizedMedia = normalizeTweetMediaForDownload(entry.media);
+      let mediaUrl: URL;
+      try {
+        mediaUrl = new URL(normalizedMedia.url);
+      } catch {
+        throw new Error("invalid_media_url");
+      }
+      if (mediaUrl.protocol !== "https:" || !ALLOWED_TWEET_MEDIA_HOSTS.has(mediaUrl.hostname)) {
+        throw new Error(`unsupported_media_url:${mediaUrl.toString()}`);
+      }
+      const response = await fetch(mediaUrl.toString());
+      if (!response.ok) {
+        throw new Error(`media_download_http_${response.status}|${mediaUrl.toString()}`);
+      }
+      const arrayBuffer = await response.arrayBuffer();
+      const contentTypeHeader = response.headers.get("content-type")?.split(";")[0]?.trim() || undefined;
+      const fallbackBase = `${tweet.id}-media-${entry.mediaIndex + 1}`;
+      let name = inferArtifactNameFromUrl(normalizedMedia.url, fallbackBase, contentTypeHeader);
+      if (reservedNames.has(name)) {
+        const extension = extname(name);
+        const stem = extension ? name.slice(0, -extension.length) : name;
+        let suffix = 2;
+        do {
+          name = `${stem}-${suffix}${extension}`;
+          suffix += 1;
+        } while (reservedNames.has(name));
+      }
+      reservedNames.add(name);
+      if (!artifactDir) {
+        artifactDir = await mkdtemp(join(tmpdir(), TWEET_MEDIA_ARTIFACT_DIR_PREFIX));
+      }
+      const path = join(artifactDir, name);
+      await writeFile(path, Buffer.from(arrayBuffer));
+      const artifact: TweetMediaArtifact = {
+        kind: "file",
+        name,
+        path,
+        mediaIndex: entry.mediaIndex,
+        sourceUrl: normalizedMedia.url,
+      };
+      if (contentTypeHeader) {
+        artifact.mimeType = contentTypeHeader;
+      }
+      artifacts.push(artifact);
+    }
+  } catch (error) {
+    if (artifactDir) {
+      await rm(artifactDir, { recursive: true, force: true }).catch(() => {});
+    }
+    throw error;
+  }
+
+  return artifacts;
+}
+
+function mapTweetMediaDownloadError(error: unknown): JsonValue {
+  const message = error instanceof Error && error.message ? error.message : "media download failed";
+  if (message.startsWith("media_download_http_")) {
+    const [statusPart = "", urlPart = ""] = message.replace("media_download_http_", "").split("|", 2);
+    const status = Number.parseInt(statusPart, 10);
+    return errorResult(
+      "HTTP_ERROR",
+      Number.isFinite(status)
+        ? `media download returned HTTP ${status}`
+        : "media download returned an HTTP error",
+      typeof urlPart === "string" && urlPart ? { url: urlPart } : undefined,
+    );
+  }
+  if (message.startsWith("unsupported_media_url:")) {
+    const url = message.slice("unsupported_media_url:".length);
+    return errorResult("VALIDATION_ERROR", "media URL is not on an allowed host", { url });
+  }
+  if (message === "invalid_media_url") {
+    return errorResult("UPSTREAM_CHANGED", "tweet media URL is invalid");
+  }
+  return errorResult("UPSTREAM_CHANGED", message);
 }
 
 async function resolveGrokAttachments(input: unknown): Promise<{ ok: true; attachments: GrokAttachment[] } | { ok: false; result: JsonValue }> {
@@ -815,6 +1055,7 @@ type TweetCard = {
   url?: string;
   author?: string;
   createdAt?: string;
+  media?: TweetMedia[];
 };
 
 type TimelineItem = {
@@ -824,6 +1065,7 @@ type TimelineItem = {
   kind?: string;
   summary?: string;
   tweetText?: string;
+  media?: TweetMedia[];
 };
 
 type TimelinePage = {
@@ -884,6 +1126,9 @@ function enrichNotificationItem(item: TimelineItem): TimelineItem {
   }
   if (tweetText) {
     next.tweetText = tweetText;
+  }
+  if (item.media && item.media.length > 0) {
+    next.media = item.media;
   }
   if (item.kind) {
     next.kind = item.kind;
@@ -1034,6 +1279,85 @@ async function readTimelineViaNetwork(
       };
 
       const normalizeText = (value: string): string => value.replace(/\s+/g, " ").trim();
+      const collectMedia = (value: unknown): Array<Record<string, unknown>> => {
+        if (!Array.isArray(value)) {
+          return [];
+        }
+        const output: Array<Record<string, unknown>> = [];
+        for (const rawEntry of value) {
+          if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+            continue;
+          }
+          const entry = rawEntry as Record<string, unknown>;
+          const type = entry.type;
+          const mediaUrlHttps = typeof entry.media_url_https === "string" ? entry.media_url_https : "";
+          const mediaUrl = typeof entry.media_url === "string" ? entry.media_url : "";
+          const previewUrl = mediaUrlHttps || mediaUrl;
+          if (type !== "photo" && type !== "video" && type !== "animated_gif") {
+            continue;
+          }
+
+          const originalInfo = (entry.original_info as Record<string, unknown> | undefined) ?? {};
+          const nextMedia: Record<string, unknown> = {
+            type,
+            url: previewUrl,
+          };
+          if (previewUrl) {
+            nextMedia.previewUrl = previewUrl;
+          }
+          if (typeof originalInfo.w === "number" && Number.isFinite(originalInfo.w)) {
+            nextMedia.width = originalInfo.w;
+          }
+          if (typeof originalInfo.h === "number" && Number.isFinite(originalInfo.h)) {
+            nextMedia.height = originalInfo.h;
+          }
+
+          if (type === "video" || type === "animated_gif") {
+            const videoInfo = (entry.video_info as Record<string, unknown> | undefined) ?? {};
+            if (typeof videoInfo.duration_millis === "number" && Number.isFinite(videoInfo.duration_millis)) {
+              nextMedia.durationMs = videoInfo.duration_millis;
+            }
+            const variants = Array.isArray(videoInfo.variants) ? videoInfo.variants : [];
+            const normalizedVariants = variants.flatMap((rawVariant) => {
+              if (!rawVariant || typeof rawVariant !== "object" || Array.isArray(rawVariant)) {
+                return [];
+              }
+              const variant = rawVariant as Record<string, unknown>;
+              const variantUrl = typeof variant.url === "string" ? variant.url : "";
+              if (!variantUrl) {
+                return [];
+              }
+              const nextVariant: Record<string, unknown> = { url: variantUrl };
+              if (typeof variant.content_type === "string" && variant.content_type) {
+                nextVariant.contentType = variant.content_type;
+              }
+              if (typeof variant.bitrate === "number" && Number.isFinite(variant.bitrate)) {
+                nextVariant.bitrate = variant.bitrate;
+              }
+              return [nextVariant];
+            });
+            if (normalizedVariants.length > 0) {
+              nextMedia.variants = normalizedVariants;
+              const mp4Variants = normalizedVariants.filter((variant) => variant.contentType === "video/mp4");
+              const preferredVariant = (mp4Variants.length > 0 ? mp4Variants : normalizedVariants)
+                .slice()
+                .sort((left, right) => {
+                  const leftBitrate = typeof left.bitrate === "number" ? left.bitrate : -1;
+                  const rightBitrate = typeof right.bitrate === "number" ? right.bitrate : -1;
+                  return rightBitrate - leftBitrate;
+                })[0];
+              if (preferredVariant && typeof preferredVariant.url === "string" && preferredVariant.url) {
+                nextMedia.url = preferredVariant.url;
+              }
+            }
+          }
+
+          if (typeof nextMedia.url === "string" && nextMedia.url) {
+            output.push(nextMedia);
+          }
+        }
+        return output;
+      };
 
       const collectFromResult = (input: unknown): { items: TweetCard[]; nextCursor?: string } => {
         const outputItems: TweetCard[] = [];
@@ -1080,6 +1404,8 @@ async function readTimelineViaNetwork(
           }
           const restId = typeof tweet?.rest_id === "string" ? tweet.rest_id : "";
           const legacy = (tweet?.legacy as Record<string, unknown> | undefined) ?? {};
+          const entities = (legacy.entities as Record<string, unknown> | undefined) ?? {};
+          const extendedEntities = (legacy.extended_entities as Record<string, unknown> | undefined) ?? entities;
           const fullText =
             typeof legacy.full_text === "string"
               ? legacy.full_text
@@ -1090,6 +1416,7 @@ async function readTimelineViaNetwork(
             (((tweet?.note_tweet as Record<string, unknown> | undefined)?.note_tweet_results as Record<string, unknown> | undefined)
               ?.result as Record<string, unknown> | undefined)?.text;
           const text = normalizeText(typeof noteText === "string" && noteText ? noteText : fullText);
+          const media = collectMedia(extendedEntities.media);
 
           if (restId && text) {
             const userResult = (((tweet?.core as Record<string, unknown> | undefined)?.user_results as Record<string, unknown> | undefined)
@@ -1111,6 +1438,9 @@ async function readTimelineViaNetwork(
               }
               if (createdAt) {
                 item.createdAt = createdAt;
+              }
+              if (media.length > 0) {
+                item.media = toTweetMediaArray(media);
               }
               outputItems.push(item);
             }
@@ -1293,7 +1623,7 @@ async function readTimelineViaNetwork(
 async function extractTweetCards(
   page: Page,
   limit: number,
-): Promise<Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string }>> {
+): Promise<Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[] }>> {
   const cards = await page.evaluate(({ maxItems }: { maxItems: number }) => {
     const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
     const cleanText = (value: string): string => {
@@ -1335,8 +1665,53 @@ async function extractTweetCards(
       }
     };
     const dedupe = new Set<string>();
-    const items: Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string }> = [];
-    const pushItem = (item: { id: string; text: string; url?: string; author?: string; createdAt?: string }): void => {
+    const items: Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[] }> = [];
+    const collectDomMedia = (root: ParentNode): Array<Record<string, unknown>> => {
+      const output: Array<Record<string, unknown>> = [];
+      const seen = new Set<string>();
+      const pushMedia = (entry: Record<string, unknown>): void => {
+        const key = `${String(entry.type ?? "")}:${String(entry.url ?? "")}`;
+        if (!entry.url || seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        output.push(entry);
+      };
+
+      const imageNodes = Array.from(root.querySelectorAll<HTMLImageElement>("img[src*='pbs.twimg.com/media']"));
+      for (const image of imageNodes) {
+        const src = image.currentSrc || image.src || "";
+        if (!src) {
+          continue;
+        }
+        const media: Record<string, unknown> = {
+          type: "photo",
+          url: src,
+        };
+        if (Number.isFinite(image.naturalWidth) && image.naturalWidth > 0) {
+          media.width = image.naturalWidth;
+        }
+        if (Number.isFinite(image.naturalHeight) && image.naturalHeight > 0) {
+          media.height = image.naturalHeight;
+        }
+        pushMedia(media);
+      }
+
+      const videoNodes = Array.from(root.querySelectorAll<HTMLVideoElement>("video[src], video source[src]"));
+      for (const node of videoNodes) {
+        const src = (node instanceof HTMLSourceElement ? node.src : node.currentSrc || node.src) || "";
+        if (!src) {
+          continue;
+        }
+        pushMedia({
+          type: "video",
+          url: src,
+        });
+      }
+
+      return output;
+    };
+    const pushItem = (item: { id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[] }): void => {
       const dedupeKey = `${item.id}:${item.text}`;
       if (!item.text || dedupe.has(dedupeKey)) {
         return;
@@ -1362,7 +1737,7 @@ async function extractTweetCards(
 
       const authorRaw = article.querySelector<HTMLElement>("[data-testid='User-Name']")?.textContent ?? "";
       const createdAtRaw = article.querySelector<HTMLTimeElement>("time")?.dateTime ?? "";
-      const item: { id: string; text: string; url?: string; author?: string; createdAt?: string } = { id, text };
+      const item: { id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[] } = { id, text };
       if (url) {
         item.url = url;
       }
@@ -1372,6 +1747,10 @@ async function extractTweetCards(
       }
       if (createdAtRaw) {
         item.createdAt = createdAtRaw;
+      }
+      const media = collectDomMedia(article);
+      if (media.length > 0) {
+        item.media = toTweetMediaArray(media);
       }
       pushItem(item);
       if (items.length >= maxItems) {
@@ -1394,9 +1773,13 @@ async function extractTweetCards(
         const matchedId = statusAnchor?.href?.match(/status\/(\d+)/)?.[1];
         const url = canonicalizeStatusUrl(statusAnchor?.href, matchedId);
         const id = url?.match(/status\/(\d+)/)?.[1] ?? `cell-${items.length + 1}`;
-        const item: { id: string; text: string; url?: string } = { id, text };
+        const item: { id: string; text: string; url?: string; media?: TweetMedia[] } = { id, text };
         if (url) {
           item.url = url;
+        }
+        const media = collectDomMedia(cell);
+        if (media.length > 0) {
+          item.media = toTweetMediaArray(media);
         }
         pushItem(item);
       }
@@ -1415,6 +1798,65 @@ async function extractTweetCards(
     return items;
   }, { maxItems: limit });
   return cards;
+}
+
+async function scrollTweetDetailSurface(page: Page): Promise<boolean> {
+  return await page.evaluate(({ op }) => {
+    void op;
+    const viewportHeight = window.innerHeight || 0;
+    const scrollHeight = Math.max(document.documentElement?.scrollHeight ?? 0, document.body?.scrollHeight ?? 0);
+    const beforeY = window.scrollY;
+    const maxScrollY = Math.max(0, scrollHeight - viewportHeight);
+    const delta = Math.max(Math.floor(viewportHeight * 0.9), 900);
+    const targetY = Math.min(beforeY + delta, maxScrollY);
+    window.scrollTo({ top: targetY, behavior: "instant" });
+    return targetY > beforeY;
+  }, { op: "scroll_tweet_detail_surface" });
+}
+
+async function extractTweetCardsAcrossScroll(
+  page: Page,
+  limit: number,
+): Promise<Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[] }>> {
+  let merged = mergeTimelineItems(mapTweetCards(await extractTweetCards(page, limit)));
+  let stagnantIterations = 0;
+
+  for (let attempt = 0; attempt < 6 && merged.length < limit; attempt += 1) {
+    const didScroll = await scrollTweetDetailSurface(page);
+    if (!didScroll) {
+      break;
+    }
+    await page.waitForTimeout(1_000);
+    const nextCards = mergeTimelineItems([...merged, ...mapTweetCards(await extractTweetCards(page, limit))]);
+    if (nextCards.length <= merged.length) {
+      stagnantIterations += 1;
+      if (stagnantIterations >= 2) {
+        break;
+      }
+    } else {
+      stagnantIterations = 0;
+    }
+    merged = nextCards;
+  }
+
+  const hasCanonicalStatusItem = merged.some((item) => Boolean(item.url?.includes("/status/")));
+  if (hasCanonicalStatusItem) {
+    merged = merged.filter((item) => !item.id.startsWith("fallback-body-"));
+  }
+
+  return merged.slice(0, limit).map((item) => {
+    const nextItem: { id: string; text: string; url?: string; media?: TweetMedia[] } = {
+      id: item.id,
+      text: item.text,
+    };
+    if (item.url) {
+      nextItem.url = item.url;
+    }
+    if (item.media && item.media.length > 0) {
+      nextItem.media = item.media;
+    }
+    return nextItem;
+  });
 }
 
 async function extractNotificationCards(
@@ -1702,6 +2144,9 @@ function mapTweetCards(items: TweetCard[]): TimelineItem[] {
     if (item.url) {
       mapped.url = item.url;
     }
+    if (item.media && item.media.length > 0) {
+      mapped.media = item.media;
+    }
     return mapped;
   });
 }
@@ -1735,6 +2180,9 @@ function pickPreferredTimelineItem(current: TimelineItem | undefined, next: Time
       if (canonicalizeStatusUrl(item.url, item.id) === item.url) {
         total += 20;
       }
+    }
+    if (item.media && item.media.length > 0) {
+      total += item.media.length * 15;
     }
     if (item.text.includes("Post your reply") || item.text.includes("Relevant View activity")) {
       total -= 80;
@@ -1896,21 +2344,56 @@ async function readTweetByUrl(page: Page, url: string): Promise<JsonValue> {
     if (matchId) {
       const fromNetwork = await readTimelineViaNetwork(readPage, {
         mode: "tweet",
-        limit: 1,
+        limit: Math.max(DEFAULT_TIMELINE_LIMIT, 20),
         tweetId: matchId,
       });
-      const first = fromNetwork.items[0];
-      if (first) {
-        return { tweet: first };
+      const matched = fromNetwork.items.find((item) => item.id === matchId) ?? fromNetwork.items[0];
+      if (matched) {
+        return { tweet: matched };
       }
     }
-    const cards = await extractTweetCards(readPage, 1);
-    const tweet = cards[0];
+    const cards = await extractTweetCardsAcrossScroll(readPage, 20);
+    const tweet = (matchId ? cards.find((item) => item.id === matchId) : undefined) ?? cards[0];
     if (!tweet) {
       return errorResult("UPSTREAM_CHANGED", "tweet content not found");
     }
     return { tweet };
   });
+}
+
+async function downloadTweetMediaByUrl(page: Page, url: string, mediaIndex?: number): Promise<JsonValue> {
+  const tweetResult = await readTweetByUrl(page, url);
+  if (!tweetResult || typeof tweetResult !== "object" || !("tweet" in tweetResult)) {
+    return tweetResult;
+  }
+  const tweet = (tweetResult as { tweet: TimelineItem }).tweet;
+  const media = Array.isArray(tweet.media) ? tweet.media : [];
+  if (media.length === 0) {
+    return errorResult("NO_MEDIA", "tweet has no downloadable media");
+  }
+  if (mediaIndex !== undefined && (!Number.isInteger(mediaIndex) || mediaIndex < 0)) {
+    return errorResult("VALIDATION_ERROR", "mediaIndex must be a non-negative integer");
+  }
+  if (mediaIndex !== undefined && mediaIndex >= media.length) {
+    return errorResult("VALIDATION_ERROR", "mediaIndex is out of range");
+  }
+
+  const selectedEntries = mediaIndex === undefined
+    ? media.map((entry, index) => ({ mediaIndex: index, media: entry }))
+    : [{ mediaIndex, media: media[mediaIndex] as TweetMedia }];
+  try {
+    const artifacts = await materializeTweetMediaArtifacts(tweet, selectedEntries);
+    return {
+      tweet,
+      items: selectedEntries.map((entry, index) => ({
+        mediaIndex: entry.mediaIndex,
+        media: entry.media,
+        artifact: artifacts[index] as TweetMediaArtifact,
+      })),
+    };
+  } catch (error) {
+    return mapTweetMediaDownloadError(error);
+  }
 }
 
 async function readTweetConversationByUrl(page: Page, url: string, limit: number, cursor?: string): Promise<JsonValue> {
@@ -1938,13 +2421,13 @@ async function readTweetConversationByUrl(page: Page, url: string, limit: number
     }
 
     if (!cursor) {
-      const domCards = await extractTweetCards(readPage, Math.max(limit + 1, 20));
+      const domCards = await extractTweetCardsAcrossScroll(readPage, Math.max(limit + 1, 20));
       merged.push(...mapTweetCards(domCards));
     }
 
     const conversationItems = mergeTimelineItems(merged);
     if (conversationItems.length === 0) {
-      return errorResult("UPSTREAM_CHANGED", "tweet thread content not found");
+      return errorResult("UPSTREAM_CHANGED", "tweet conversation content not found");
     }
     return buildConversationPayload(
       conversationItems,
@@ -3605,6 +4088,23 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         }
         const limit = normalizeTimelineLimit(args);
         return await readTweetThreadByUrl(page, targetUrl, limit);
+      }
+
+      if (name === "tweet.media.download") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const targetUrl = url || (id ? `https://x.com/i/web/status/${id}` : "");
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const mediaIndex = typeof args.mediaIndex === "number" && Number.isFinite(args.mediaIndex)
+          ? Math.floor(args.mediaIndex)
+          : undefined;
+        return await downloadTweetMediaByUrl(page, targetUrl, mediaIndex);
       }
 
       if (name === "tweet.conversation.get") {
