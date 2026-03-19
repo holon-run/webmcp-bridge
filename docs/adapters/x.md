@@ -53,6 +53,8 @@
 - input: `url | id`, optional `mediaIndex`
 - output: `tweet`, `items`
 - each `items[]` entry includes `mediaIndex`, `media`, `artifact`
+- each `artifact` includes `path`, `name`, `mimeType`, `mediaIndex`, `sourceUrl`
+- `artifact.path` is a local temporary file path created by the adapter on the current machine
 
 `search.tweets.list` input:
 
@@ -276,6 +278,7 @@ When Grok returns a downloadable `data:` link, `grok.chat` materializes it into 
 - Selector-based implementation; upstream UI changes may require selector updates.
 - `tweet.conversation.get` models the detail-page conversation view; `tweet.thread.get` derives the same-author thread chain from that conversation instead of returning the full reply tree.
 - `tweet.media.download` currently materializes media into local temp paths and returns artifact metadata; it does not yet integrate with native browser download events.
+- `tweet.media.download` only fetches `https` media from expected X media hosts (`pbs.twimg.com`, `video.twimg.com`).
 - Text-only compose and reply scope in `0.1.x`.
 - `grok.chat` starts a new conversation by default; pass `conversationId` to continue an existing chat.
 - `grok.chat` attachments currently support local file-path uploads only, via `attachmentPaths`.

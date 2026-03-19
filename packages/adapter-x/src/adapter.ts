@@ -14,7 +14,7 @@ import {
   type RequestTemplate,
   TemplateCache,
 } from "@webmcp-bridge/adapter-utils";
-import { mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, isAbsolute, join } from "node:path";
 import type { Page } from "playwright";
@@ -104,6 +104,8 @@ const AUTH_STABILIZE_ATTEMPTS = 6;
 const AUTH_STABILIZE_DELAY_MS = 750;
 const AUTH_WARMUP_TIMEOUT_MS = 12_000;
 const GROK_ARTIFACT_DIR_PREFIX = "webmcp-bridge-grok-";
+const TWEET_MEDIA_ARTIFACT_DIR_PREFIX = "webmcp-bridge-x-media-";
+const ALLOWED_TWEET_MEDIA_HOSTS = new Set(["pbs.twimg.com", "video.twimg.com"]);
 
 const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
   globalKey: "__WEBMCP_X_CAPTURE__",
@@ -282,6 +284,9 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
       },
       additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
     },
   },
   {
@@ -754,46 +759,88 @@ async function materializeTweetMediaArtifacts(
   tweet: TimelineItem,
   mediaEntries: Array<{ mediaIndex: number; media: TweetMedia }>,
 ): Promise<TweetMediaArtifact[]> {
-  const artifactDir = await mkdtemp(join(tmpdir(), "webmcp-bridge-x-media-"));
+  let artifactDir: string | undefined;
   const reservedNames = new Set<string>();
   const artifacts: TweetMediaArtifact[] = [];
 
-  for (const entry of mediaEntries) {
-    const normalizedMedia = normalizeTweetMediaForDownload(entry.media);
-    const response = await fetch(normalizedMedia.url);
-    if (!response.ok) {
-      throw new Error(`media_download_http_${response.status}`);
+  try {
+    for (const entry of mediaEntries) {
+      const normalizedMedia = normalizeTweetMediaForDownload(entry.media);
+      let mediaUrl: URL;
+      try {
+        mediaUrl = new URL(normalizedMedia.url);
+      } catch {
+        throw new Error("invalid_media_url");
+      }
+      if (mediaUrl.protocol !== "https:" || !ALLOWED_TWEET_MEDIA_HOSTS.has(mediaUrl.hostname)) {
+        throw new Error(`unsupported_media_url:${mediaUrl.toString()}`);
+      }
+      const response = await fetch(mediaUrl.toString());
+      if (!response.ok) {
+        throw new Error(`media_download_http_${response.status}:${mediaUrl.toString()}`);
+      }
+      const arrayBuffer = await response.arrayBuffer();
+      const contentTypeHeader = response.headers.get("content-type")?.split(";")[0]?.trim() || undefined;
+      const fallbackBase = `${tweet.id}-media-${entry.mediaIndex + 1}`;
+      let name = inferArtifactNameFromUrl(normalizedMedia.url, fallbackBase, contentTypeHeader);
+      if (reservedNames.has(name)) {
+        const extension = extname(name);
+        const stem = extension ? name.slice(0, -extension.length) : name;
+        let suffix = 2;
+        do {
+          name = `${stem}-${suffix}${extension}`;
+          suffix += 1;
+        } while (reservedNames.has(name));
+      }
+      reservedNames.add(name);
+      if (!artifactDir) {
+        artifactDir = await mkdtemp(join(tmpdir(), TWEET_MEDIA_ARTIFACT_DIR_PREFIX));
+      }
+      const path = join(artifactDir, name);
+      await writeFile(path, Buffer.from(arrayBuffer));
+      const artifact: TweetMediaArtifact = {
+        kind: "file",
+        name,
+        path,
+        mediaIndex: entry.mediaIndex,
+        sourceUrl: normalizedMedia.url,
+      };
+      if (contentTypeHeader) {
+        artifact.mimeType = contentTypeHeader;
+      }
+      artifacts.push(artifact);
     }
-    const arrayBuffer = await response.arrayBuffer();
-    const contentTypeHeader = response.headers.get("content-type")?.split(";")[0]?.trim() || undefined;
-    const fallbackBase = `${tweet.id}-media-${entry.mediaIndex + 1}`;
-    let name = inferArtifactNameFromUrl(normalizedMedia.url, fallbackBase, contentTypeHeader);
-    if (reservedNames.has(name)) {
-      const extension = extname(name);
-      const stem = extension ? name.slice(0, -extension.length) : name;
-      let suffix = 2;
-      do {
-        name = `${stem}-${suffix}${extension}`;
-        suffix += 1;
-      } while (reservedNames.has(name));
+  } catch (error) {
+    if (artifactDir) {
+      await rm(artifactDir, { recursive: true, force: true }).catch(() => {});
     }
-    reservedNames.add(name);
-    const path = join(artifactDir, name);
-    await writeFile(path, Buffer.from(arrayBuffer));
-    const artifact: TweetMediaArtifact = {
-      kind: "file",
-      name,
-      path,
-      mediaIndex: entry.mediaIndex,
-      sourceUrl: normalizedMedia.url,
-    };
-    if (contentTypeHeader) {
-      artifact.mimeType = contentTypeHeader;
-    }
-    artifacts.push(artifact);
+    throw error;
   }
 
   return artifacts;
+}
+
+function mapTweetMediaDownloadError(error: unknown): JsonValue {
+  const message = error instanceof Error && error.message ? error.message : "media download failed";
+  if (message.startsWith("media_download_http_")) {
+    const [statusPart = "", urlPart] = message.replace("media_download_http_", "").split(":", 2);
+    const status = Number.parseInt(statusPart, 10);
+    return errorResult(
+      "HTTP_ERROR",
+      Number.isFinite(status)
+        ? `media download returned HTTP ${status}`
+        : "media download returned an HTTP error",
+      typeof urlPart === "string" && urlPart ? { url: urlPart } : undefined,
+    );
+  }
+  if (message.startsWith("unsupported_media_url:")) {
+    const url = message.slice("unsupported_media_url:".length);
+    return errorResult("VALIDATION_ERROR", "media URL is not on an allowed host", { url });
+  }
+  if (message === "invalid_media_url") {
+    return errorResult("UPSTREAM_CHANGED", "tweet media URL is invalid");
+  }
+  return errorResult("UPSTREAM_CHANGED", message);
 }
 
 async function resolveGrokAttachments(input: unknown): Promise<{ ok: true; attachments: GrokAttachment[] } | { ok: false; result: JsonValue }> {
@@ -1393,7 +1440,7 @@ async function readTimelineViaNetwork(
                 item.createdAt = createdAt;
               }
               if (media.length > 0) {
-                item.media = media as unknown as TweetMedia[];
+                item.media = toTweetMediaArray(media);
               }
               outputItems.push(item);
             }
@@ -1703,7 +1750,7 @@ async function extractTweetCards(
       }
       const media = collectDomMedia(article);
       if (media.length > 0) {
-        item.media = media as unknown as TweetMedia[];
+        item.media = toTweetMediaArray(media);
       }
       pushItem(item);
       if (items.length >= maxItems) {
@@ -1732,7 +1779,7 @@ async function extractTweetCards(
         }
         const media = collectDomMedia(cell);
         if (media.length > 0) {
-          item.media = media as unknown as TweetMedia[];
+          item.media = toTweetMediaArray(media);
         }
         pushItem(item);
       }
@@ -2345,8 +2392,7 @@ async function downloadTweetMediaByUrl(page: Page, url: string, mediaIndex?: num
       })),
     };
   } catch (error) {
-    const message = error instanceof Error && error.message ? error.message : "media download failed";
-    return errorResult("ACTION_UNCONFIRMED", message);
+    return mapTweetMediaDownloadError(error);
   }
 }
 

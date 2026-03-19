@@ -979,6 +979,116 @@ describe("createXAdapter", () => {
     }
   });
 
+  it("returns no-media error when tweet.media.download finds no media", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [{ id: "123", text: "tweet without media", url: "https://x.com/a/status/123" }],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.media.download", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toEqual({
+      error: {
+        code: "NO_MEDIA",
+        message: "tweet has no downloadable media",
+      },
+    });
+  });
+
+  it("validates tweet.media.download mediaIndex range", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "123",
+          text: "tweet with media",
+          url: "https://x.com/a/status/123",
+          media: [{ type: "photo", url: "https://pbs.twimg.com/media/test-photo.jpg" }],
+        },
+      ],
+    });
+
+    const negative = await adapter.callTool(
+      { name: "tweet.media.download", input: { id: "123", mediaIndex: -1 } },
+      { page: page as never },
+    );
+    expect(negative).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "mediaIndex must be a non-negative integer",
+      },
+    });
+
+    const outOfRange = await adapter.callTool(
+      { name: "tweet.media.download", input: { id: "123", mediaIndex: 2 } },
+      { page: page as never },
+    );
+    expect(outOfRange).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "mediaIndex is out of range",
+      },
+    });
+  });
+
+  it("surfaces HTTP_ERROR when media download returns non-200", async () => {
+    const adapter = createXAdapter();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("blocked", {
+        status: 403,
+        headers: { "content-type": "text/plain" },
+      }),
+    );
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "123",
+          text: "tweet with media",
+          url: "https://x.com/a/status/123",
+          media: [{ type: "photo", url: "https://pbs.twimg.com/media/test-photo.jpg" }],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.media.download", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toEqual({
+      error: {
+        code: "HTTP_ERROR",
+        message: "media download returned HTTP 403",
+        details: {
+          url: "https://pbs.twimg.com/media/test-photo.jpg?name=orig",
+        },
+      },
+    });
+  });
+
+  it("rejects tweet media URLs on unsupported hosts", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "123",
+          text: "tweet with media",
+          url: "https://x.com/a/status/123",
+          media: [{ type: "photo", url: "https://example.com/media/test-photo.jpg" }],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "tweet.media.download", input: { id: "123" } }, { page: page as never });
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "media URL is not on an allowed host",
+        details: {
+          url: "https://example.com/media/test-photo.jpg",
+        },
+      },
+    });
+  });
+
   it("returns validation error for tweet.thread.get without id/url", async () => {
     const adapter = createXAdapter();
     const { page } = createMockPage();
@@ -1172,6 +1282,8 @@ describe("createXAdapter", () => {
         { id: "127", text: "part 5", url: "https://x.com/a/status/127" },
       ],
       source: "network",
+      incomplete: true,
+      nextCursor: "cursor-next",
     });
   });
 
