@@ -777,7 +777,7 @@ async function materializeTweetMediaArtifacts(
       }
       const response = await fetch(mediaUrl.toString());
       if (!response.ok) {
-        throw new Error(`media_download_http_${response.status}:${mediaUrl.toString()}`);
+        throw new Error(`media_download_http_${response.status}|${mediaUrl.toString()}`);
       }
       const arrayBuffer = await response.arrayBuffer();
       const contentTypeHeader = response.headers.get("content-type")?.split(";")[0]?.trim() || undefined;
@@ -823,7 +823,7 @@ async function materializeTweetMediaArtifacts(
 function mapTweetMediaDownloadError(error: unknown): JsonValue {
   const message = error instanceof Error && error.message ? error.message : "media download failed";
   if (message.startsWith("media_download_http_")) {
-    const [statusPart = "", urlPart] = message.replace("media_download_http_", "").split(":", 2);
+    const [statusPart = "", urlPart = ""] = message.replace("media_download_http_", "").split("|", 2);
     const status = Number.parseInt(statusPart, 10);
     return errorResult(
       "HTTP_ERROR",
