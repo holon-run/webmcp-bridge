@@ -423,6 +423,8 @@ describe("createXAdapter", () => {
         "timeline.user.list",
         "search.tweets.list",
         "tweet.get",
+        "tweet.conversation.get",
+        "tweet.replies.list",
         "tweet.thread.get",
         "favorites.list",
         "notifications.list",
@@ -838,26 +840,175 @@ describe("createXAdapter", () => {
     });
   });
 
-  it("reads tweet thread by id", async () => {
+  it("returns validation error for tweet.conversation.get without id/url", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+    const result = await adapter.callTool({ name: "tweet.conversation.get", input: {} }, { page: page as never });
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "url or id is required",
+      },
+    });
+  });
+
+  it("returns validation error for tweet.replies.list without id/url", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+    const result = await adapter.callTool({ name: "tweet.replies.list", input: {} }, { page: page as never });
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "url or id is required",
+      },
+    });
+  });
+
+  it("reads tweet conversation by id", async () => {
     const adapter = createXAdapter();
     const { page } = createMockPage({
       timelineItems: [
-        { id: "t-1", text: "root tweet", url: "https://x.com/a/status/1" },
-        { id: "t-2", text: "reply tweet", url: "https://x.com/b/status/2" },
+        { id: "1", text: "ancestor tweet", url: "https://x.com/a/status/1" },
+        { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+        { id: "2", text: "reply one", url: "https://x.com/b/status/2" },
+        { id: "3", text: "reply two", url: "https://x.com/c/status/3" },
       ],
     });
 
     const result = await adapter.callTool(
-      { name: "tweet.thread.get", input: { id: "123", limit: 2 } },
+      { name: "tweet.conversation.get", input: { id: "123", limit: 2 } },
       { page: page as never },
     );
 
     expect(result).toEqual({
-      tweets: [
-        { id: "t-1", text: "root tweet", url: "https://x.com/a/status/1" },
-        { id: "t-2", text: "reply tweet", url: "https://x.com/b/status/2" },
+      focal: { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+      ancestors: [{ id: "1", text: "ancestor tweet", url: "https://x.com/a/status/1" }],
+      replies: [
+        { id: "2", text: "reply one", url: "https://x.com/b/status/2" },
+        { id: "3", text: "reply two", url: "https://x.com/c/status/3" },
       ],
       source: "network",
+      hasMore: true,
+      nextCursor: "cursor-next",
+    });
+  });
+
+  it("caps conversation replies to limit while preserving pagination", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        { id: "1", text: "ancestor tweet", url: "https://x.com/a/status/1" },
+        { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+        { id: "2", text: "reply one", url: "https://x.com/b/status/2" },
+        { id: "3", text: "reply two", url: "https://x.com/c/status/3" },
+        { id: "4", text: "reply three", url: "https://x.com/d/status/4" },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "tweet.conversation.get", input: { id: "123", limit: 2 } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      focal: { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+      ancestors: [{ id: "1", text: "ancestor tweet", url: "https://x.com/a/status/1" }],
+      replies: [
+        { id: "2", text: "reply one", url: "https://x.com/b/status/2" },
+        { id: "3", text: "reply two", url: "https://x.com/c/status/3" },
+      ],
+      source: "network",
+      hasMore: true,
+      nextCursor: "cursor-next",
+    });
+  });
+
+  it("reads tweet replies by id", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        { id: "1", text: "ancestor tweet", url: "https://x.com/a/status/1" },
+        { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+        { id: "2", text: "reply one", url: "https://x.com/b/status/2" },
+        { id: "3", text: "reply two", url: "https://x.com/c/status/3" },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "tweet.replies.list", input: { id: "123", limit: 2 } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      focal: { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+      items: [
+        { id: "2", text: "reply one", url: "https://x.com/b/status/2" },
+        { id: "3", text: "reply two", url: "https://x.com/c/status/3" },
+      ],
+      source: "network",
+      hasMore: true,
+      nextCursor: "cursor-next",
+    });
+  });
+
+  it("reads tweet thread by id", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        { id: "1", text: "root tweet", url: "https://x.com/a/status/1" },
+        { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+        { id: "2", text: "same author reply", url: "https://x.com/a/status/2" },
+        { id: "3", text: "other author reply", url: "https://x.com/b/status/3" },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "tweet.thread.get", input: { id: "123", limit: 3 } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      root: { id: "1", text: "root tweet", url: "https://x.com/a/status/1" },
+      focal: { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+      tweets: [
+        { id: "1", text: "root tweet", url: "https://x.com/a/status/1" },
+        { id: "123", text: "focal tweet", url: "https://x.com/a/status/123" },
+        { id: "2", text: "same author reply", url: "https://x.com/a/status/2" },
+      ],
+      source: "network",
+      incomplete: true,
+      nextCursor: "cursor-next",
+    });
+  });
+
+  it("keeps thread items in dom fallback when focal uses i/web status url", async () => {
+    vi.resetModules();
+    const { createXAdapter: createFreshXAdapter } = await import("../src/index.js");
+    const adapter = createFreshXAdapter();
+    const { page, behavior } = createMockPage({
+      timelineItems: [
+        { id: "123", text: "focal tweet", url: "https://x.com/i/web/status/123" },
+        { id: "2", text: "same author reply", url: "https://x.com/a/status/2" },
+        { id: "3", text: "other author reply", url: "https://x.com/b/status/3" },
+      ],
+    });
+    behavior.requireFallbackTemplate = true;
+
+    const result = await adapter.callTool(
+      { name: "tweet.thread.get", input: { id: "123", limit: 3 } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      root: { id: "123", text: "focal tweet", url: "https://x.com/i/web/status/123" },
+      focal: { id: "123", text: "focal tweet", url: "https://x.com/i/web/status/123" },
+      tweets: [
+        { id: "123", text: "focal tweet", url: "https://x.com/i/web/status/123" },
+        { id: "2", text: "same author reply", url: "https://x.com/a/status/2" },
+        { id: "3", text: "other author reply", url: "https://x.com/b/status/3" },
+      ],
+      source: "dom",
+      debug: { reason: "no_template" },
     });
   });
 
