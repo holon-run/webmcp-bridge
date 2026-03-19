@@ -532,6 +532,36 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
+    name: "article.draftMarkdown",
+    description: "Create one X article draft from a local markdown file",
+    inputSchema: {
+      type: "object",
+      description:
+        "Create one X article draft from a local markdown file. The adapter derives the title from the first markdown heading when title is omitted.",
+      properties: {
+        markdownPath: {
+          type: "string",
+          description: "Absolute local file path to the markdown file to draft.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+        title: {
+          type: "string",
+          description: "Optional title override. When omitted, the first markdown heading becomes the article title.",
+          minLength: 1,
+        },
+        coverImagePath: {
+          type: "string",
+          description: "Optional absolute local image path for the article cover image.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+      },
+      required: ["markdownPath"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "article.publishMarkdown",
     description: "Publish one X article from a local markdown file",
     inputSchema: {
@@ -562,6 +592,27 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
       },
       required: ["markdownPath"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.publish",
+    description: "Publish one existing X article draft by edit url, public url, or id",
+    inputSchema: {
+      type: "object",
+      description: "Open one article editor page and publish the current draft.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Article edit URL or public article URL.",
+          minLength: 1,
+        },
+        id: {
+          type: "string",
+          description: "Article id. Used when url is not provided.",
+          minLength: 1,
+        },
+      },
       additionalProperties: false,
     },
   },
@@ -1356,6 +1407,7 @@ type ReadPageCacheState = {
 };
 
 const READ_PAGE_CACHE = new WeakMap<Page, ReadPageCacheState>();
+const ARTICLE_DRAFT_PAGE_CACHE = new WeakMap<Page, Map<string, Page>>();
 const PROCESS_TEMPLATE_CACHE = new TemplateCache<ProcessTemplateBucket, RequestTemplate>();
 
 async function readTimelineViaNetwork(
@@ -2287,6 +2339,56 @@ async function closeCachedReadPages(ownerPage: Page): Promise<void> {
   for (const entry of state.pages.values()) {
     if (!entry.page.isClosed()) {
       await entry.page.close().catch(() => {});
+    }
+  }
+}
+
+function getArticleDraftPageCache(ownerPage: Page): Map<string, Page> {
+  let cache = ARTICLE_DRAFT_PAGE_CACHE.get(ownerPage);
+  if (!cache) {
+    cache = new Map<string, Page>();
+    ARTICLE_DRAFT_PAGE_CACHE.set(ownerPage, cache);
+  }
+  return cache;
+}
+
+async function cacheArticleDraftPage(ownerPage: Page, articleId: string, articlePage: Page): Promise<void> {
+  const cache = getArticleDraftPageCache(ownerPage);
+  const existing = cache.get(articleId);
+  if (existing && existing !== articlePage && !existing.isClosed()) {
+    await existing.close().catch(() => {});
+  }
+  cache.set(articleId, articlePage);
+}
+
+function getCachedArticleDraftPage(ownerPage: Page, articleId: string): Page | undefined {
+  const cache = ARTICLE_DRAFT_PAGE_CACHE.get(ownerPage);
+  const page = cache?.get(articleId);
+  if (!page || page.isClosed()) {
+    cache?.delete(articleId);
+    return undefined;
+  }
+  return page;
+}
+
+async function removeCachedArticleDraftPage(ownerPage: Page, articleId: string): Promise<void> {
+  const cache = ARTICLE_DRAFT_PAGE_CACHE.get(ownerPage);
+  const page = cache?.get(articleId);
+  cache?.delete(articleId);
+  if (page && !page.isClosed()) {
+    await page.close().catch(() => {});
+  }
+}
+
+async function closeCachedArticleDraftPages(ownerPage: Page): Promise<void> {
+  const cache = ARTICLE_DRAFT_PAGE_CACHE.get(ownerPage);
+  ARTICLE_DRAFT_PAGE_CACHE.delete(ownerPage);
+  if (!cache) {
+    return;
+  }
+  for (const articlePage of cache.values()) {
+    if (!articlePage.isClosed()) {
+      await articlePage.close().catch(() => {});
     }
   }
 }
@@ -3256,6 +3358,64 @@ async function waitForArticleEditorSurface(page: Page): Promise<void> {
   await page.waitForTimeout(800);
 }
 
+async function ensureArticleDraftLoaded(page: Page, articleId?: string): Promise<void> {
+  if (!articleId) {
+    return;
+  }
+  const hasContent = async (): Promise<boolean> => {
+    return await page.evaluate(() => {
+      const title = document.querySelector("textarea[placeholder='Add a title']");
+      const composer = document.querySelector("[data-testid='composer'][role='textbox']");
+      const titleValue = title instanceof HTMLTextAreaElement ? title.value.trim() : "";
+      const composerText = composer instanceof HTMLElement ? (composer.textContent || "").trim() : "";
+      return titleValue.length > 0 || composerText.length > 0;
+    }).catch(() => false);
+  };
+  if (await hasContent()) {
+    return;
+  }
+  await page.goto("https://x.com/compose/articles", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await page.waitForTimeout(1_200);
+  await page.evaluate(({ targetId }) => {
+    const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
+    const draftAnchor = anchors.find((anchor) => anchor.href.includes(`/compose/articles/edit/${targetId}`));
+    draftAnchor?.click();
+  }, { targetId: articleId }).catch(() => {});
+  await page.waitForTimeout(1_200);
+  if (await hasContent()) {
+    return;
+  }
+  await page.goto(`https://x.com/compose/articles/edit/${articleId}`, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await waitForArticleEditorSurface(page);
+  await page.waitForTimeout(1_000);
+}
+
+async function waitForArticleDraftPersisted(page: Page, articleId: string, title: string): Promise<boolean> {
+  await page
+    .evaluate(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) {
+        active.blur();
+      }
+    })
+    .catch(() => {});
+  await page.keyboard.press("Escape").catch(() => {});
+  return await page
+    .waitForFunction(
+      ({ targetId, expectedTitle }) => {
+        const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
+        const draftAnchor = anchors.find((anchor) => anchor.href.includes(`/compose/articles/edit/${targetId}`));
+        const containerText = draftAnchor?.closest("article, li, div")?.textContent || draftAnchor?.textContent || "";
+        const normalized = containerText.replace(/\s+/g, " ").trim();
+        return normalized.includes(expectedTitle) && !normalized.includes("(Needs title)");
+      },
+      { targetId: articleId, expectedTitle: title.trim() },
+      { timeout: 20_000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+}
+
 async function openNewArticleEditor(page: Page): Promise<{ ok: true; editUrl: string } | { ok: false; reason: string }> {
   await page.goto("https://x.com/compose/articles", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
   await page.waitForTimeout(2_500);
@@ -3898,13 +4058,11 @@ async function deleteArticleEditor(page: Page, dryRun: boolean): Promise<JsonVal
   };
 }
 
-async function publishArticleMarkdown(
+async function draftArticleMarkdown(
   page: Page,
   markdownPath: string,
   explicitTitle: string | undefined,
   coverImagePath: string | undefined,
-  dryRun: boolean,
-  timeoutMs: number,
 ): Promise<JsonValue> {
   const markdown = await readFile(markdownPath, "utf8").catch(() => undefined);
   if (markdown === undefined) {
@@ -3928,7 +4086,11 @@ async function publishArticleMarkdown(
     });
   }
 
-  return await withEphemeralPage(page, "https://x.com/compose/articles", async (articlePage) => {
+  const articlePage = await page.context().newPage();
+  let shouldClose = true;
+  try {
+    await ensureNetworkCaptureInstalled(articlePage);
+    await articlePage.goto("https://x.com/compose/articles", { waitUntil: "domcontentloaded", timeout: 60_000 });
     const started = await openNewArticleEditor(articlePage);
     if (!started.ok) {
       return errorResult("UPSTREAM_CHANGED", "article editor could not be opened", {
@@ -3971,21 +4133,53 @@ async function publishArticleMarkdown(
     const editUrl = started.editUrl;
     const articleId = parseArticleIdFromUrl(editUrl);
 
-    if (dryRun) {
-      const output: Record<string, JsonValue> = {
-        ok: true,
-        dryRun: true,
-        editUrl,
-        title,
-        inlineImageCount: resolvedInlineImages.length,
-        hasCoverImage: typeof coverImagePath === "string" && coverImagePath.trim().length > 0,
-      };
-      if (articleId) {
-        output.articleId = articleId;
-      }
-      return output;
+    const output: Record<string, JsonValue> = {
+      ok: true,
+      editUrl,
+      title,
+      inlineImageCount: resolvedInlineImages.length,
+      hasCoverImage: typeof coverImagePath === "string" && coverImagePath.trim().length > 0,
+    };
+    if (articleId) {
+      output.articleId = articleId;
+      const persisted = await waitForArticleDraftPersisted(articlePage, articleId, title);
+      output.persisted = persisted;
+      output.sessionScoped = !persisted;
+      await cacheArticleDraftPage(page, articleId, articlePage);
+      shouldClose = false;
     }
+    return output;
+  } finally {
+    if (shouldClose) {
+      await articlePage.close().catch(() => {});
+    }
+  }
+}
 
+async function publishArticleMarkdown(
+  page: Page,
+  markdownPath: string,
+  explicitTitle: string | undefined,
+  coverImagePath: string | undefined,
+  dryRun: boolean,
+  timeoutMs: number,
+): Promise<JsonValue> {
+  const drafted = await draftArticleMarkdown(page, markdownPath, explicitTitle, coverImagePath);
+  if (dryRun) {
+    if (drafted && typeof drafted === "object" && !Array.isArray(drafted) && !("error" in drafted)) {
+      return { ...drafted, dryRun: true };
+    }
+    return drafted;
+  }
+  if (!drafted || typeof drafted !== "object" || Array.isArray(drafted) || ("error" in drafted)) {
+    return drafted;
+  }
+  const editUrl = typeof drafted.editUrl === "string" ? drafted.editUrl : "";
+  if (!editUrl) {
+    return errorResult("UPSTREAM_CHANGED", "article draft edit url not found");
+  }
+  return await withEphemeralPage(page, editUrl, async (articlePage) => {
+    await waitForArticleEditorSurface(articlePage);
     const published = await publishArticleEditor(articlePage, timeoutMs);
     if (!published.ok) {
       const details: Record<string, JsonValue> = {
@@ -3998,11 +4192,9 @@ async function publishArticleMarkdown(
         ...details,
       });
     }
-
     const output: Record<string, JsonValue> = {
-      ok: true,
+      ...drafted,
       confirmed: true,
-      title,
       editUrl: published.editUrl,
     };
     if (published.articleId) {
@@ -4013,6 +4205,45 @@ async function publishArticleMarkdown(
     }
     return output;
   });
+}
+
+async function publishExistingArticle(page: Page, targetUrl: string, timeoutMs: number): Promise<JsonValue> {
+  const articleId = parseArticleIdFromUrl(targetUrl);
+  const cachedPage = articleId ? getCachedArticleDraftPage(page, articleId) : undefined;
+  const runPublish = async (articlePage: Page): Promise<JsonValue> => {
+    await waitForArticleEditorSurface(articlePage);
+    await ensureArticleDraftLoaded(articlePage, articleId);
+    const published = await publishArticleEditor(articlePage, timeoutMs);
+    if (!published.ok) {
+      const details: Record<string, JsonValue> = {
+        reason: published.reason,
+      };
+      if (published.details) {
+        details.debug = published.details;
+      }
+      return errorResult("ACTION_UNCONFIRMED", "article publish was not confirmed", details);
+    }
+    const output: Record<string, JsonValue> = {
+      ok: true,
+      confirmed: true,
+      editUrl: published.editUrl,
+    };
+    if (published.articleId) {
+      output.articleId = published.articleId;
+    }
+    if (published.articleUrl) {
+      output.articleUrl = published.articleUrl;
+    }
+    return output;
+  };
+  if (cachedPage) {
+    const result = await runPublish(cachedPage);
+    if (articleId && (!result || typeof result !== "object" || Array.isArray(result) || !("error" in result))) {
+      await removeCachedArticleDraftPage(page, articleId);
+    }
+    return result;
+  }
+  return await withEphemeralPage(page, targetUrl, runPublish);
 }
 
 async function waitForGrokSurface(page: Page): Promise<void> {
@@ -5270,6 +5501,26 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         );
       }
 
+      if (name === "article.draftMarkdown") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+
+        const markdownPath = typeof args.markdownPath === "string" ? args.markdownPath.trim() : "";
+        if (!markdownPath) {
+          return errorResult("VALIDATION_ERROR", "markdownPath is required");
+        }
+        const explicitTitle = typeof args.title === "string" ? args.title.trim() : "";
+        const coverImagePath = typeof args.coverImagePath === "string" ? args.coverImagePath.trim() : "";
+        return await draftArticleMarkdown(
+          page,
+          markdownPath,
+          explicitTitle || undefined,
+          coverImagePath || undefined,
+        );
+      }
+
       if (name === "article.publishMarkdown") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
@@ -5291,6 +5542,29 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
           dryRun,
           articlePublishTimeoutMs,
         );
+      }
+
+      if (name === "article.publish") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
+        if (!articleId && !url) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const targetUrl =
+          url && url.includes("/compose/articles/edit/")
+            ? url
+            : articleId
+              ? `https://x.com/compose/articles/edit/${articleId}`
+              : url;
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        return await publishExistingArticle(page, targetUrl, articlePublishTimeoutMs);
       }
 
       if (name === "article.delete") {
@@ -5315,6 +5589,14 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         if (!targetUrl) {
           return errorResult("VALIDATION_ERROR", "url or id is required");
         }
+        const cachedPage = articleId ? getCachedArticleDraftPage(page, articleId) : undefined;
+        if (cachedPage) {
+          const result = await deleteArticleEditor(cachedPage, dryRun);
+          if (!dryRun && articleId && (!result || typeof result !== "object" || Array.isArray(result) || !("error" in result))) {
+            await removeCachedArticleDraftPage(page, articleId);
+          }
+          return result;
+        }
         return await withEphemeralPage(page, targetUrl, async (articlePage) => {
           await waitForArticleEditorSurface(articlePage);
           return await deleteArticleEditor(articlePage, dryRun);
@@ -5325,6 +5607,7 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
     },
     stop: async ({ page }) => {
       await closeCachedReadPages(page);
+      await closeCachedArticleDraftPages(page);
     },
   };
 }

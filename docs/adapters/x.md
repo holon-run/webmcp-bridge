@@ -20,7 +20,9 @@
 - `tweet.create`: submit a text post with optional `dryRun`.
 - `tweet.reply`: reply to one tweet by URL or ID, with optional `dryRun`.
 - `grok.chat`: send one prompt to Grok, optionally upload local files, and return the assistant reply.
+- `article.draftMarkdown`: create one X article draft from a local markdown file, with optional cover image.
 - `article.publishMarkdown`: publish one X article from a local markdown file, with optional cover image.
+- `article.publish`: publish one existing X article draft by edit URL, public URL, or ID.
 - `article.delete`: delete one X article draft or published article by edit URL, public URL, or ID.
 
 `timeline.home.list`, `timeline.user.list`, `search.tweets.list`, and `favorites.list` support incremental pagination with:
@@ -58,6 +60,15 @@
 - each `artifact` includes `path`, `name`, `mimeType`, `mediaIndex`, `sourceUrl`
 - `artifact.path` is a local temporary file path created by the adapter on the current machine
 
+`article.draftMarkdown` exposes:
+
+- input: `markdownPath`, optional `title`, optional `coverImagePath`
+- `markdownPath` and `coverImagePath` are local absolute file paths
+- the adapter derives the title from the first markdown heading when `title` is omitted
+- markdown image syntax with local file paths is supported; local inline images are uploaded through the article editor
+- output: `ok`, `title`, `editUrl`, optional `articleId`, `persisted`, `sessionScoped`
+- when `persisted=false`, the draft is only guaranteed to be publishable or deletable within the current bridge session; call `article.publish` or `article.delete` before the session is discarded
+
 `article.publishMarkdown` exposes:
 
 - input: `markdownPath`, optional `title`, optional `coverImagePath`, optional `dryRun`
@@ -65,6 +76,12 @@
 - the adapter derives the title from the first markdown heading when `title` is omitted
 - markdown image syntax with local file paths is supported; local inline images are uploaded through the article editor
 - output: `ok`, optional `dryRun`, `title`, `editUrl`, optional `articleId`, optional `articleUrl`
+
+`article.publish` exposes:
+
+- input: `url | id`
+- output: `ok`, `confirmed`, `editUrl`, optional `articleId`, optional `articleUrl`
+- when publishing a session-scoped draft, call it in the same bridge session that created the draft
 
 `article.delete` exposes:
 
@@ -269,6 +286,21 @@ Chat with Grok and upload one local file:
 }
 ```
 
+Create one article draft from markdown:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "article.draftMarkdown",
+    "arguments": {
+      "markdownPath": "/tmp/post.md",
+      "coverImagePath": "/tmp/cover.png"
+    }
+  }
+}
+```
+
 Publish one article from markdown:
 
 ```json
@@ -279,6 +311,20 @@ Publish one article from markdown:
     "arguments": {
       "markdownPath": "/tmp/post.md",
       "coverImagePath": "/tmp/cover.png"
+    }
+  }
+}
+```
+
+Publish one draft article:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "article.publish",
+    "arguments": {
+      "id": "2035000000000000000"
     }
   }
 }
@@ -324,7 +370,7 @@ When Grok returns a downloadable `data:` link, `grok.chat` materializes it into 
 - `tweet.media.download` currently materializes media into local temp paths and returns artifact metadata; it does not yet integrate with native browser download events.
 - `tweet.media.download` only fetches `https` media from expected X media hosts (`pbs.twimg.com`, `video.twimg.com`).
 - Text-only compose and reply scope in `0.1.x`.
-- `article.publishMarkdown` currently relies on X article editor selectors and markdown paste behavior; if X changes the editor, selector updates may be required.
+- `article.draftMarkdown`, `article.publishMarkdown`, and `article.publish` currently rely on X article editor selectors and markdown paste behavior; if X changes the editor, selector updates may be required.
 - `grok.chat` starts a new conversation by default; pass `conversationId` to continue an existing chat.
 - `grok.chat` attachments currently support local file-path uploads only, via `attachmentPaths`.
 - `grok.chat` marks each `attachmentPaths` item with `x-uxc-kind: "file-path"` so schema-aware clients can treat them as local file references.

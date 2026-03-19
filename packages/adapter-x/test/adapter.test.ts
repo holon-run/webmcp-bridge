@@ -971,11 +971,11 @@ describe("createXAdapter", () => {
     });
   });
 
-  it("returns validation error for article.publishMarkdown without markdownPath", async () => {
+  it("returns validation error for article.draftMarkdown without markdownPath", async () => {
     const adapter = createXAdapter();
     const { page } = createMockPage();
 
-    const result = await adapter.callTool({ name: "article.publishMarkdown", input: {} }, { page: page as never });
+    const result = await adapter.callTool({ name: "article.draftMarkdown", input: {} }, { page: page as never });
 
     expect(result).toEqual({
       error: {
@@ -1018,11 +1018,76 @@ describe("createXAdapter", () => {
       articleId: "2035000000000000000",
       articleUrl: "https://x.com/i/articles/2035000000000000000",
       editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+      persisted: true,
+      sessionScoped: false,
+      inlineImageCount: 1,
+      hasCoverImage: true,
     });
     expect(getUploadedFiles()).toEqual([inlinePath]);
     expect(getArticleDraftState()).toMatchObject({
       title: "Mock title",
       markdown: expect.stringContaining("[[WEBMCP_INLINE_IMAGE_1]]"),
+    });
+  });
+
+  it("creates one article draft from markdown with cover and inline images", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-draft-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    const coverPath = join(tempDir, "cover.png");
+    const inlinePath = join(tempDir, "inline.png");
+    await writeFile(
+      markdownPath,
+      "# Mock title\n\nBody text before image.\n\n![inline](./inline.png)\n\nBody text after image.\n",
+    );
+    await writeFile(coverPath, "cover-bytes");
+    await writeFile(inlinePath, "inline-bytes");
+    const { page, getUploadedFiles, getArticleDraftState } = createMockPage();
+
+    const result = await adapter.callTool(
+      {
+        name: "article.draftMarkdown",
+        input: {
+          markdownPath,
+          coverImagePath: coverPath,
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      title: "Mock title",
+      articleId: "2035000000000000000",
+      editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+      inlineImageCount: 1,
+      hasCoverImage: true,
+      persisted: true,
+      sessionScoped: false,
+    });
+    expect(getUploadedFiles()).toEqual([inlinePath]);
+    expect(getArticleDraftState()).toMatchObject({
+      title: "Mock title",
+      markdown: expect.stringContaining("[[WEBMCP_INLINE_IMAGE_1]]"),
+    });
+  });
+
+  it("publishes one existing article draft by id", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "article.publish", input: { id: "2035000000000000000" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      confirmed: true,
+      articleId: "2035000000000000000",
+      articleUrl: "https://x.com/i/articles/2035000000000000000",
+      editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
     });
   });
 
