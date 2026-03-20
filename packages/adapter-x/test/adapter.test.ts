@@ -216,6 +216,11 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         return true;
       }
 
+      if (command.op === "article_clear_body") {
+        articleMarkdown = "";
+        return true;
+      }
+
       if (command.op === "article_trigger_cover_upload") {
         return behavior.articleCoverTriggerOk;
       }
@@ -436,6 +441,11 @@ function createMockPage(partial: Partial<Behavior> = {}) {
 
       if (typeof command.needle === "string") {
         return behavior.statusUrl;
+      }
+
+      if (command.op === "article_clear_body") {
+        articleMarkdown = "";
+        return true;
       }
 
       return undefined;
