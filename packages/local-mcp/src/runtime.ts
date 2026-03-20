@@ -10,6 +10,7 @@ import type { JsonValue } from "@webmcp-bridge/core";
 import {
   createWebMcpPageGateway,
   type CreateWebMcpPageGatewayOptions,
+  type SiteAdapter,
   type WebMcpPageGateway,
   type WebMcpResourceDefinition,
   type WebMcpToolDefinition,
@@ -18,6 +19,7 @@ import {
   chromium,
   firefox,
   webkit,
+  type Browser,
   type BrowserContext,
   type BrowserType,
   type Frame,
@@ -57,6 +59,8 @@ export type LocalMcpRuntimeOptions = {
   url?: string;
   browser?: BrowserEngine;
   browserChannel?: BrowserChannel;
+  browserUrl?: string;
+  chromiumLoginWorkaround?: boolean;
   headless?: boolean;
   userDataDir?: string;
   preferNative?: boolean;
@@ -75,7 +79,12 @@ export type LocalMcpRuntime = {
   close: () => Promise<void>;
 };
 
-function isChromiumAutomationWorkaroundEnabled(): boolean {
+type AuthState = "authenticated" | "auth_required" | "challenge_required";
+
+function isChromiumAutomationWorkaroundEnabled(enabledOverride?: boolean): boolean {
+  if (enabledOverride !== undefined) {
+    return enabledOverride;
+  }
   const value = process.env.WEBMCP_CHROMIUM_LOGIN_WORKAROUND;
   return value === "1" || value === "true";
 }
@@ -83,30 +92,31 @@ function isChromiumAutomationWorkaroundEnabled(): boolean {
 function createChromiumLaunchOptions(
   headless: boolean,
   browserChannel: BrowserChannel | undefined,
+  chromiumLoginWorkaround: boolean | undefined,
 ): {
   headless: boolean;
   viewport: null;
+  chromiumSandbox?: boolean;
   channel?: string;
-  args?: string[];
   ignoreDefaultArgs?: string[];
 } {
   const launchOptions: {
     headless: boolean;
     viewport: null;
+    chromiumSandbox?: boolean;
     channel?: string;
-    args?: string[];
     ignoreDefaultArgs?: string[];
   } = {
     headless,
     viewport: null,
   };
-  if (isChromiumAutomationWorkaroundEnabled()) {
-    // Experimental: reduce obvious automation markers for login surfaces.
-    launchOptions.args = ["--disable-blink-features=AutomationControlled"];
+  if (isChromiumAutomationWorkaroundEnabled(chromiumLoginWorkaround)) {
+    // Experimental: remove the most obvious automation marker for login surfaces.
     launchOptions.ignoreDefaultArgs = ["--enable-automation"];
   }
   if (browserChannel) {
     launchOptions.channel = browserChannel;
+    launchOptions.chromiumSandbox = true;
   }
   return launchOptions;
 }
@@ -146,6 +156,23 @@ async function launchPersistentContextWithRetry(
     }
   }
   throw lastError;
+}
+
+async function connectToExternalBrowserContext(browserUrl: string): Promise<{
+  browser: Browser;
+  context: BrowserContext;
+}> {
+  const browser = await chromium.connectOverCDP(browserUrl);
+  const context = browser.contexts()[0];
+  if (context) {
+    return { browser, context };
+  }
+  await browser.close().catch(() => {
+    // Cleanup should be best-effort when attach validation fails.
+  });
+  throw new Error(
+    "SESSION_NOT_AVAILABLE: no persistent browser context found at --browser-url. Open the target Chromium profile with remote debugging enabled before starting local-mcp.",
+  );
 }
 
 function normalizeHost(value: string): string {
@@ -206,8 +233,63 @@ export function resolveRecoveryNavigationUrl(
   return isUrlAllowed(currentUrl, hostPatterns) ? undefined : targetUrl;
 }
 
+function readAuthState(value: unknown): AuthState | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const state = (value as { state?: unknown }).state;
+  if (state === "authenticated" || state === "auth_required" || state === "challenge_required") {
+    return state;
+  }
+  return undefined;
+}
+
+export function shouldDeferBridgeForAuthState(state: AuthState | undefined): boolean {
+  return state === "auth_required" || state === "challenge_required";
+}
+
 export function shouldEndOwnerSessionAfterPageClose(headless: boolean, openPageCount: number): boolean {
   return !headless && openPageCount === 0;
+}
+
+type PageLike = Pick<Page, "url" | "isClosed">;
+
+export function selectPreferredPage<T extends PageLike>(
+  pages: ReadonlyArray<T>,
+  targetUrl: string,
+  hostPatterns: string[],
+): T | undefined {
+  const openPages = pages.filter((entry) => !entry.isClosed());
+  if (openPages.length === 0) {
+    return undefined;
+  }
+  const exactTargetPage = openPages.find((entry) => entry.url() === targetUrl);
+  if (exactTargetPage) {
+    return exactTargetPage;
+  }
+  let targetHost = "";
+  try {
+    targetHost = new URL(targetUrl).hostname;
+  } catch {
+    // Ignore target URL parsing failures here; caller already validates targetUrl separately.
+  }
+  if (targetHost) {
+    const exactHostPage = openPages.find((entry) => {
+      try {
+        return new URL(entry.url()).hostname === targetHost;
+      } catch {
+        return false;
+      }
+    });
+    if (exactHostPage) {
+      return exactHostPage;
+    }
+  }
+  const allowedHostPage = openPages.find((entry) => isUrlAllowed(entry.url(), hostPatterns));
+  if (allowedHostPage) {
+    return allowedHostPage;
+  }
+  return openPages[0];
 }
 
 function resolveBrowserType(browser: BrowserEngine): BrowserType {
@@ -269,9 +351,24 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   const site = options.siteDefinition;
   const browserEngine = options.browser ?? "chromium";
   const browserChannel = options.browserChannel;
+  const browserUrl = options.browserUrl;
   const headless = options.headless ?? false;
   if (browserChannel && browserEngine !== "chromium") {
     throw new Error(`CONFIG_ERROR: --browser-channel requires --browser chromium (received ${browserEngine})`);
+  }
+  if (browserUrl && browserEngine !== "chromium") {
+    throw new Error(`CONFIG_ERROR: --browser-url requires --browser chromium (received ${browserEngine})`);
+  }
+  if (browserUrl && browserChannel) {
+    throw new Error("CONFIG_ERROR: --browser-url cannot be combined with --browser-channel");
+  }
+  if (options.chromiumLoginWorkaround && browserEngine !== "chromium") {
+    throw new Error(
+      `CONFIG_ERROR: --chromium-login-workaround requires --browser chromium (received ${browserEngine})`,
+    );
+  }
+  if (browserUrl && options.chromiumLoginWorkaround) {
+    throw new Error("CONFIG_ERROR: --browser-url cannot be combined with --chromium-login-workaround");
   }
   const browserType = resolveBrowserType(browserEngine);
   const targetUrl = resolveTargetUrl(options.url, site.manifest.defaultUrl);
@@ -280,11 +377,13 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   }
 
   let profileDirFromTemp = false;
-  const userDataDir = options.userDataDir ?? (await mkdtemp(join(tmpdir(), "webmcp-local-mcp-")));
-  if (!options.userDataDir) {
+  const userDataDir =
+    browserUrl ? undefined : (options.userDataDir ?? (await mkdtemp(join(tmpdir(), "webmcp-local-mcp-"))));
+  if (!browserUrl && !options.userDataDir) {
     profileDirFromTemp = true;
   }
 
+  let browser: Browser | undefined;
   let context: BrowserContext | undefined;
   let currentPage: Page | undefined;
   let currentGatewaySession: WebMcpPageGateway | undefined;
@@ -312,13 +411,24 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     await currentGatewaySession?.close().catch(() => {
       // Cleanup should be best-effort when process is terminating.
     });
+    if (deferredAdapterStarted && deferredAdapter && currentPage && !currentPage.isClosed()) {
+      await deferredAdapter.stop?.({ page: currentPage }).catch(() => {
+        // Cleanup should be best-effort when process is terminating.
+      });
+    }
     pageGatewayResourceCleanup?.();
     pageLifecycleCleanup?.();
-    await context?.close().catch(() => {
-      // Cleanup should be best-effort when process is terminating.
-    });
+    if (browser) {
+      await browser.close().catch(() => {
+        // Cleanup should be best-effort when process is terminating.
+      });
+    } else {
+      await context?.close().catch(() => {
+        // Cleanup should be best-effort when process is terminating.
+      });
+    }
     if (profileDirFromTemp) {
-      await rm(userDataDir, { recursive: true, force: true }).catch(() => {
+      await rm(userDataDir as string, { recursive: true, force: true }).catch(() => {
         // Cleanup should be best-effort when process is terminating.
       });
     }
@@ -331,6 +441,63 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   if (fallbackAdapterFactory) {
     gatewayOptions.fallbackAdapter = fallbackAdapterFactory();
   }
+  const authProbeTool = site.manifest.authProbeTool;
+  const deferBridgeUntilAuthenticated =
+    site.manifest.deferBridgeUntilAuthenticated === true &&
+    typeof authProbeTool === "string" &&
+    authProbeTool.length > 0 &&
+    typeof fallbackAdapterFactory === "function";
+  let deferredAdapter: SiteAdapter | undefined;
+  let deferredAdapterStarted = false;
+
+  const ensureDeferredAdapterStarted = async (page: Page): Promise<SiteAdapter | undefined> => {
+    if (!deferBridgeUntilAuthenticated) {
+      return undefined;
+    }
+    if (!deferredAdapter && fallbackAdapterFactory) {
+      deferredAdapter = fallbackAdapterFactory();
+    }
+    if (!deferredAdapter) {
+      return undefined;
+    }
+    if (!deferredAdapterStarted) {
+      await deferredAdapter.start?.({ page });
+      deferredAdapterStarted = true;
+    }
+    return deferredAdapter;
+  };
+
+  const callDeferredAdapterTool = async (
+    page: Page,
+    name: string,
+    input: JsonValue,
+  ): Promise<JsonValue> => {
+    const adapter = await ensureDeferredAdapterStarted(page);
+    if (!adapter) {
+      throw new Error("SESSION_NOT_AVAILABLE: fallback adapter is unavailable");
+    }
+    return await adapter.callTool({ name, input }, { page });
+  };
+
+  const listDeferredAdapterTools = async (page: Page): Promise<WebMcpToolDefinition[]> => {
+    const adapter = await ensureDeferredAdapterStarted(page);
+    if (!adapter) {
+      return [];
+    }
+    const tools = await adapter.listTools({ page });
+    return tools.map((tool) => ({
+      ...tool,
+      inputSchema: tool.inputSchema ?? { type: "object" },
+    }));
+  };
+
+  const shouldDeferGatewayCreation = async (page: Page): Promise<boolean> => {
+    if (!deferBridgeUntilAuthenticated || !authProbeTool) {
+      return false;
+    }
+    const result = await callDeferredAdapterTool(page, authProbeTool, {} as JsonValue);
+    return shouldDeferBridgeForAuthState(readAuthState(result));
+  };
 
   const initializePageSession = async (navigate = true): Promise<void> => {
     if (!context) {
@@ -341,7 +508,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     });
     currentGatewaySession = undefined;
 
-    const reusablePage = context.pages().find((entry) => !entry.isClosed());
+    const reusablePage = selectPreferredPage(context.pages(), targetUrl, site.manifest.hostPatterns);
     currentPage = reusablePage ?? (await context.newPage());
     pageLifecycleCleanup?.();
     const pageForEvents = currentPage;
@@ -379,7 +546,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     };
     if (navigate) {
       try {
-        await currentPage.goto(targetUrl, {
+        await pageForEvents.goto(targetUrl, {
           waitUntil: "domcontentloaded",
           timeout: NAVIGATION_TIMEOUT_MS,
         });
@@ -388,7 +555,15 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       }
     }
 
-    currentGatewaySession = await createWebMcpPageGateway(currentPage, gatewayOptions);
+    if (await shouldDeferGatewayCreation(pageForEvents)) {
+      pageGatewayResourceCleanup?.();
+      pageGatewayResourceCleanup = undefined;
+      currentMode = deferredAdapter ? "adapter-shim" : "polyfill";
+      gatewayStale = false;
+      return;
+    }
+
+    currentGatewaySession = await createWebMcpPageGateway(pageForEvents, gatewayOptions);
     pageGatewayResourceCleanup?.();
     pageGatewayResourceCleanup = currentGatewaySession.onResourceUpdated((uri) => {
       for (const listener of resourceUpdatedListeners) {
@@ -397,7 +572,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     });
     if (navigate && currentGatewaySession.mode === "polyfill") {
       try {
-        await currentPage.reload({
+        await pageForEvents.reload({
           waitUntil: "domcontentloaded",
           timeout: NAVIGATION_TIMEOUT_MS,
         });
@@ -452,19 +627,36 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     }
   };
 
+  const maybeEnsureGatewaySession = async (): Promise<boolean> => {
+    if (!currentPage || currentPage.isClosed()) {
+      throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+    }
+    if (currentGatewaySession && !gatewayStale) {
+      return true;
+    }
+    await rebuildGatewaySession();
+    return Boolean(currentGatewaySession);
+  };
+
   try {
-    const launchOptions =
-      browserEngine === "chromium"
-        ? createChromiumLaunchOptions(headless, browserChannel)
-        : ({
-            headless,
-            viewport: null,
-          } as {
-            headless: boolean;
-            viewport: null;
-            channel?: string;
-          });
-    context = await launchPersistentContextWithRetry(browserType, userDataDir, launchOptions);
+    if (browserUrl) {
+      const attachedSession = await connectToExternalBrowserContext(browserUrl);
+      browser = attachedSession.browser;
+      context = attachedSession.context;
+    } else {
+      const launchOptions =
+        browserEngine === "chromium"
+          ? createChromiumLaunchOptions(headless, browserChannel, options.chromiumLoginWorkaround)
+          : ({
+              headless,
+              viewport: null,
+            } as {
+              headless: boolean;
+              viewport: null;
+              channel?: string;
+            });
+      context = await launchPersistentContextWithRetry(browserType, userDataDir as string, launchOptions);
+    }
     await initializePageSession();
 
     let closed = false;
@@ -491,37 +683,47 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         await currentPage.bringToFront();
         return "opened";
       }
-      if (gatewayStale || !currentGatewaySession) {
-        await rebuildGatewaySession();
-      }
+      await maybeEnsureGatewaySession();
       await currentPage.bringToFront();
       return "focused";
     };
 
     const gateway: LocalMcpGateway = {
       listTools: async (): Promise<ReadonlyArray<WebMcpToolDefinition>> => {
-        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+        if (!currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        if (!(await maybeEnsureGatewaySession())) {
+          return await listDeferredAdapterTools(currentPage);
         }
         return await withGatewayRecovery(async () => await currentGatewaySession!.listTools());
       },
       callTool: async (name: string, input: Record<string, unknown>): Promise<JsonValue> => {
-        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+        if (!currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        if (!(await maybeEnsureGatewaySession())) {
+          return await callDeferredAdapterTool(currentPage, name, input as JsonValue);
         }
         return await withGatewayRecovery(
           async () => await currentGatewaySession!.callTool(name, input as JsonValue),
         );
       },
       listResources: async (): Promise<ReadonlyArray<WebMcpResourceDefinition>> => {
-        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+        if (!currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        if (!(await maybeEnsureGatewaySession())) {
+          return [];
         }
         return await withGatewayRecovery(async () => await currentGatewaySession!.listResources());
       },
       readResource: async (uri: string): Promise<JsonValue> => {
-        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+        if (!currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        if (!(await maybeEnsureGatewaySession())) {
+          throw new Error(`RESOURCE_NOT_FOUND: ${uri}`);
         }
         return await withGatewayRecovery(async () => await currentGatewaySession!.readResource(uri));
       },

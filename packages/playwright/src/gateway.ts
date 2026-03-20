@@ -291,6 +291,10 @@ export async function createWebMcpPageGateway(
       });
     },
     callTool: async (name: string, input: JsonValue): Promise<JsonValue> => {
+      if (mode === "adapter-shim" && fallbackAdapter) {
+        await ensureFallbackStarted();
+        return await fallbackAdapter.callTool({ name, input }, { page });
+      }
       const payload: { callName: string; callInput: unknown } = {
         callName: name,
         callInput: input,

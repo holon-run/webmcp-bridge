@@ -87,6 +87,24 @@ describe("parseCliArgs", () => {
     expect(parsed.browserChannel).toBe("chrome");
   });
 
+  it("parses an external browser attach url", () => {
+    const parsed = parseCliArgs(["--url", "https://board.holon.run", "--browser-url", "http://127.0.0.1:9222"]);
+    expect(parsed.browser).toBe("chromium");
+    expect(parsed.browserUrl).toBe("http://127.0.0.1:9222");
+  });
+
+  it("parses the chromium login workaround flag", () => {
+    const parsed = parseCliArgs(["--url", "https://board.holon.run", "--chromium-login-workaround"]);
+    expect(parsed.browser).toBe("chromium");
+    expect(parsed.chromiumLoginWorkaround).toBe(true);
+  });
+
+  it("rejects chromium login workaround for non-chromium browsers", () => {
+    expect(() =>
+      parseCliArgs(["--url", "https://board.holon.run", "--browser", "firefox", "--chromium-login-workaround"]),
+    ).toThrow("--chromium-login-workaround requires --browser chromium (received firefox)");
+  });
+
   it("throws on unsupported browser", () => {
     expect(() => parseCliArgs(["--site", "x", "--browser", "edge"])).toThrow(
       "unsupported browser: edge",

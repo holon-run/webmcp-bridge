@@ -85,6 +85,21 @@ importers:
         specifier: ^1.58.2
         version: 1.58.2
 
+  packages/adapter-google:
+    dependencies:
+      '@webmcp-bridge/adapter-utils':
+        specifier: workspace:*
+        version: link:../adapter-utils
+      '@webmcp-bridge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@webmcp-bridge/playwright':
+        specifier: workspace:*
+        version: link:../playwright
+      playwright:
+        specifier: ^1.58.2
+        version: 1.58.2
+
   packages/adapter-utils:
     dependencies:
       playwright:

@@ -44,7 +44,8 @@ describe("resolveSiteSource", () => {
         bridgeApiVersion: "1.0.0",
         defaultUrl: "https://example.com",
         hostPatterns: ["example.com"],
-        authProbeTool: "auth.get"
+        authProbeTool: "auth.get",
+        deferBridgeUntilAuthenticated: true
       };
 
       export function createAdapter() {
@@ -64,6 +65,7 @@ describe("resolveSiteSource", () => {
     expect(site.source).toBe("external");
     expect(site.id).toBe("example.com");
     expect(site.manifest.authProbeTool).toBe("auth.get");
+    expect(site.manifest.deferBridgeUntilAuthenticated).toBe(true);
     expect(typeof site.createFallbackAdapter).toBe("function");
   });
 

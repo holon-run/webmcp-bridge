@@ -10,6 +10,8 @@ import {
   mapNavigationError,
   resolveRecoveryNavigationUrl,
   resolveTargetUrl,
+  selectPreferredPage,
+  shouldDeferBridgeForAuthState,
   shouldEndOwnerSessionAfterPageClose,
   startLocalMcpRuntime,
 } from "../src/runtime.js";
@@ -120,6 +122,66 @@ describe("shouldEndOwnerSessionAfterPageClose", () => {
   });
 });
 
+describe("shouldDeferBridgeForAuthState", () => {
+  it("defers bridge initialization while auth is still required", () => {
+    expect(shouldDeferBridgeForAuthState("auth_required")).toBe(true);
+    expect(shouldDeferBridgeForAuthState("challenge_required")).toBe(true);
+  });
+
+  it("allows bridge initialization after authentication is complete", () => {
+    expect(shouldDeferBridgeForAuthState("authenticated")).toBe(false);
+    expect(shouldDeferBridgeForAuthState(undefined)).toBe(false);
+  });
+});
+
+describe("selectPreferredPage", () => {
+  function createPage(url: string, closed = false) {
+    return {
+      url: () => url,
+      isClosed: () => closed,
+    };
+  }
+
+  it("prefers the exact target url when present", () => {
+    const selected = selectPreferredPage(
+      [
+        createPage("https://www.google.com/search?q=openai"),
+        createPage("https://gemini.google.com/"),
+      ],
+      "https://gemini.google.com/",
+      ["gemini.google.com", "www.google.com"],
+    );
+
+    expect(selected?.url()).toBe("https://gemini.google.com/");
+  });
+
+  it("otherwise prefers pages on the target host over other allowed hosts", () => {
+    const selected = selectPreferredPage(
+      [
+        createPage("https://www.google.com/search?q=openai"),
+        createPage("https://gemini.google.com/app/abc"),
+      ],
+      "https://gemini.google.com/",
+      ["gemini.google.com", "www.google.com"],
+    );
+
+    expect(selected?.url()).toBe("https://gemini.google.com/app/abc");
+  });
+
+  it("falls back to another allowed host when no target-host page exists", () => {
+    const selected = selectPreferredPage(
+      [
+        createPage("chrome-extension://wallet/popup.html"),
+        createPage("https://www.google.com/search?q=openai"),
+      ],
+      "https://gemini.google.com/",
+      ["gemini.google.com", "www.google.com"],
+    );
+
+    expect(selected?.url()).toBe("https://www.google.com/search?q=openai");
+  });
+});
+
 describe("startLocalMcpRuntime", () => {
   it("rejects browser channels for non-chromium engines", async () => {
     await expect(
@@ -141,5 +203,72 @@ describe("startLocalMcpRuntime", () => {
         browserChannel: "chrome",
       }),
     ).rejects.toThrow("CONFIG_ERROR: --browser-channel requires --browser chromium");
+  });
+
+  it("rejects browser attach urls for non-chromium engines", async () => {
+    await expect(
+      startLocalMcpRuntime({
+        siteDefinition: {
+          id: "test",
+          source: "native",
+          manifest: {
+            id: "test",
+            displayName: "Test",
+            version: "0.1.0",
+            bridgeApiVersion: "0.1.0",
+            defaultUrl: "https://example.com",
+            hostPatterns: ["example.com"],
+          },
+        },
+        url: "https://example.com",
+        browser: "firefox",
+        browserUrl: "http://127.0.0.1:9222",
+      }),
+    ).rejects.toThrow("CONFIG_ERROR: --browser-url requires --browser chromium");
+  });
+
+  it("rejects chromium login workaround for non-chromium engines", async () => {
+    await expect(
+      startLocalMcpRuntime({
+        siteDefinition: {
+          id: "test",
+          source: "native",
+          manifest: {
+            id: "test",
+            displayName: "Test",
+            version: "0.1.0",
+            bridgeApiVersion: "0.1.0",
+            defaultUrl: "https://example.com",
+            hostPatterns: ["example.com"],
+          },
+        },
+        url: "https://example.com",
+        browser: "firefox",
+        chromiumLoginWorkaround: true,
+      }),
+    ).rejects.toThrow("CONFIG_ERROR: --chromium-login-workaround requires --browser chromium");
+  });
+
+  it("rejects browser attach urls when a browser channel override is also set", async () => {
+    await expect(
+      startLocalMcpRuntime({
+        siteDefinition: {
+          id: "test",
+          source: "native",
+          manifest: {
+            id: "test",
+            displayName: "Test",
+            version: "0.1.0",
+            bridgeApiVersion: "0.1.0",
+            defaultUrl: "https://example.com",
+            hostPatterns: ["example.com"],
+          },
+        },
+        url: "https://example.com",
+        browser: "chromium",
+        browserUrl: "http://127.0.0.1:9222",
+        browserChannel: "chrome",
+      }),
+    ).rejects.toThrow("CONFIG_ERROR: --browser-url cannot be combined with --browser-channel");
   });
 });

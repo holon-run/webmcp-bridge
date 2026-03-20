@@ -89,6 +89,30 @@ describe("createWebMcpPageGateway", () => {
     expect(adapter.stop).toHaveBeenCalledOnce();
   });
 
+  it("uses fallback adapter tool calls directly in adapter-shim mode", async () => {
+    const { page } = createMockPage("polyfill", [{ name: "native.tool" }]);
+    const adapter = {
+      name: "x",
+      listTools: vi.fn(async () => [{ name: "ping", description: "ping" }]),
+      callTool: vi.fn(async () => ({ ok: true, source: "adapter" })),
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+
+    const gateway = await createWebMcpPageGateway(page as never, { fallbackAdapter: adapter });
+    page.evaluate.mockClear();
+
+    await expect(gateway.callTool("ping", { value: 1 })).resolves.toEqual({
+      ok: true,
+      source: "adapter",
+    });
+
+    expect(adapter.callTool).toHaveBeenCalledWith({ name: "ping", input: { value: 1 } }, { page });
+    expect(page.evaluate).not.toHaveBeenCalled();
+
+    await gateway.close();
+  });
+
   it("uses native list when native mode is available", async () => {
     const { page } = createMockPage("native", [{ name: "native.ping" }]);
 

@@ -70,6 +70,7 @@ function validateManifest(value: unknown): AdapterManifest {
   const defaultUrl = value.defaultUrl;
   const hostPatterns = value.hostPatterns;
   const authProbeTool = value.authProbeTool;
+  const deferBridgeUntilAuthenticated = value.deferBridgeUntilAuthenticated;
 
   if (!isNonEmptyString(id)) {
     throw new Error("ADAPTER_CONTRACT_ERROR: manifest.id must be a non-empty string");
@@ -95,6 +96,14 @@ function validateManifest(value: unknown): AdapterManifest {
   if (authProbeTool !== undefined && !isNonEmptyString(authProbeTool)) {
     throw new Error("ADAPTER_CONTRACT_ERROR: manifest.authProbeTool must be a non-empty string when provided");
   }
+  if (
+    deferBridgeUntilAuthenticated !== undefined &&
+    typeof deferBridgeUntilAuthenticated !== "boolean"
+  ) {
+    throw new Error(
+      "ADAPTER_CONTRACT_ERROR: manifest.deferBridgeUntilAuthenticated must be a boolean when provided",
+    );
+  }
 
   const output: AdapterManifest = {
     id,
@@ -108,6 +117,9 @@ function validateManifest(value: unknown): AdapterManifest {
   }
   if (authProbeTool !== undefined) {
     output.authProbeTool = authProbeTool;
+  }
+  if (deferBridgeUntilAuthenticated !== undefined) {
+    output.deferBridgeUntilAuthenticated = deferBridgeUntilAuthenticated;
   }
   return output;
 }
