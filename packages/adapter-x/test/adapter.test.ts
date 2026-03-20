@@ -185,22 +185,6 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         return undefined;
       }
 
-      if (command.op === "tweet_open_delete_menu") {
-        tweetDeleteMenuOpen = true;
-        return true;
-      }
-
-      if (command.op === "tweet_click_delete_menu_item") {
-        return tweetDeleteMenuOpen;
-      }
-
-      if (command.op === "tweet_confirm_delete") {
-        if (behavior.tweetDeleteConfirmed) {
-          currentUrl = "https://x.com/home";
-        }
-        return undefined;
-      }
-
       if (command.op === "grok_submit") {
         grokSubmitted = true;
         return behavior.grokComposeResult;
@@ -911,6 +895,25 @@ describe("createXAdapter", () => {
       confirmed: true,
       tweetId: "123",
       url: "https://x.com/i/web/status/123",
+    });
+  });
+
+  it("fails closed when tweet delete cannot be confirmed", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      tweetDeleteConfirmed: false,
+    });
+
+    const result = await adapter.callTool(
+      { name: "tweet.delete", input: { id: "123" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "ACTION_UNCONFIRMED",
+        message: "tweet delete was not confirmed",
+      },
     });
   });
 
