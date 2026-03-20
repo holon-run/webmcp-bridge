@@ -14,9 +14,9 @@ import {
   type RequestTemplate,
   TemplateCache,
 } from "@webmcp-bridge/adapter-utils";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, extname, isAbsolute, join } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type { Page } from "playwright";
 
 type XAuthState = "authenticated" | "auth_required" | "challenge_required";
@@ -88,9 +88,25 @@ type TweetMediaArtifact = {
   sourceUrl: string;
 };
 
+type ArticleAttachment = {
+  path: string;
+  name: string;
+};
+
+type ArticleInlineImage = ArticleAttachment & {
+  marker: string;
+  alt?: string;
+};
+
+type ArticleDraftAssets = {
+  markdown: string;
+  inlineImages: ArticleInlineImage[];
+};
+
 export type CreateXAdapterOptions = {
   composeConfirmTimeoutMs?: number;
   grokResponseTimeoutMs?: number;
+  articlePublishTimeoutMs?: number;
   maxPostLength?: number;
 };
 
@@ -99,12 +115,14 @@ const MAX_TIMELINE_LIMIT = 20;
 const MAX_READ_PAGE_CACHE_SIZE = 8;
 const DEFAULT_COMPOSE_CONFIRM_TIMEOUT_MS = 10_000;
 const DEFAULT_GROK_RESPONSE_TIMEOUT_MS = 90_000;
+const DEFAULT_ARTICLE_PUBLISH_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_POST_LENGTH = 280;
 const AUTH_STABILIZE_ATTEMPTS = 6;
 const AUTH_STABILIZE_DELAY_MS = 750;
 const AUTH_WARMUP_TIMEOUT_MS = 12_000;
 const GROK_ARTIFACT_DIR_PREFIX = "webmcp-bridge-grok-";
 const TWEET_MEDIA_ARTIFACT_DIR_PREFIX = "webmcp-bridge-x-media-";
+const ARTICLE_INLINE_IMAGE_MARKER_PREFIX = "[[WEBMCP_INLINE_IMAGE_";
 const ALLOWED_TWEET_MEDIA_HOSTS = new Set(["pbs.twimg.com", "video.twimg.com"]);
 
 const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
@@ -513,6 +531,178 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "article.draftMarkdown",
+    description: "Create one X article draft from a local markdown file",
+    inputSchema: {
+      type: "object",
+      description:
+        "Create one X article draft from a local markdown file. The adapter derives the title from the first markdown heading when title is omitted.",
+      properties: {
+        markdownPath: {
+          type: "string",
+          description: "Absolute local file path to the markdown file to draft.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+        title: {
+          type: "string",
+          description: "Optional title override. When omitted, the first markdown heading becomes the article title.",
+          minLength: 1,
+        },
+        coverImagePath: {
+          type: "string",
+          description: "Optional absolute local image path for the article cover image.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+      },
+      required: ["markdownPath"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.publishMarkdown",
+    description: "Publish one X article from a local markdown file",
+    inputSchema: {
+      type: "object",
+      description:
+        "Create and publish one X article from a local markdown file. The adapter derives the title from the first markdown heading when title is omitted.",
+      properties: {
+        markdownPath: {
+          type: "string",
+          description: "Absolute local file path to the markdown file to publish.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+        title: {
+          type: "string",
+          description: "Optional title override. When omitted, the first markdown heading becomes the article title.",
+          minLength: 1,
+        },
+        coverImagePath: {
+          type: "string",
+          description: "Optional absolute local image path for the article cover image.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+        dryRun: {
+          type: "boolean",
+          description: "When true, validate article creation and editor population without publishing.",
+        },
+      },
+      required: ["markdownPath"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.publish",
+    description: "Publish one existing X article draft by edit url, public url, or id",
+    inputSchema: {
+      type: "object",
+      description: "Open one article editor page and publish the current draft.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Article edit URL or public article URL.",
+          minLength: 1,
+        },
+        id: {
+          type: "string",
+          description: "Article id. Used when url is not provided.",
+          minLength: 1,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.setCoverImage",
+    description: "Set or replace the cover image for one existing X article draft",
+    inputSchema: {
+      type: "object",
+      description: "Open one article editor page and set the cover image for the current draft.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Article edit URL or public article URL.",
+          minLength: 1,
+        },
+        id: {
+          type: "string",
+          description: "Article id. Used when url is not provided.",
+          minLength: 1,
+        },
+        coverImagePath: {
+          type: "string",
+          description: "Absolute local image path for the article cover image.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+      },
+      required: ["coverImagePath"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.updateMarkdown",
+    description: "Replace the title and body of one existing X article draft from a local markdown file",
+    inputSchema: {
+      type: "object",
+      description:
+        "Open one article editor page, replace the current title and body from a local markdown file, and upload any local inline images referenced by markdown image syntax.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Article edit URL or public article URL.",
+          minLength: 1,
+        },
+        id: {
+          type: "string",
+          description: "Article id. Used when url is not provided.",
+          minLength: 1,
+        },
+        markdownPath: {
+          type: "string",
+          description: "Absolute local file path to the markdown file to apply.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+        title: {
+          type: "string",
+          description: "Optional title override. When omitted, the first markdown heading becomes the article title.",
+          minLength: 1,
+        },
+      },
+      required: ["markdownPath"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.delete",
+    description: "Delete one X article draft or published article by edit url, public url, or id",
+    inputSchema: {
+      type: "object",
+      description: "Open one article editor page and delete the article after confirmation.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Article edit URL or public article URL.",
+          minLength: 1,
+        },
+        id: {
+          type: "string",
+          description: "Article id. Used when url is not provided.",
+          minLength: 1,
+        },
+        dryRun: {
+          type: "boolean",
+          description: "When true, validate delete controls without confirming the destructive action.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 function toRecord(value: JsonValue): Record<string, unknown> {
@@ -615,68 +805,6 @@ function parseDataUri(uri: string): { mimeType?: string; buffer: Buffer } | unde
   } catch {
     return undefined;
   }
-}
-
-function toTweetMediaArray(value: unknown): TweetMedia[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const output: TweetMedia[] = [];
-  for (const rawEntry of value) {
-    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
-      continue;
-    }
-    const entry = rawEntry as Record<string, unknown>;
-    const type = entry.type;
-    const url = entry.url;
-    if (
-      (type !== "photo" && type !== "video" && type !== "animated_gif")
-      || typeof url !== "string"
-      || url.trim().length === 0
-    ) {
-      continue;
-    }
-    const media: TweetMedia = {
-      type,
-      url,
-    };
-    if (typeof entry.previewUrl === "string" && entry.previewUrl.trim()) {
-      media.previewUrl = entry.previewUrl;
-    }
-    if (typeof entry.width === "number" && Number.isFinite(entry.width)) {
-      media.width = entry.width;
-    }
-    if (typeof entry.height === "number" && Number.isFinite(entry.height)) {
-      media.height = entry.height;
-    }
-    if (typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)) {
-      media.durationMs = entry.durationMs;
-    }
-    if (Array.isArray(entry.variants)) {
-      const variants = entry.variants.flatMap((rawVariant) => {
-        if (!rawVariant || typeof rawVariant !== "object" || Array.isArray(rawVariant)) {
-          return [];
-        }
-        const variantRecord = rawVariant as Record<string, unknown>;
-        if (typeof variantRecord.url !== "string" || !variantRecord.url.trim()) {
-          return [];
-        }
-        const variant: TweetMediaVariant = { url: variantRecord.url };
-        if (typeof variantRecord.contentType === "string" && variantRecord.contentType.trim()) {
-          variant.contentType = variantRecord.contentType;
-        }
-        if (typeof variantRecord.bitrate === "number" && Number.isFinite(variantRecord.bitrate)) {
-          variant.bitrate = variantRecord.bitrate;
-        }
-        return [variant];
-      });
-      if (variants.length > 0) {
-        media.variants = variants;
-      }
-    }
-    output.push(media);
-  }
-  return output;
 }
 
 function normalizeTweetMediaForDownload(media: TweetMedia): TweetMedia {
@@ -892,6 +1020,97 @@ async function resolveGrokAttachments(input: unknown): Promise<{ ok: true; attac
   }
 
   return { ok: true, attachments };
+}
+
+async function resolveArticleAttachment(
+  value: unknown,
+  fieldName: string,
+): Promise<{ ok: true; attachment?: ArticleAttachment } | { ok: false; result: JsonValue }> {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  const path = typeof value === "string" ? value.trim() : "";
+  if (!path) {
+    return {
+      ok: false,
+      result: errorResult("VALIDATION_ERROR", `${fieldName} must be a non-empty string`),
+    };
+  }
+  if (!isAbsolute(path)) {
+    return {
+      ok: false,
+      result: errorResult("VALIDATION_ERROR", `${fieldName} must be an absolute file path`),
+    };
+  }
+  try {
+    const fileStat = await stat(path);
+    if (!fileStat.isFile()) {
+      return {
+        ok: false,
+        result: errorResult("VALIDATION_ERROR", `${fieldName} must point to a file`),
+      };
+    }
+  } catch {
+    return {
+      ok: false,
+      result: errorResult("VALIDATION_ERROR", `${fieldName} was not found`),
+    };
+  }
+  return {
+    ok: true,
+    attachment: {
+      path,
+      name: basename(path),
+    },
+  };
+}
+
+function stripMarkdownImageDestination(rawDestination: string): string {
+  const trimmed = rawDestination.trim();
+  const withoutAngle = trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1) : trimmed;
+  const titleMatch = withoutAngle.match(/^(.+?)(?:\s+["'(].*)?$/);
+  return (titleMatch?.[1] ?? withoutAngle).trim();
+}
+
+function extractArticleTitle(markdown: string, markdownPath: string, explicitTitle?: string): string {
+  const title = typeof explicitTitle === "string" ? explicitTitle.trim() : "";
+  if (title) {
+    return title;
+  }
+  const headingMatch = markdown.match(/^\s*#\s+(.+?)\s*$/m);
+  if (headingMatch?.[1]) {
+    return headingMatch[1].trim();
+  }
+  return basename(markdownPath, extname(markdownPath)).trim() || "Untitled";
+}
+
+function prepareArticleMarkdown(markdown: string, markdownPath: string): ArticleDraftAssets {
+  const inlineImages: ArticleInlineImage[] = [];
+  let nextIndex = 1;
+  const prepared = markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, altRaw: string, destinationRaw: string) => {
+    const destination = stripMarkdownImageDestination(destinationRaw);
+    if (/^(?:https?:|data:)/i.test(destination)) {
+      return _match;
+    }
+    const resolvedPath = isAbsolute(destination) ? destination : resolve(dirname(markdownPath), destination);
+    const marker = `${ARTICLE_INLINE_IMAGE_MARKER_PREFIX}${nextIndex}]]`;
+    nextIndex += 1;
+    const image: ArticleInlineImage = {
+      marker,
+      path: resolvedPath,
+      name: basename(resolvedPath),
+    };
+    const alt = altRaw.trim();
+    if (alt) {
+      image.alt = alt;
+    }
+    inlineImages.push(image);
+    return `\n\n${marker}\n\n`;
+  });
+  return {
+    markdown: prepared,
+    inlineImages,
+  };
 }
 
 function normalizeTimelineLimit(input: Record<string, unknown>): number {
@@ -1188,6 +1407,7 @@ type ReadPageCacheState = {
 };
 
 const READ_PAGE_CACHE = new WeakMap<Page, ReadPageCacheState>();
+const ARTICLE_DRAFT_PAGE_CACHE = new WeakMap<Page, Map<string, Page>>();
 const PROCESS_TEMPLATE_CACHE = new TemplateCache<ProcessTemplateBucket, RequestTemplate>();
 
 async function readTimelineViaNetwork(
@@ -1440,7 +1660,7 @@ async function readTimelineViaNetwork(
                 item.createdAt = createdAt;
               }
               if (media.length > 0) {
-                item.media = toTweetMediaArray(media);
+                item.media = media as unknown as TweetMedia[];
               }
               outputItems.push(item);
             }
@@ -1750,7 +1970,7 @@ async function extractTweetCards(
       }
       const media = collectDomMedia(article);
       if (media.length > 0) {
-        item.media = toTweetMediaArray(media);
+        item.media = media as unknown as TweetMedia[];
       }
       pushItem(item);
       if (items.length >= maxItems) {
@@ -1779,7 +1999,7 @@ async function extractTweetCards(
         }
         const media = collectDomMedia(cell);
         if (media.length > 0) {
-          item.media = toTweetMediaArray(media);
+          item.media = media as unknown as TweetMedia[];
         }
         pushItem(item);
       }
@@ -2119,6 +2339,56 @@ async function closeCachedReadPages(ownerPage: Page): Promise<void> {
   for (const entry of state.pages.values()) {
     if (!entry.page.isClosed()) {
       await entry.page.close().catch(() => {});
+    }
+  }
+}
+
+function getArticleDraftPageCache(ownerPage: Page): Map<string, Page> {
+  let cache = ARTICLE_DRAFT_PAGE_CACHE.get(ownerPage);
+  if (!cache) {
+    cache = new Map<string, Page>();
+    ARTICLE_DRAFT_PAGE_CACHE.set(ownerPage, cache);
+  }
+  return cache;
+}
+
+async function cacheArticleDraftPage(ownerPage: Page, articleId: string, articlePage: Page): Promise<void> {
+  const cache = getArticleDraftPageCache(ownerPage);
+  const existing = cache.get(articleId);
+  if (existing && existing !== articlePage && !existing.isClosed()) {
+    await existing.close().catch(() => {});
+  }
+  cache.set(articleId, articlePage);
+}
+
+function getCachedArticleDraftPage(ownerPage: Page, articleId: string): Page | undefined {
+  const cache = ARTICLE_DRAFT_PAGE_CACHE.get(ownerPage);
+  const page = cache?.get(articleId);
+  if (!page || page.isClosed()) {
+    cache?.delete(articleId);
+    return undefined;
+  }
+  return page;
+}
+
+async function removeCachedArticleDraftPage(ownerPage: Page, articleId: string): Promise<void> {
+  const cache = ARTICLE_DRAFT_PAGE_CACHE.get(ownerPage);
+  const page = cache?.get(articleId);
+  cache?.delete(articleId);
+  if (page && !page.isClosed()) {
+    await page.close().catch(() => {});
+  }
+}
+
+async function closeCachedArticleDraftPages(ownerPage: Page): Promise<void> {
+  const cache = ARTICLE_DRAFT_PAGE_CACHE.get(ownerPage);
+  ARTICLE_DRAFT_PAGE_CACHE.delete(ownerPage);
+  if (!cache) {
+    return;
+  }
+  for (const articlePage of cache.values()) {
+    if (!articlePage.isClosed()) {
+      await articlePage.close().catch(() => {});
     }
   }
 }
@@ -3074,6 +3344,1061 @@ async function waitForReplyConfirmation(
   return await waitForComposeConfirmation(page, text, secondPassTimeoutMs);
 }
 
+async function waitForArticleEditorSurface(page: Page): Promise<void> {
+  await page
+    .waitForFunction(() => {
+      const title = document.querySelector("textarea[placeholder='Add a title']");
+      const composer = document.querySelector("[data-testid='composer'][role='textbox']");
+      const publishButton = Array.from(document.querySelectorAll("button")).find(
+        (button) => (button.textContent || "").replace(/\s+/g, " ").trim() === "Publish",
+      );
+      return title !== null && composer !== null && publishButton !== undefined;
+    }, undefined, { timeout: 20_000 })
+    .catch(() => {});
+  await page.waitForTimeout(800);
+}
+
+async function ensureArticleDraftLoaded(page: Page, articleId?: string): Promise<void> {
+  if (!articleId) {
+    return;
+  }
+  const hasContent = async (): Promise<boolean> => {
+    return await page.evaluate(() => {
+      const title = document.querySelector("textarea[placeholder='Add a title']");
+      const composer = document.querySelector("[data-testid='composer'][role='textbox']");
+      const titleValue = title instanceof HTMLTextAreaElement ? title.value.trim() : "";
+      const composerText = composer instanceof HTMLElement ? (composer.textContent || "").trim() : "";
+      return titleValue.length > 0 || composerText.length > 0;
+    }).catch(() => false);
+  };
+  if (await hasContent()) {
+    return;
+  }
+  await page.goto("https://x.com/compose/articles", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await page.waitForTimeout(1_200);
+  await page.evaluate(({ targetId }) => {
+    const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
+    const draftAnchor = anchors.find((anchor) => anchor.href.includes(`/compose/articles/edit/${targetId}`));
+    draftAnchor?.click();
+  }, { targetId: articleId }).catch(() => {});
+  await page.waitForTimeout(1_200);
+  if (await hasContent()) {
+    return;
+  }
+  await page.goto(`https://x.com/compose/articles/edit/${articleId}`, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await waitForArticleEditorSurface(page);
+  await page.waitForTimeout(1_000);
+}
+
+async function waitForArticleDraftPersisted(page: Page, articleId: string, title: string): Promise<boolean> {
+  await page
+    .evaluate(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) {
+        active.blur();
+      }
+    })
+    .catch(() => {});
+  await page.keyboard.press("Escape").catch(() => {});
+  return await page
+    .waitForFunction(
+      ({ targetId, expectedTitle }) => {
+        const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
+        const draftAnchor = anchors.find((anchor) => anchor.href.includes(`/compose/articles/edit/${targetId}`));
+        const containerText = draftAnchor?.closest("article, li, div")?.textContent || draftAnchor?.textContent || "";
+        const normalized = containerText.replace(/\s+/g, " ").trim();
+        return normalized.includes(expectedTitle) && !normalized.includes("(Needs title)");
+      },
+      { targetId: articleId, expectedTitle: title.trim() },
+      { timeout: 20_000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function openNewArticleEditor(page: Page): Promise<{ ok: true; editUrl: string } | { ok: false; reason: string }> {
+  await page.goto("https://x.com/compose/articles", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await page.waitForTimeout(2_500);
+
+  let clicked = false;
+  const createSelectors = [
+    "a[data-testid='empty_state_button_text']",
+    "button[aria-label='create']",
+    "a:has-text('Write')",
+  ];
+  for (const selector of createSelectors) {
+    try {
+      await page.click(selector, { timeout: 4_000 });
+      clicked = true;
+      break;
+    } catch {
+      // Try the next known article entry point.
+    }
+  }
+
+  if (!clicked) {
+    const openedExistingDraft = await page
+      .evaluate(() => {
+        const draftAnchor = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]")).find((anchor) => {
+          return anchor.href.includes("/compose/articles/edit/");
+        });
+        if (!draftAnchor) {
+          return false;
+        }
+        draftAnchor.click();
+        return true;
+      })
+      .catch(() => false);
+    if (openedExistingDraft) {
+      try {
+        await page.waitForFunction(
+          () => window.location.pathname.includes("/compose/articles/edit/"),
+          undefined,
+          { timeout: 20_000 },
+        );
+        await waitForArticleEditorSurface(page);
+        return { ok: true, editUrl: page.url() };
+      } catch {
+        // Fall through to existing edit-url fallback below.
+      }
+    }
+    if (page.url().includes("/compose/articles/edit/")) {
+      await waitForArticleEditorSurface(page);
+      return { ok: true, editUrl: page.url() };
+    }
+    return { ok: false, reason: "create_button_not_found" };
+  }
+
+  try {
+    await page.waitForFunction(
+      ({ op }) => op === "article_wait_editor" && window.location.pathname.includes("/compose/articles/edit/"),
+      { op: "article_wait_editor" },
+      {
+      timeout: 20_000,
+      },
+    );
+  } catch {
+    return { ok: false, reason: "edit_url_not_reached" };
+  }
+
+  await waitForArticleEditorSurface(page);
+  const editUrl = page.url();
+  return { ok: true, editUrl };
+}
+
+async function setArticleTitle(page: Page, title: string): Promise<boolean> {
+  const trimmed = title.trim();
+  if (!trimmed) {
+    return false;
+  }
+  let interacted = false;
+  if (typeof (page as { locator?: unknown }).locator === "function") {
+    const titleLocator = page.locator("textarea[placeholder='Add a title']").first();
+    interacted = await titleLocator.click().then(() => true).catch(() => false);
+    if (interacted) {
+      await page.keyboard.press("Meta+A").catch(() => {});
+      await page.keyboard.press("Backspace").catch(() => {});
+      const keyboard = page.keyboard as { insertText?: (value: string) => Promise<void>; type?: (value: string) => Promise<void> };
+      if (typeof keyboard.insertText === "function") {
+        interacted = await keyboard.insertText(trimmed).then(() => true).catch(() => false);
+      } else if (typeof keyboard.type === "function") {
+        interacted = await keyboard.type(trimmed).then(() => true).catch(() => false);
+      } else {
+        interacted = await titleLocator.fill(trimmed).then(() => true).catch(() => false);
+      }
+      await titleLocator.blur().catch(() => {});
+    }
+  }
+  const injected = interacted
+    ? true
+    : await page.evaluate(({ op, value }) => {
+      if (op !== "article_set_title") {
+        return false;
+      }
+      const input = document.querySelector("textarea[placeholder='Add a title']");
+      if (!(input instanceof HTMLTextAreaElement)) {
+        return false;
+      }
+      input.focus();
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }, { op: "article_set_title", value: trimmed }).catch(() => false);
+  if (!injected) {
+    return false;
+  }
+  return await page
+    .waitForFunction(
+      ({ expectedTitle }) => {
+        const input = document.querySelector("textarea[placeholder='Add a title']");
+        return input instanceof HTMLTextAreaElement && input.value.trim() === expectedTitle;
+      },
+      { expectedTitle: trimmed },
+      { timeout: 3_000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function pasteArticleMarkdown(page: Page, markdown: string): Promise<boolean> {
+  let success = false;
+  if (typeof (page as { locator?: unknown }).locator === "function") {
+    const composerLocator = page.locator("[data-testid='composer'][role='textbox']").first();
+    success = await composerLocator.click().then(() => true).catch(() => false);
+    if (success) {
+      const wroteClipboard = await page.evaluate(async ({ value }) => {
+        try {
+          await navigator.clipboard.writeText(value);
+          return true;
+        } catch {
+          return false;
+        }
+      }, { value: markdown }).catch(() => false);
+      if (wroteClipboard) {
+        success = await page.keyboard.press("Meta+V").then(() => true).catch(() => false);
+      }
+      if (!success) {
+        const keyboard = page.keyboard as { insertText?: (value: string) => Promise<void>; type?: (value: string) => Promise<void> };
+        if (typeof keyboard.insertText === "function") {
+          success = await keyboard.insertText(markdown).then(() => true).catch(() => false);
+        } else if (typeof keyboard.type === "function") {
+          success = await keyboard.type(markdown).then(() => true).catch(() => false);
+        }
+      }
+    }
+  }
+  if (!success) {
+    success = await page.evaluate(({ op, markdownText }) => {
+      if (op !== "article_paste_markdown") {
+        return false;
+      }
+      const composer = document.querySelector("[data-testid='composer'][role='textbox']");
+      if (!(composer instanceof HTMLElement)) {
+        return false;
+      }
+      composer.focus();
+      const data = new DataTransfer();
+      data.setData("text/plain", markdownText);
+      data.setData("text/markdown", markdownText);
+      const event = new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      });
+      composer.dispatchEvent(event);
+      return true;
+    }, { op: "article_paste_markdown", markdownText: markdown }).catch(() => false);
+  }
+  if (!success) {
+    return false;
+  }
+  const requiredSnippets = markdown
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(0, 3);
+  if (requiredSnippets.length === 0) {
+    return true;
+  }
+  try {
+    await page.waitForFunction(
+      ({ snippets }) => {
+        const bodyText = document.body?.innerText ?? "";
+        return snippets.every((snippet) => bodyText.includes(snippet));
+      },
+      { snippets: requiredSnippets },
+      { timeout: 10_000 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function triggerArticleCoverUpload(page: Page): Promise<boolean> {
+  return (
+    (await page.evaluate(({ op }) => {
+      if (op !== "article_trigger_cover_upload") {
+        return false;
+      }
+      const hint = Array.from(document.querySelectorAll<HTMLElement>("button, div[role='button'], label, div")).find((element) => {
+        const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+        return text.includes("5:2 aspect ratio");
+      });
+      if (hint) {
+        hint.click();
+        return true;
+      }
+      const button = Array.from(document.querySelectorAll<HTMLElement>("button")).find((element) => {
+        const aria = (element.getAttribute("aria-label") || "").toLowerCase();
+        const text = (element.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        return aria.includes("cover") || text.includes("cover");
+      });
+      if (button) {
+        button.click();
+        return true;
+      }
+      return document.querySelector("input[data-testid='fileInput']") !== null;
+    }, { op: "article_trigger_cover_upload" }).catch(() => false)) === true
+  );
+}
+
+async function triggerArticleInlineImageUpload(page: Page): Promise<boolean> {
+  return (
+    (await page.evaluate(({ op }) => {
+      if (op !== "article_trigger_inline_upload") {
+        return false;
+      }
+      const candidates = [
+        "button[aria-label='Add Media']",
+        "button[aria-label='Add photos or video']",
+      ];
+      for (const selector of candidates) {
+        const button = document.querySelector<HTMLElement>(selector);
+        if (!button) {
+          continue;
+        }
+        button.click();
+        return true;
+      }
+      return document.querySelector("input[data-testid='fileInput']") !== null;
+    }, { op: "article_trigger_inline_upload" }).catch(() => false)) === true
+  );
+}
+
+async function uploadArticleFile(page: Page, filePath: string): Promise<boolean> {
+  try {
+    await page.setInputFiles("input[data-testid='fileInput']", filePath);
+    const applyReady = await page
+      .waitForFunction(() => {
+        const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
+        const apply = buttons.find((button) => (button.textContent || "").replace(/\s+/g, " ").trim() === "Apply");
+        if (!apply) {
+          return false;
+        }
+        const ariaDisabled = (apply.getAttribute("aria-disabled") || "").toLowerCase();
+        return !apply.disabled && ariaDisabled !== "true";
+      }, undefined, { timeout: 8_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (applyReady) {
+      if (typeof (page as { locator?: unknown }).locator === "function") {
+        const applyLocator = page.locator("button:has-text('Apply')").last();
+        await applyLocator.click({ timeout: 2_000, force: true }).catch(() => {});
+      } else {
+        await page.click("button:has-text('Apply')", { timeout: 2_000 }).catch(() => {});
+      }
+      await page
+        .evaluate(() => {
+          const buttons = Array.from(document.querySelectorAll<HTMLElement>("button, div[role='button']")).filter((element) => {
+            const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+            return text === "Apply";
+          });
+          const button = buttons[buttons.length - 1];
+          button?.click();
+        })
+        .catch(() => {});
+      await page
+        .waitForFunction(() => {
+          const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
+          return !buttons.some((button) => (button.textContent || "").replace(/\s+/g, " ").trim() === "Apply");
+        }, undefined, { timeout: 8_000 })
+        .catch(() => {});
+    } else {
+      await page.waitForTimeout(1_500);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function placeArticleCursorAtMarker(page: Page, marker: string): Promise<boolean> {
+  return (
+    (await page.evaluate(({ op, markerText }) => {
+      if (op !== "article_place_marker") {
+        return false;
+      }
+      const composer = document.querySelector("[data-testid='composer'][role='textbox']");
+      if (!(composer instanceof HTMLElement)) {
+        return false;
+      }
+      const walker = document.createTreeWalker(composer, NodeFilter.SHOW_TEXT);
+      let current: Node | null = walker.nextNode();
+      while (current) {
+        const textNode = current as Text;
+        const content = textNode.textContent ?? "";
+        const index = content.indexOf(markerText);
+        if (index >= 0) {
+          const selection = window.getSelection();
+          if (!selection) {
+            return false;
+          }
+          const range = document.createRange();
+          range.setStart(textNode, index);
+          range.setEnd(textNode, index + markerText.length);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          return true;
+        }
+        current = walker.nextNode();
+      }
+      return false;
+    }, { op: "article_place_marker", markerText: marker }).catch(() => false)) === true
+  );
+}
+
+async function deleteArticleSelectedMarker(page: Page): Promise<void> {
+  await page.keyboard.press("Backspace").catch(() => {});
+  await page.waitForTimeout(200);
+}
+
+async function uploadArticleInlineImages(page: Page, images: ArticleInlineImage[]): Promise<{ ok: true } | { ok: false; reason: string }> {
+  for (const image of images) {
+    const resolved = await resolveArticleAttachment(image.path, image.marker);
+    if (!resolved.ok || !resolved.attachment) {
+      return { ok: false, reason: "inline_image_missing" };
+    }
+    const positioned = await placeArticleCursorAtMarker(page, image.marker);
+    if (!positioned) {
+      return { ok: false, reason: "inline_marker_not_found" };
+    }
+    await deleteArticleSelectedMarker(page);
+    const triggered = await triggerArticleInlineImageUpload(page);
+    if (!triggered) {
+      return { ok: false, reason: "inline_upload_trigger_not_found" };
+    }
+    const uploaded = await uploadArticleFile(page, resolved.attachment.path);
+    if (!uploaded) {
+      return { ok: false, reason: "inline_upload_failed" };
+    }
+  }
+  return { ok: true };
+}
+
+async function clearArticleBody(page: Page): Promise<boolean> {
+  let cleared = false;
+  if (typeof (page as { locator?: unknown }).locator === "function") {
+    const composerLocator = page.locator("[data-testid='composer'][role='textbox']").first();
+    cleared = await composerLocator.click().then(() => true).catch(() => false);
+    if (cleared) {
+      await page.keyboard.press("Meta+A").catch(() => {});
+      await page.keyboard.press("Backspace").catch(() => {});
+      await page.waitForTimeout(200);
+    }
+  }
+  if (cleared) {
+    return true;
+  }
+  return await page.evaluate(({ op }) => {
+    if (op !== "article_clear_body") {
+      return false;
+    }
+    const composer = document.querySelector("[data-testid='composer'][role='textbox']");
+    if (!(composer instanceof HTMLElement)) {
+      return false;
+    }
+    composer.focus();
+    composer.textContent = "";
+    composer.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }, { op: "article_clear_body" }).catch(() => false);
+}
+
+function parseArticleIdFromUrl(url: string): string | undefined {
+  const match = url.match(/\/articles\/edit\/(\d+)(?:[/?#]|$)|\/articles\/(\d+)(?:[/?#]|$)/);
+  return match?.[1] ?? match?.[2];
+}
+
+async function publishArticleEditor(
+  page: Page,
+  timeoutMs: number,
+): Promise<
+  | { ok: true; articleId?: string; articleUrl?: string; editUrl: string }
+  | { ok: false; reason: string; details?: Record<string, JsonValue> }
+> {
+  const editUrl = page.url();
+  await page
+    .evaluate(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) {
+        active.blur();
+      }
+    })
+    .catch(() => {});
+  await page.keyboard.press("Escape").catch(() => {});
+  await page
+    .waitForFunction(() => {
+      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
+      return buttons.some((button) => {
+        const label = (button.textContent || "").replace(/\s+/g, " ").trim();
+        const ariaDisabled = (button.getAttribute("aria-disabled") || "").toLowerCase();
+        return label === "Publish" && !button.disabled && ariaDisabled !== "true";
+      });
+    }, undefined, { timeout: Math.min(timeoutMs, 15_000) })
+    .catch(() => {});
+  const clickPrimaryPublish = async (): Promise<boolean> => {
+    return (
+      (await page.evaluate(({ op }) => {
+        if (op !== "article_click_publish") {
+          return false;
+        }
+        const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter((button) => {
+          const label = (button.textContent || "").replace(/\s+/g, " ").trim();
+          const ariaDisabled = (button.getAttribute("aria-disabled") || "").toLowerCase();
+          return label === "Publish" && !button.disabled && ariaDisabled !== "true";
+        });
+        const button = buttons[buttons.length - 1];
+        if (!button) {
+          return false;
+        }
+        button.click();
+        return true;
+      }, { op: "article_click_publish" }).catch(() => false)) === true
+    );
+  };
+
+  if (!(await clickPrimaryPublish())) {
+    const details = await page
+      .evaluate(() => {
+        const titleAreas = Array.from(document.querySelectorAll("textarea")).map((input) => ({
+          placeholder: input.getAttribute("placeholder") || "",
+          value: input instanceof HTMLTextAreaElement ? input.value : "",
+        }));
+        const composers = Array.from(document.querySelectorAll("[data-testid='composer'][role='textbox']")).map((node) => ({
+          text: (node.textContent || "").slice(0, 500),
+        }));
+        const buttonLabels = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+          .map((button) => ({
+            text: (button.textContent || "").replace(/\s+/g, " ").trim(),
+            aria: button.getAttribute("aria-label") || "",
+            disabled: button.disabled || (button.getAttribute("aria-disabled") || "").toLowerCase() === "true",
+          }))
+          .filter((item) => item.text || item.aria)
+          .slice(0, 30);
+        const bodyLines = (document.body?.innerText || "")
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .slice(0, 40);
+        return {
+          currentUrl: window.location.href,
+          titleAreas,
+          composers,
+          buttonLabels,
+          bodyLines,
+        };
+      })
+      .catch(() => undefined);
+    return details
+      ? { ok: false, reason: "publish_button_not_found", details }
+      : { ok: false, reason: "publish_button_not_found" };
+  }
+  await page.waitForTimeout(1_000);
+  await clickPrimaryPublish().catch(() => false);
+
+  try {
+    await page.waitForFunction(
+      ({ previousUrl }) => {
+        const currentUrl = window.location.href;
+        if (!currentUrl.includes("/compose/articles/edit/")) {
+          return true;
+        }
+        if (currentUrl !== previousUrl && !currentUrl.includes("/preview")) {
+          return true;
+        }
+        return (document.body?.innerText || "").includes("Published");
+      },
+      { previousUrl: editUrl },
+      { timeout: timeoutMs },
+    );
+  } catch {
+    return { ok: false, reason: "publish_not_confirmed" };
+  }
+
+  const details = await page.evaluate(({ op }) => {
+    if (op !== "article_collect_publish_details") {
+      return {
+        currentUrl: window.location.href,
+        editUrl: undefined,
+        publicUrl: undefined,
+      };
+    }
+    const editAnchor = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]")).find((anchor) =>
+      anchor.href.includes("/compose/articles/edit/"),
+    );
+    const publicAnchor = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]")).find((anchor) => {
+      return anchor.href.includes("/articles/") && !anchor.href.includes("/compose/articles/edit/");
+    });
+    return {
+      currentUrl: window.location.href,
+      editUrl: editAnchor?.href,
+      publicUrl: publicAnchor?.href,
+    };
+  }, { op: "article_collect_publish_details" }).catch(() => ({ currentUrl: page.url(), editUrl: undefined, publicUrl: undefined }));
+
+  const articleId =
+    parseArticleIdFromUrl(details.currentUrl) ??
+    (typeof details.editUrl === "string" ? parseArticleIdFromUrl(details.editUrl) : undefined) ??
+    undefined;
+  const articleUrl =
+    typeof details.publicUrl === "string" && details.publicUrl.length > 0
+      ? details.publicUrl
+      : !details.currentUrl.includes("/compose/articles/edit/")
+        ? details.currentUrl
+        : undefined;
+
+  const output: { ok: true; articleId?: string; articleUrl?: string; editUrl: string } = {
+    ok: true,
+    editUrl: typeof details.editUrl === "string" && details.editUrl.length > 0 ? details.editUrl : editUrl,
+  };
+  if (articleId) {
+    output.articleId = articleId;
+  }
+  if (articleUrl) {
+    output.articleUrl = articleUrl;
+  }
+  return output;
+}
+
+async function deleteArticleEditor(page: Page, dryRun: boolean): Promise<JsonValue> {
+  const menuOpened = await page.evaluate(({ op }) => {
+    if (op !== "article_open_delete_menu") {
+      return false;
+    }
+    const buttons = Array.from(document.querySelectorAll<HTMLElement>("button[aria-label='More']"));
+    const button = buttons[buttons.length - 1];
+    if (!button) {
+      return false;
+    }
+    button.click();
+    return true;
+  }, { op: "article_open_delete_menu" }).catch(() => false);
+  if (!menuOpened) {
+    return errorResult("UPSTREAM_CHANGED", "article delete controls not found", {
+      reason: "more_button_not_found",
+    });
+  }
+
+  const deleteReady = await page.waitForFunction(() => {
+    return Array.from(document.querySelectorAll<HTMLElement>("[role='menuitem'], button, div[role='button']")).some((element) => {
+      const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+      return text === "Delete Article";
+    });
+  }, undefined, { timeout: 5_000 }).then(() => true).catch(() => false);
+  if (!deleteReady) {
+    return errorResult("UPSTREAM_CHANGED", "article delete controls not found", {
+      reason: "delete_menu_item_not_found",
+    });
+  }
+
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      deleteVisible: true,
+    };
+  }
+
+  const firstDelete = await page.evaluate(({ op }) => {
+    if (op !== "article_click_delete_menu_item") {
+      return false;
+    }
+    const item = Array.from(document.querySelectorAll<HTMLElement>("[role='menuitem'], button, div[role='button']")).find((element) => {
+      const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+      return text === "Delete Article";
+    });
+    if (!item) {
+      return false;
+    }
+    item.click();
+    return true;
+  }, { op: "article_click_delete_menu_item" }).catch(() => false);
+  if (!firstDelete) {
+    return errorResult("UPSTREAM_CHANGED", "article delete controls not found", {
+      reason: "delete_menu_click_failed",
+    });
+  }
+
+  await page.waitForTimeout(700);
+  await page.evaluate(({ op }) => {
+    if (op !== "article_confirm_delete") {
+      return;
+    }
+    const dialog = document.querySelector("[role='dialog'], [data-testid='confirmationSheetDialog']");
+    const dialogButtons = dialog
+      ? Array.from(dialog.querySelectorAll<HTMLElement>("button, div[role='button']"))
+      : [];
+    const dialogConfirm = dialogButtons.find((element) => {
+      const testId = element.getAttribute("data-testid") || "";
+      const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+      return testId === "confirmationSheetConfirm" || text === "Delete Article";
+    });
+    if (dialogConfirm) {
+      dialogConfirm.click();
+      return;
+    }
+    const buttons = Array.from(document.querySelectorAll<HTMLElement>("button, div[role='button']")).filter((element) => {
+      const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+      return text === "Delete Article";
+    });
+    const button = buttons[buttons.length - 1];
+    button?.click();
+  }, { op: "article_confirm_delete" }).catch(() => {});
+
+  const deleted = await page
+    .waitForFunction(() => {
+      const bodyText = document.body?.innerText || "";
+      return window.location.pathname === "/compose/articles" || bodyText.includes("Continue a draft or create a new Article");
+    }, undefined, { timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!deleted) {
+    const details = await page.evaluate(() => {
+      const buttonLabels = Array.from(document.querySelectorAll<HTMLElement>("button, div[role='button']"))
+        .map((element) => ({
+          text: (element.textContent || "").replace(/\s+/g, " ").trim(),
+          aria: element.getAttribute("aria-label") || "",
+          testId: element.getAttribute("data-testid") || "",
+        }))
+        .filter((item) => item.text || item.aria || item.testId)
+        .slice(0, 40);
+      const bodyLines = (document.body?.innerText || "")
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .slice(0, 40);
+      return {
+        currentUrl: window.location.href,
+        dialogOpen: document.querySelector("[role='dialog'], [data-testid='confirmationSheetDialog']") !== null,
+        buttonLabels,
+        bodyLines,
+      };
+    }).catch(() => undefined);
+    return errorResult("ACTION_UNCONFIRMED", "article delete was not confirmed", details);
+  }
+
+  return {
+    ok: true,
+    confirmed: true,
+  };
+}
+
+async function draftArticleMarkdown(
+  page: Page,
+  markdownPath: string,
+  explicitTitle: string | undefined,
+  coverImagePath: string | undefined,
+): Promise<JsonValue> {
+  const resolvedMarkdown = await resolveArticleAttachment(markdownPath, "markdownPath");
+  if (!resolvedMarkdown.ok || !resolvedMarkdown.attachment) {
+    return resolvedMarkdown.ok ? errorResult("VALIDATION_ERROR", "markdownPath was not found") : resolvedMarkdown.result;
+  }
+  const markdown = await readFile(resolvedMarkdown.attachment.path, "utf8").catch(() => undefined);
+  if (markdown === undefined) {
+    return errorResult("VALIDATION_ERROR", `markdownPath was not found: ${markdownPath}`);
+  }
+
+  const title = extractArticleTitle(markdown, resolvedMarkdown.attachment.path, explicitTitle);
+  const draftAssets = prepareArticleMarkdown(markdown, resolvedMarkdown.attachment.path);
+  const resolvedInlineImages: ArticleInlineImage[] = [];
+  for (const image of draftAssets.inlineImages) {
+    const resolved = await resolveArticleAttachment(image.path, image.marker);
+    if (!resolved.ok || !resolved.attachment) {
+      return resolved.ok
+        ? errorResult("VALIDATION_ERROR", `${image.marker} was not found`)
+        : resolved.result;
+    }
+    resolvedInlineImages.push({
+      ...image,
+      path: resolved.attachment.path,
+      name: resolved.attachment.name,
+    });
+  }
+
+  const articlePage = await page.context().newPage();
+  let shouldClose = true;
+  try {
+    await ensureNetworkCaptureInstalled(articlePage);
+    await articlePage.goto("https://x.com/compose/articles", { waitUntil: "domcontentloaded", timeout: 60_000 });
+    const started = await openNewArticleEditor(articlePage);
+    if (!started.ok) {
+      return errorResult("UPSTREAM_CHANGED", "article editor could not be opened", {
+        reason: started.reason,
+      });
+    }
+
+    const titleSet = await setArticleTitle(articlePage, title);
+    if (!titleSet) {
+      return errorResult("UPSTREAM_CHANGED", "article title controls not found");
+    }
+
+    if (coverImagePath) {
+      const resolvedCover = await resolveArticleAttachment(coverImagePath, "coverImagePath");
+      if (!resolvedCover.ok || !resolvedCover.attachment) {
+        return resolvedCover.ok ? errorResult("VALIDATION_ERROR", "coverImagePath was not found") : resolvedCover.result;
+      }
+      const coverTriggered = await triggerArticleCoverUpload(articlePage);
+      if (!coverTriggered) {
+        return errorResult("UPSTREAM_CHANGED", "article cover upload controls not found");
+      }
+      const coverUploaded = await uploadArticleFile(articlePage, resolvedCover.attachment.path);
+      if (!coverUploaded) {
+        return errorResult("UPSTREAM_CHANGED", "article cover upload failed");
+      }
+    }
+
+    const pasted = await pasteArticleMarkdown(articlePage, draftAssets.markdown);
+    if (!pasted) {
+      return errorResult("UPSTREAM_CHANGED", "article markdown paste failed");
+    }
+
+    const inlineUploadResult = await uploadArticleInlineImages(articlePage, resolvedInlineImages);
+    if (!inlineUploadResult.ok) {
+      return errorResult("UPSTREAM_CHANGED", "article inline image upload failed", {
+        reason: inlineUploadResult.reason,
+      });
+    }
+
+    const editUrl = started.editUrl;
+    const articleId = parseArticleIdFromUrl(editUrl);
+
+    const output: Record<string, JsonValue> = {
+      ok: true,
+      editUrl,
+      title,
+      inlineImageCount: resolvedInlineImages.length,
+      hasCoverImage: typeof coverImagePath === "string" && coverImagePath.trim().length > 0,
+    };
+    if (articleId) {
+      output.articleId = articleId;
+      const persisted = await waitForArticleDraftPersisted(articlePage, articleId, title);
+      output.persisted = persisted;
+      output.sessionScoped = !persisted;
+      await cacheArticleDraftPage(page, articleId, articlePage);
+      shouldClose = false;
+    }
+    return output;
+  } finally {
+    if (shouldClose) {
+      await articlePage.close().catch(() => {});
+    }
+  }
+}
+
+async function publishArticleMarkdown(
+  page: Page,
+  markdownPath: string,
+  explicitTitle: string | undefined,
+  coverImagePath: string | undefined,
+  dryRun: boolean,
+  timeoutMs: number,
+): Promise<JsonValue> {
+  const drafted = await draftArticleMarkdown(page, markdownPath, explicitTitle, coverImagePath);
+  if (dryRun) {
+    if (drafted && typeof drafted === "object" && !Array.isArray(drafted) && !("error" in drafted)) {
+      return { ...drafted, dryRun: true };
+    }
+    return drafted;
+  }
+  if (!drafted || typeof drafted !== "object" || Array.isArray(drafted) || ("error" in drafted)) {
+    return drafted;
+  }
+  const editUrl = typeof drafted.editUrl === "string" ? drafted.editUrl : "";
+  if (!editUrl) {
+    return errorResult("UPSTREAM_CHANGED", "article draft edit url not found");
+  }
+  return await withEphemeralPage(page, editUrl, async (articlePage) => {
+    await waitForArticleEditorSurface(articlePage);
+    const published = await publishArticleEditor(articlePage, timeoutMs);
+    if (!published.ok) {
+      const details: Record<string, JsonValue> = {
+        reason: published.reason,
+      };
+      if (published.details) {
+        details.debug = published.details;
+      }
+      return errorResult("ACTION_UNCONFIRMED", "article publish was not confirmed", {
+        ...details,
+      });
+    }
+    const output: Record<string, JsonValue> = {
+      ...drafted,
+      confirmed: true,
+      editUrl: published.editUrl,
+    };
+    if (published.articleId) {
+      output.articleId = published.articleId;
+    }
+    if (published.articleUrl) {
+      output.articleUrl = published.articleUrl;
+    }
+    return output;
+  });
+}
+
+async function publishExistingArticle(page: Page, targetUrl: string, timeoutMs: number): Promise<JsonValue> {
+  const articleId = parseArticleIdFromUrl(targetUrl);
+  const cachedPage = articleId ? getCachedArticleDraftPage(page, articleId) : undefined;
+  const runPublish = async (articlePage: Page): Promise<JsonValue> => {
+    await waitForArticleEditorSurface(articlePage);
+    await ensureArticleDraftLoaded(articlePage, articleId);
+    const published = await publishArticleEditor(articlePage, timeoutMs);
+    if (!published.ok) {
+      const details: Record<string, JsonValue> = {
+        reason: published.reason,
+      };
+      if (published.details) {
+        details.debug = published.details;
+      }
+      return errorResult("ACTION_UNCONFIRMED", "article publish was not confirmed", details);
+    }
+    const output: Record<string, JsonValue> = {
+      ok: true,
+      confirmed: true,
+      editUrl: published.editUrl,
+    };
+    if (published.articleId) {
+      output.articleId = published.articleId;
+    }
+    if (published.articleUrl) {
+      output.articleUrl = published.articleUrl;
+    }
+    return output;
+  };
+  if (cachedPage) {
+    const result = await runPublish(cachedPage);
+    if (articleId && (!result || typeof result !== "object" || Array.isArray(result) || !("error" in result))) {
+      await removeCachedArticleDraftPage(page, articleId);
+    }
+    return result;
+  }
+  return await withEphemeralPage(page, targetUrl, runPublish);
+}
+
+async function withArticleDraftPage<T>(
+  ownerPage: Page,
+  targetUrl: string,
+  run: (articlePage: Page, articleId?: string, sessionScoped?: boolean) => Promise<T>,
+): Promise<T> {
+  const articleId = parseArticleIdFromUrl(targetUrl);
+  const cachedPage = articleId ? getCachedArticleDraftPage(ownerPage, articleId) : undefined;
+  if (cachedPage) {
+    const cachedUrl = cachedPage.url();
+    const cachedArticleId = parseArticleIdFromUrl(cachedUrl);
+    if (!articleId || cachedArticleId === articleId) {
+      await waitForArticleEditorSurface(cachedPage);
+      await ensureArticleDraftLoaded(cachedPage, articleId);
+      return await run(cachedPage, articleId, true);
+    }
+  }
+  return await withEphemeralPage(ownerPage, targetUrl, async (articlePage) => {
+    await waitForArticleEditorSurface(articlePage);
+    await ensureArticleDraftLoaded(articlePage, articleId);
+    return await run(articlePage, articleId, false);
+  });
+}
+
+async function setArticleCoverImage(
+  page: Page,
+  targetUrl: string,
+  coverImagePath: string,
+): Promise<JsonValue> {
+  const resolvedCover = await resolveArticleAttachment(coverImagePath, "coverImagePath");
+  if (!resolvedCover.ok || !resolvedCover.attachment) {
+    return resolvedCover.ok ? errorResult("VALIDATION_ERROR", "coverImagePath was not found") : resolvedCover.result;
+  }
+  const coverAttachment = resolvedCover.attachment;
+  return await withArticleDraftPage(page, targetUrl, async (articlePage, articleId, sessionScoped) => {
+    const coverTriggered = await triggerArticleCoverUpload(articlePage);
+    if (!coverTriggered) {
+      return errorResult("UPSTREAM_CHANGED", "article cover upload controls not found");
+    }
+    const coverUploaded = await uploadArticleFile(articlePage, coverAttachment.path);
+    if (!coverUploaded) {
+      return errorResult("UPSTREAM_CHANGED", "article cover upload failed");
+    }
+    const output: Record<string, JsonValue> = {
+      ok: true,
+      editUrl: articlePage.url(),
+      hasCoverImage: true,
+    };
+    if (articleId) {
+      output.articleId = articleId;
+      output.sessionScoped = sessionScoped === true;
+    }
+    return output;
+  });
+}
+
+async function updateArticleMarkdown(
+  page: Page,
+  targetUrl: string,
+  markdownPath: string,
+  explicitTitle: string | undefined,
+): Promise<JsonValue> {
+  const resolvedMarkdown = await resolveArticleAttachment(markdownPath, "markdownPath");
+  if (!resolvedMarkdown.ok || !resolvedMarkdown.attachment) {
+    return resolvedMarkdown.ok ? errorResult("VALIDATION_ERROR", "markdownPath was not found") : resolvedMarkdown.result;
+  }
+  const markdown = await readFile(resolvedMarkdown.attachment.path, "utf8").catch(() => undefined);
+  if (markdown === undefined) {
+    return errorResult("VALIDATION_ERROR", `markdownPath was not found: ${markdownPath}`);
+  }
+  const title = extractArticleTitle(markdown, resolvedMarkdown.attachment.path, explicitTitle);
+  const draftAssets = prepareArticleMarkdown(markdown, resolvedMarkdown.attachment.path);
+  const resolvedInlineImages: ArticleInlineImage[] = [];
+  for (const image of draftAssets.inlineImages) {
+    const resolved = await resolveArticleAttachment(image.path, image.marker);
+    if (!resolved.ok || !resolved.attachment) {
+      return resolved.ok
+        ? errorResult("VALIDATION_ERROR", `${image.marker} was not found`)
+        : resolved.result;
+    }
+    resolvedInlineImages.push({
+      ...image,
+      path: resolved.attachment.path,
+      name: resolved.attachment.name,
+    });
+  }
+  return await withArticleDraftPage(page, targetUrl, async (articlePage, articleId, sessionScoped) => {
+    const titleSet = await setArticleTitle(articlePage, title);
+    if (!titleSet) {
+      return errorResult("UPSTREAM_CHANGED", "article title controls not found");
+    }
+    const cleared = await clearArticleBody(articlePage);
+    if (!cleared) {
+      return errorResult("UPSTREAM_CHANGED", "article body controls not found");
+    }
+    const pasted = await pasteArticleMarkdown(articlePage, draftAssets.markdown);
+    if (!pasted) {
+      return errorResult("UPSTREAM_CHANGED", "article markdown paste failed");
+    }
+    const inlineUploadResult = await uploadArticleInlineImages(articlePage, resolvedInlineImages);
+    if (!inlineUploadResult.ok) {
+      return errorResult("UPSTREAM_CHANGED", "article inline image upload failed", {
+        reason: inlineUploadResult.reason,
+      });
+    }
+    const output: Record<string, JsonValue> = {
+      ok: true,
+      title,
+      editUrl: articlePage.url(),
+      inlineImageCount: resolvedInlineImages.length,
+    };
+    if (articleId) {
+      output.articleId = articleId;
+      const persisted = await waitForArticleDraftPersisted(articlePage, articleId, title);
+      output.persisted = persisted;
+      output.sessionScoped = sessionScoped === true || !persisted;
+    }
+    return output;
+  });
+}
+
 async function waitForGrokSurface(page: Page): Promise<void> {
   await page
     .waitForFunction(() => {
@@ -4017,6 +5342,7 @@ async function requireAuthenticated(page: Page): Promise<
 export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
   const composeConfirmTimeoutMs = options?.composeConfirmTimeoutMs ?? DEFAULT_COMPOSE_CONFIRM_TIMEOUT_MS;
   const grokResponseTimeoutMs = options?.grokResponseTimeoutMs ?? DEFAULT_GROK_RESPONSE_TIMEOUT_MS;
+  const articlePublishTimeoutMs = options?.articlePublishTimeoutMs ?? DEFAULT_ARTICLE_PUBLISH_TIMEOUT_MS;
   const maxPostLength = options?.maxPostLength ?? DEFAULT_MAX_POST_LENGTH;
 
   return {
@@ -4328,10 +5654,168 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         );
       }
 
+      if (name === "article.draftMarkdown") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+
+        const markdownPath = typeof args.markdownPath === "string" ? args.markdownPath.trim() : "";
+        if (!markdownPath) {
+          return errorResult("VALIDATION_ERROR", "markdownPath is required");
+        }
+        const explicitTitle = typeof args.title === "string" ? args.title.trim() : "";
+        const coverImagePath = typeof args.coverImagePath === "string" ? args.coverImagePath.trim() : "";
+        return await draftArticleMarkdown(
+          page,
+          markdownPath,
+          explicitTitle || undefined,
+          coverImagePath || undefined,
+        );
+      }
+
+      if (name === "article.publishMarkdown") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+
+        const markdownPath = typeof args.markdownPath === "string" ? args.markdownPath.trim() : "";
+        if (!markdownPath) {
+          return errorResult("VALIDATION_ERROR", "markdownPath is required");
+        }
+        const explicitTitle = typeof args.title === "string" ? args.title.trim() : "";
+        const coverImagePath = typeof args.coverImagePath === "string" ? args.coverImagePath.trim() : "";
+        const dryRun = args.dryRun === true;
+        return await publishArticleMarkdown(
+          page,
+          markdownPath,
+          explicitTitle || undefined,
+          coverImagePath || undefined,
+          dryRun,
+          articlePublishTimeoutMs,
+        );
+      }
+
+      if (name === "article.publish") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
+        if (!articleId && !url) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const targetUrl =
+          url && url.includes("/compose/articles/edit/")
+            ? url
+            : articleId
+              ? `https://x.com/compose/articles/edit/${articleId}`
+              : url;
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        return await publishExistingArticle(page, targetUrl, articlePublishTimeoutMs);
+      }
+
+      if (name === "article.setCoverImage") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
+        if (!articleId && !url) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const coverImagePath = typeof args.coverImagePath === "string" ? args.coverImagePath.trim() : "";
+        if (!coverImagePath) {
+          return errorResult("VALIDATION_ERROR", "coverImagePath is required");
+        }
+        const targetUrl =
+          url && url.includes("/compose/articles/edit/")
+            ? url
+            : articleId
+              ? `https://x.com/compose/articles/edit/${articleId}`
+              : url;
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        return await setArticleCoverImage(page, targetUrl, coverImagePath);
+      }
+
+      if (name === "article.updateMarkdown") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
+        if (!articleId && !url) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const markdownPath = typeof args.markdownPath === "string" ? args.markdownPath.trim() : "";
+        if (!markdownPath) {
+          return errorResult("VALIDATION_ERROR", "markdownPath is required");
+        }
+        const explicitTitle = typeof args.title === "string" ? args.title.trim() : "";
+        const targetUrl =
+          url && url.includes("/compose/articles/edit/")
+            ? url
+            : articleId
+              ? `https://x.com/compose/articles/edit/${articleId}`
+              : url;
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        return await updateArticleMarkdown(page, targetUrl, markdownPath, explicitTitle || undefined);
+      }
+
+      if (name === "article.delete") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const dryRun = args.dryRun === true;
+        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
+        if (!articleId && !url) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const targetUrl =
+          url && url.includes("/compose/articles/edit/")
+            ? url
+            : articleId
+              ? `https://x.com/compose/articles/edit/${articleId}`
+              : url;
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const cachedPage = articleId ? getCachedArticleDraftPage(page, articleId) : undefined;
+        if (cachedPage) {
+          const result = await deleteArticleEditor(cachedPage, dryRun);
+          if (!dryRun && articleId && (!result || typeof result !== "object" || Array.isArray(result) || !("error" in result))) {
+            await removeCachedArticleDraftPage(page, articleId);
+          }
+          return result;
+        }
+        return await withEphemeralPage(page, targetUrl, async (articlePage) => {
+          await waitForArticleEditorSurface(articlePage);
+          return await deleteArticleEditor(articlePage, dryRun);
+        });
+      }
+
       return errorResult("TOOL_NOT_FOUND", `unknown tool: ${name}`);
     },
     stop: async ({ page }) => {
       await closeCachedReadPages(page);
+      await closeCachedArticleDraftPages(page);
     },
   };
 }
