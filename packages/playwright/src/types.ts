@@ -29,6 +29,11 @@ export type AdapterManifest = {
   bridgeApiVersion: string;
   defaultUrl?: string;
   hostPatterns: string[];
+  authPolicy?: {
+    mode: "none" | "bootstrap_then_attach";
+    authProbeTool?: string;
+    allowAnonymousTools?: boolean;
+  };
   authProbeTool?: string;
   deferBridgeUntilAuthenticated?: boolean;
 };

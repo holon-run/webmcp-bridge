@@ -13,7 +13,10 @@ export const manifest: AdapterManifest = {
   bridgeApiVersion: "1.0.0",
   defaultUrl: "https://x.com/home",
   hostPatterns: ["x.com", "www.x.com", "*.x.com"],
-  authProbeTool: "auth.get",
+  authPolicy: {
+    mode: "none",
+    authProbeTool: "auth.get",
+  },
 };
 
 export function createAdapter() {

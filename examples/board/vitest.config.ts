@@ -12,6 +12,8 @@ export default defineConfig({
       "@webmcp-bridge/core": new URL("../../packages/core/src/index.ts", import.meta.url).pathname,
       "@webmcp-bridge/playwright": new URL("../../packages/playwright/src/index.ts", import.meta.url).pathname,
       "@webmcp-bridge/local-mcp": new URL("../../packages/local-mcp/src/index.ts", import.meta.url).pathname,
+      "@webmcp-bridge/adapter-google": new URL("../../packages/adapter-google/src/index.ts", import.meta.url)
+        .pathname,
       "@webmcp-bridge/adapter-x": new URL("../../packages/adapter-x/src/index.ts", import.meta.url).pathname,
       "@webmcp-bridge/adapter-fixture": new URL("../../packages/adapter-fixture/src/index.ts", import.meta.url).pathname,
       "@webmcp-bridge/testkit": new URL("../../packages/testkit/src/index.ts", import.meta.url).pathname,

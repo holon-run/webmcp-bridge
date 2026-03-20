@@ -75,6 +75,11 @@ describe("parseCliArgs", () => {
     expect(parsed.autoLoginFallback).toBe(true);
   });
 
+  it("parses google site id", () => {
+    const parsed = parseCliArgs(["--site", "google"]);
+    expect(parsed.site).toBe("google");
+  });
+
   it("allows disabling auto login fallback", () => {
     const parsed = parseCliArgs(["--site", "x", "--headless", "--no-auto-login-fallback"]);
     expect(parsed.headless).toBe(true);
@@ -129,6 +134,12 @@ describe("resolveSiteDefinition", () => {
     const site = resolveSiteDefinition("fixture");
     expect(site.manifest.defaultUrl).toBe("about:blank");
     expect(site.manifest.hostPatterns).toContain("about:blank");
+  });
+
+  it("resolves google site preset", () => {
+    const site = resolveSiteDefinition("google");
+    expect(site.manifest.defaultUrl).toContain("gemini.google.com");
+    expect(site.manifest.hostPatterns).toContain("google.com");
   });
 
   it("throws on unsupported site", () => {

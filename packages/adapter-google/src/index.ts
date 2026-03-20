@@ -894,8 +894,11 @@ export const manifest: AdapterManifest = {
   bridgeApiVersion: "1.0.0",
   defaultUrl: GEMINI_URL,
   hostPatterns: ["google.com", "*.google.com"],
-  authProbeTool: "auth.get",
-  deferBridgeUntilAuthenticated: true,
+  authPolicy: {
+    mode: "bootstrap_then_attach",
+    authProbeTool: "auth.get",
+    allowAnonymousTools: true,
+  },
 };
 
 export function createAdapter(): SiteAdapter {

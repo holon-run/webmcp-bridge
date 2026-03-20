@@ -26,6 +26,7 @@ import {
   type Page,
 } from "playwright";
 import type { LocalMcpGateway } from "./server.js";
+import { resolveAuthPolicy } from "./session.js";
 import type { SiteDefinition } from "./sites.js";
 
 const NAVIGATION_TIMEOUT_MS = 5_000;
@@ -443,9 +444,11 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   if (fallbackAdapterFactory) {
     gatewayOptions.fallbackAdapter = fallbackAdapterFactory();
   }
-  const authProbeTool = site.manifest.authProbeTool;
+  const authPolicy = resolveAuthPolicy(site.manifest);
+  const authProbeTool = authPolicy.authProbeTool;
   const deferBridgeUntilAuthenticated =
-    site.manifest.deferBridgeUntilAuthenticated === true &&
+    authPolicy.mode === "bootstrap_then_attach" &&
+    authPolicy.allowAnonymousTools &&
     typeof authProbeTool === "string" &&
     authProbeTool.length > 0 &&
     typeof fallbackAdapterFactory === "function";

@@ -18,6 +18,12 @@ import {
 import type { WebMcpResourceDefinition, WebMcpToolDefinition } from "@webmcp-bridge/playwright";
 import type { Readable, Writable } from "node:stream";
 import type { McpToolDefinition } from "./mcp-types.js";
+import type {
+  BridgeAuthState,
+  BridgeControlMode,
+  BridgeSessionOwnership,
+  BridgeSessionState,
+} from "./session.js";
 
 export type LocalMcpGateway = {
   listTools: () => Promise<ReadonlyArray<WebMcpToolDefinition>>;
@@ -30,10 +36,17 @@ export type LocalMcpGateway = {
 export type LocalBridgeState = {
   site: string;
   targetUrl: string;
-  controlMode: "launch" | "attach";
+  controlMode: BridgeControlMode;
   browserUrl?: string;
-  mode: "native" | "polyfill" | "adapter-shim";
+  mode: "native" | "polyfill" | "adapter-shim" | "control-only";
   headless: boolean;
+  authPolicyMode: "none" | "bootstrap_then_attach";
+  authState: BridgeAuthState;
+  sessionState: BridgeSessionState;
+  ownership: BridgeSessionOwnership;
+  profilePath?: string;
+  browserPid?: number;
+  lastBackupPath?: string;
 };
 
 export type LocalBridgeSessionRestartOptions = {
@@ -45,8 +58,10 @@ export type LocalBridgeSessionRestartOptions = {
 export type LocalBridgeControl = {
   getState: () => LocalBridgeState;
   openWindow: () => Promise<"focused" | "opened">;
-  attachSession: (browserUrl: string) => Promise<LocalBridgeState>;
+  bootstrapSession: () => Promise<LocalBridgeState>;
+  attachSession: (browserUrl?: string) => Promise<LocalBridgeState>;
   restartSession: (options: LocalBridgeSessionRestartOptions) => Promise<LocalBridgeState>;
+  resetProfile: () => Promise<LocalBridgeState>;
   closeBridge: () => Promise<void>;
 };
 
@@ -349,6 +364,11 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         },
       },
       {
+        name: "bridge.session.bootstrap",
+        description: "Launch a normal browser for manual sign-in on the managed site profile.",
+        inputSchema: { type: "object", additionalProperties: false },
+      },
+      {
         name: "bridge.session.attach",
         description: "Restart the current local-mcp bridge session in attach mode against an existing Chromium browser.",
         inputSchema: {
@@ -358,7 +378,6 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
               type: "string",
             },
           },
-          required: ["browserUrl"],
           additionalProperties: false,
         },
       },
@@ -388,6 +407,11 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         inputSchema: { type: "object", additionalProperties: false },
       },
       {
+        name: "bridge.session.reset_profile",
+        description: "Back up and reset the managed browser profile for the current local-mcp bridge session.",
+        inputSchema: { type: "object", additionalProperties: false },
+      },
+      {
         name: "bridge.open",
         description: "Legacy alias for bridge.window.open.",
         inputSchema: { type: "object", additionalProperties: false },
@@ -409,18 +433,23 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     return (
       name === "bridge.window.open" ||
       name === "bridge.session.status" ||
+      name === "bridge.session.bootstrap" ||
       name === "bridge.session.attach" ||
       name === "bridge.session.restart" ||
       name === "bridge.session.stop" ||
+      name === "bridge.session.reset_profile" ||
       name === "bridge.open" ||
       name === "bridge.close"
     );
   }
 
-  private parseRequiredBrowserUrl(input: Record<string, unknown>): string {
+  private parseOptionalBrowserUrl(input: Record<string, unknown>): string | undefined {
     const browserUrl = input.browserUrl;
+    if (browserUrl === undefined) {
+      return undefined;
+    }
     if (typeof browserUrl !== "string" || !browserUrl.trim()) {
-      throw new Error("INVALID_ARGUMENT: browserUrl must be a non-empty string");
+      throw new Error("INVALID_ARGUMENT: browserUrl must be a non-empty string when provided");
     }
     return browserUrl.trim();
   }
@@ -497,12 +526,31 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
           ...(state.browserUrl !== undefined ? { browserUrl: state.browserUrl } : {}),
           mode: state.mode,
           headless: state.headless,
+          authPolicyMode: state.authPolicyMode,
+          authState: state.authState,
+          sessionState: state.sessionState,
+          ownership: state.ownership,
+          ...(state.profilePath !== undefined ? { profilePath: state.profilePath } : {}),
+          ...(state.browserPid !== undefined ? { browserPid: state.browserPid } : {}),
+          ...(state.lastBackupPath !== undefined ? { lastBackupPath: state.lastBackupPath } : {}),
         },
       };
     }
+    if (name === "bridge.session.bootstrap") {
+      try {
+        const nextState = await options.bridgeControl.bootstrapSession();
+        return {
+          ok: true,
+          session: nextState,
+          bootstrapped: true,
+        };
+      } catch (error) {
+        return this.toBridgeErrorResult(error);
+      }
+    }
     if (name === "bridge.session.attach") {
       try {
-        const nextState = await options.bridgeControl.attachSession(this.parseRequiredBrowserUrl(input));
+        const nextState = await options.bridgeControl.attachSession(this.parseOptionalBrowserUrl(input));
         return {
           ok: true,
           session: nextState,
@@ -519,6 +567,18 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
           ok: true,
           session: nextState,
           restarted: true,
+        };
+      } catch (error) {
+        return this.toBridgeErrorResult(error);
+      }
+    }
+    if (name === "bridge.session.reset_profile") {
+      try {
+        const nextState = await options.bridgeControl.resetProfile();
+        return {
+          ok: true,
+          session: nextState,
+          reset: true,
         };
       } catch (error) {
         return this.toBridgeErrorResult(error);
@@ -545,6 +605,13 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       ...(state.browserUrl !== undefined ? { browserUrl: state.browserUrl } : {}),
       mode: state.mode,
       headless: state.headless,
+      authPolicyMode: state.authPolicyMode,
+      authState: state.authState,
+      sessionState: state.sessionState,
+      ownership: state.ownership,
+      ...(state.profilePath !== undefined ? { profilePath: state.profilePath } : {}),
+      ...(state.browserPid !== undefined ? { browserPid: state.browserPid } : {}),
+      ...(state.lastBackupPath !== undefined ? { lastBackupPath: state.lastBackupPath } : {}),
       closing: true,
     };
   }

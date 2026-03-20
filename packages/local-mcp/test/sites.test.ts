@@ -44,8 +44,11 @@ describe("resolveSiteSource", () => {
         bridgeApiVersion: "1.0.0",
         defaultUrl: "https://example.com",
         hostPatterns: ["example.com"],
-        authProbeTool: "auth.get",
-        deferBridgeUntilAuthenticated: true
+        authPolicy: {
+          mode: "bootstrap_then_attach",
+          authProbeTool: "auth.get",
+          allowAnonymousTools: true
+        }
       };
 
       export function createAdapter() {
@@ -64,9 +67,44 @@ describe("resolveSiteSource", () => {
 
     expect(site.source).toBe("external");
     expect(site.id).toBe("example.com");
-    expect(site.manifest.authProbeTool).toBe("auth.get");
-    expect(site.manifest.deferBridgeUntilAuthenticated).toBe(true);
+    expect(site.manifest.authPolicy).toEqual({
+      mode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+    });
     expect(typeof site.createFallbackAdapter).toBe("function");
+  });
+
+  it("still accepts legacy auth manifest fields", async () => {
+    const module = await createTempAdapterModule(`
+      export const manifest = {
+        id: "legacy.example",
+        displayName: "Legacy",
+        version: "0.1.0",
+        bridgeApiVersion: "1.0.0",
+        hostPatterns: ["legacy.example"],
+        authProbeTool: "auth.get",
+        deferBridgeUntilAuthenticated: true
+      };
+
+      export function createAdapter() {
+        return {
+          name: "adapter-legacy",
+          listTools: async () => [],
+          callTool: async () => ({ state: "authenticated" })
+        };
+      }
+    `);
+
+    const site = await resolveSiteSource({
+      adapterModule: module.path,
+    });
+
+    expect(site.manifest.authPolicy).toEqual({
+      mode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+    });
   });
 
   it("throws when both site and adapter-module are provided", async () => {
