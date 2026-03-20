@@ -96,20 +96,19 @@ function createChromiumLaunchOptions(
 ): {
   headless: boolean;
   viewport: null;
-  chromiumSandbox: boolean;
+  chromiumSandbox?: boolean;
   channel?: string;
   ignoreDefaultArgs?: string[];
 } {
   const launchOptions: {
     headless: boolean;
     viewport: null;
-    chromiumSandbox: boolean;
+    chromiumSandbox?: boolean;
     channel?: string;
     ignoreDefaultArgs?: string[];
   } = {
     headless,
     viewport: null,
-    chromiumSandbox: true,
   };
   if (isChromiumAutomationWorkaroundEnabled(chromiumLoginWorkaround)) {
     // Experimental: remove the most obvious automation marker for login surfaces.
@@ -117,6 +116,7 @@ function createChromiumLaunchOptions(
   }
   if (browserChannel) {
     launchOptions.channel = browserChannel;
+    launchOptions.chromiumSandbox = true;
   }
   return launchOptions;
 }
