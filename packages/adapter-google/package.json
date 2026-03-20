@@ -1,0 +1,43 @@
+{
+  "name": "@webmcp-bridge/adapter-google",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Fallback WebMCP adapter for Google Search and Gemini when native WebMCP is unavailable.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/adapter-google",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holon-run/webmcp-bridge.git",
+    "directory": "packages/adapter-google"
+  },
+  "bugs": {
+    "url": "https://github.com/holon-run/webmcp-bridge/issues"
+  },
+  "keywords": [
+    "webmcp",
+    "mcp",
+    "adapter",
+    "google",
+    "gemini",
+    "playwright"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@webmcp-bridge/core": "workspace:*",
+    "@webmcp-bridge/playwright": "workspace:*"
+  },
+  "license": "MIT"
+}

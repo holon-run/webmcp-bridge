@@ -29,6 +29,8 @@ export type StartLocalMcpBridgeOptions = {
   url?: string;
   browser?: BrowserEngine;
   browserChannel?: BrowserChannel;
+  browserUrl?: string;
+  chromiumLoginWorkaround?: boolean;
   headless?: boolean;
   userDataDir?: string;
   preferNative?: boolean;
@@ -74,6 +76,8 @@ async function startRuntime(
     url?: string;
     browser?: BrowserEngine;
     browserChannel?: BrowserChannel;
+    browserUrl?: string;
+    chromiumLoginWorkaround?: boolean;
     userDataDir?: string;
     preferNative?: boolean;
   };
@@ -88,6 +92,12 @@ async function startRuntime(
   }
   if (options.browserChannel !== undefined) {
     runtimeOptions.browserChannel = options.browserChannel;
+  }
+  if (options.browserUrl !== undefined) {
+    runtimeOptions.browserUrl = options.browserUrl;
+  }
+  if (options.chromiumLoginWorkaround !== undefined) {
+    runtimeOptions.chromiumLoginWorkaround = options.chromiumLoginWorkaround;
   }
   if (options.preferNative !== undefined) {
     runtimeOptions.preferNative = options.preferNative;

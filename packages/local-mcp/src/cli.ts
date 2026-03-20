@@ -39,6 +39,8 @@ Optional:
   --url <url>                  Target URL (required when no source is set; otherwise overrides adapter default URL)
   --browser <name>             chromium | firefox | webkit (default: chromium)
   --browser-channel <name>     chromium channel: chrome | chrome-beta | chrome-dev | chrome-canary | msedge | msedge-beta | msedge-dev | msedge-canary
+  --browser-url <url>          Attach to an existing Chromium browser over CDP instead of launching a new browser
+  --chromium-login-workaround  ignore --enable-automation for chromium login flows
   --headless                   Run browser in headless mode (default: false)
   --no-headless                Force headed mode
   --auto-login-fallback        Auto-switch to headed mode when auth is required in headless mode (default: true)
@@ -54,6 +56,8 @@ export type LocalMcpCliOptions = {
   url?: string;
   browser: BrowserEngine;
   browserChannel?: BrowserChannel;
+  browserUrl?: string;
+  chromiumLoginWorkaround?: boolean;
   headless: boolean;
   autoLoginFallback: boolean;
   userDataDir?: string;
@@ -74,6 +78,8 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
   let url: string | undefined;
   let browser: BrowserEngine = "chromium";
   let browserChannel: BrowserChannel | undefined;
+  let browserUrl: string | undefined;
+  let chromiumLoginWorkaround: boolean | undefined;
   let headless = false;
   let autoLoginFallback = true;
   let userDataDir: string | undefined;
@@ -130,8 +136,19 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
       continue;
     }
 
+    if (arg === "--browser-url") {
+      browserUrl = parseFlagValue(args, i, "--browser-url");
+      i += 1;
+      continue;
+    }
+
     if (arg === "--headless") {
       headless = true;
+      continue;
+    }
+
+    if (arg === "--chromium-login-workaround") {
+      chromiumLoginWorkaround = true;
       continue;
     }
 
@@ -181,6 +198,12 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
   };
   if (browserChannel !== undefined) {
     options.browserChannel = browserChannel;
+  }
+  if (browserUrl !== undefined) {
+    options.browserUrl = browserUrl;
+  }
+  if (chromiumLoginWorkaround !== undefined) {
+    options.chromiumLoginWorkaround = chromiumLoginWorkaround;
   }
 
   if (site !== undefined) {
