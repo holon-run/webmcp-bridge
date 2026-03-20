@@ -35,6 +35,7 @@ type Behavior = {
   articlePlaceMarkerOk: boolean;
   articlePublishConfirmed: boolean;
   articleDeleteConfirmed: boolean;
+  tweetDeleteConfirmed: boolean;
 };
 
 function createMockPage(partial: Partial<Behavior> = {}) {
@@ -46,6 +47,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   let articleTitle = "";
   let articleMarkdown = "";
   let articleDeleteMenuOpen = false;
+  let tweetDeleteMenuOpen = false;
   let routedHandler:
     | ((
         route: {
@@ -80,6 +82,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     articlePlaceMarkerOk: true,
     articlePublishConfirmed: true,
     articleDeleteConfirmed: true,
+    tweetDeleteConfirmed: true,
     ...partial,
   };
 
@@ -164,6 +167,38 @@ function createMockPage(partial: Partial<Behavior> = {}) {
 
       if (command.op === "reply_submit") {
         return { ok: true };
+      }
+
+      if (command.op === "tweet_open_delete_menu") {
+        tweetDeleteMenuOpen = true;
+        return true;
+      }
+
+      if (command.op === "tweet_click_delete_menu_item") {
+        return tweetDeleteMenuOpen;
+      }
+
+      if (command.op === "tweet_confirm_delete") {
+        if (behavior.tweetDeleteConfirmed) {
+          currentUrl = "https://x.com/home";
+        }
+        return undefined;
+      }
+
+      if (command.op === "tweet_open_delete_menu") {
+        tweetDeleteMenuOpen = true;
+        return true;
+      }
+
+      if (command.op === "tweet_click_delete_menu_item") {
+        return tweetDeleteMenuOpen;
+      }
+
+      if (command.op === "tweet_confirm_delete") {
+        if (behavior.tweetDeleteConfirmed) {
+          currentUrl = "https://x.com/home";
+        }
+        return undefined;
       }
 
       if (command.op === "grok_submit") {
@@ -331,6 +366,17 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
       if (arg && typeof arg === "object" && !Array.isArray(arg) && (arg as Record<string, unknown>).op === "grok_wait") {
         if (!behavior.confirmGrok) {
+          throw new Error("timeout");
+        }
+        return true;
+      }
+      if (
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        "tweetId" in (arg as Record<string, unknown>)
+      ) {
+        if (!behavior.tweetDeleteConfirmed) {
           throw new Error("timeout");
         }
         return true;
@@ -525,6 +571,17 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         }
         return true;
       }
+      if (
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        "tweetId" in (arg as Record<string, unknown>)
+      ) {
+        if (!behavior.tweetDeleteConfirmed) {
+          throw new Error("timeout");
+        }
+        return true;
+      }
       if (arg === undefined) {
         if (!behavior.articleDeleteConfirmed && articleDeleteMenuOpen) {
           throw new Error("timeout");
@@ -596,6 +653,7 @@ describe("createXAdapter", () => {
         "mentions.list",
         "user.get",
         "tweet.reply",
+        "tweet.delete",
         "grok.chat",
       ]),
     );
@@ -804,6 +862,55 @@ describe("createXAdapter", () => {
         code: "ACTION_UNCONFIRMED",
         message: "reply submit was not confirmed in timeline",
       },
+    });
+  });
+
+  it("returns validation error for tweet.delete without id/url", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool({ name: "tweet.delete", input: {} }, { page: page as never });
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "url or id is required",
+      },
+    });
+  });
+
+  it("supports dryRun for tweet.delete", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "tweet.delete", input: { id: "123", dryRun: true } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      dryRun: true,
+      deleteVisible: true,
+      tweetId: "123",
+      url: "https://x.com/i/web/status/123",
+    });
+  });
+
+  it("deletes one tweet by id", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "tweet.delete", input: { id: "123" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      confirmed: true,
+      tweetId: "123",
+      url: "https://x.com/i/web/status/123",
     });
   });
 
