@@ -1722,7 +1722,7 @@ async function readTimelineViaNetwork(
                 item.createdAt = createdAt;
               }
               if (media.length > 0) {
-                item.media = toTweetMediaArray(media);
+                item.media = media as unknown as TweetMedia[];
               }
               outputItems.push(item);
             }
@@ -2032,7 +2032,7 @@ async function extractTweetCards(
       }
       const media = collectDomMedia(article);
       if (media.length > 0) {
-        item.media = toTweetMediaArray(media);
+        item.media = media as unknown as TweetMedia[];
       }
       pushItem(item);
       if (items.length >= maxItems) {
@@ -2061,7 +2061,7 @@ async function extractTweetCards(
         }
         const media = collectDomMedia(cell);
         if (media.length > 0) {
-          item.media = toTweetMediaArray(media);
+          item.media = media as unknown as TweetMedia[];
         }
         pushItem(item);
       }
