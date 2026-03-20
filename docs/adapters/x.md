@@ -68,7 +68,7 @@
 - `markdownPath` and `coverImagePath` are local absolute file paths
 - the adapter derives the title from the first markdown heading when `title` is omitted
 - markdown image syntax with local file paths is supported; local inline images are uploaded through the article editor
-- output: `ok`, `title`, `editUrl`, optional `articleId`, `persisted`, `sessionScoped`
+- output: `ok`, `title`, `editUrl`, optional `articleId`, `inlineImageCount`, `hasCoverImage`, `persisted`, `sessionScoped`
 - when `persisted=false`, the draft is only guaranteed to be publishable or deletable within the current bridge session; call `article.publish` or `article.delete` before the session is discarded
 
 `article.publishMarkdown` exposes:
@@ -77,7 +77,7 @@
 - `markdownPath` and `coverImagePath` are local absolute file paths
 - the adapter derives the title from the first markdown heading when `title` is omitted
 - markdown image syntax with local file paths is supported; local inline images are uploaded through the article editor
-- output: `ok`, optional `dryRun`, `title`, `editUrl`, optional `articleId`, optional `articleUrl`
+- output: `ok`, optional `dryRun`, optional `confirmed`, `title`, `editUrl`, optional `articleId`, optional `articleUrl`, `inlineImageCount`, `hasCoverImage`, `persisted`, `sessionScoped`
 
 `article.publish` exposes:
 
@@ -101,7 +101,7 @@
 `article.delete` exposes:
 
 - input: `url | id`, optional `dryRun`
-- output: `ok`, optional `dryRun`, optional `confirmed`
+- output: `ok`, optional `dryRun`, optional `deleteVisible` (in dry-run mode), optional `confirmed`
 
 `search.tweets.list` input:
 

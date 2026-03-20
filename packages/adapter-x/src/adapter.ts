@@ -3871,7 +3871,7 @@ async function clearArticleBody(page: Page): Promise<boolean> {
 }
 
 function parseArticleIdFromUrl(url: string): string | undefined {
-  const match = url.match(/\/articles\/edit\/(\d+)(?:\/|$)|\/articles\/(\d+)(?:\/|$)/);
+  const match = url.match(/\/articles\/edit\/(\d+)(?:[/?#]|$)|\/articles\/(\d+)(?:[/?#]|$)/);
   return match?.[1] ?? match?.[2];
 }
 
@@ -4155,13 +4155,17 @@ async function draftArticleMarkdown(
   explicitTitle: string | undefined,
   coverImagePath: string | undefined,
 ): Promise<JsonValue> {
-  const markdown = await readFile(markdownPath, "utf8").catch(() => undefined);
+  const resolvedMarkdown = await resolveArticleAttachment(markdownPath, "markdownPath");
+  if (!resolvedMarkdown.ok || !resolvedMarkdown.attachment) {
+    return resolvedMarkdown.ok ? errorResult("VALIDATION_ERROR", "markdownPath was not found") : resolvedMarkdown.result;
+  }
+  const markdown = await readFile(resolvedMarkdown.attachment.path, "utf8").catch(() => undefined);
   if (markdown === undefined) {
-    return errorResult("VALIDATION_ERROR", "markdownPath was not found");
+    return errorResult("VALIDATION_ERROR", `markdownPath was not found: ${markdownPath}`);
   }
 
-  const title = extractArticleTitle(markdown, markdownPath, explicitTitle);
-  const draftAssets = prepareArticleMarkdown(markdown, markdownPath);
+  const title = extractArticleTitle(markdown, resolvedMarkdown.attachment.path, explicitTitle);
+  const draftAssets = prepareArticleMarkdown(markdown, resolvedMarkdown.attachment.path);
   const resolvedInlineImages: ArticleInlineImage[] = [];
   for (const image of draftAssets.inlineImages) {
     const resolved = await resolveArticleAttachment(image.path, image.marker);
@@ -4345,7 +4349,13 @@ async function withArticleDraftPage<T>(
   const articleId = parseArticleIdFromUrl(targetUrl);
   const cachedPage = articleId ? getCachedArticleDraftPage(ownerPage, articleId) : undefined;
   if (cachedPage) {
-    return await run(cachedPage, articleId, true);
+    const cachedUrl = cachedPage.url();
+    const cachedArticleId = parseArticleIdFromUrl(cachedUrl);
+    if (!articleId || cachedArticleId === articleId) {
+      await waitForArticleEditorSurface(cachedPage);
+      await ensureArticleDraftLoaded(cachedPage, articleId);
+      return await run(cachedPage, articleId, true);
+    }
   }
   return await withEphemeralPage(ownerPage, targetUrl, async (articlePage) => {
     await waitForArticleEditorSurface(articlePage);
@@ -4392,12 +4402,16 @@ async function updateArticleMarkdown(
   markdownPath: string,
   explicitTitle: string | undefined,
 ): Promise<JsonValue> {
-  const markdown = await readFile(markdownPath, "utf8").catch(() => undefined);
-  if (markdown === undefined) {
-    return errorResult("VALIDATION_ERROR", "markdownPath was not found");
+  const resolvedMarkdown = await resolveArticleAttachment(markdownPath, "markdownPath");
+  if (!resolvedMarkdown.ok || !resolvedMarkdown.attachment) {
+    return resolvedMarkdown.ok ? errorResult("VALIDATION_ERROR", "markdownPath was not found") : resolvedMarkdown.result;
   }
-  const title = extractArticleTitle(markdown, markdownPath, explicitTitle);
-  const draftAssets = prepareArticleMarkdown(markdown, markdownPath);
+  const markdown = await readFile(resolvedMarkdown.attachment.path, "utf8").catch(() => undefined);
+  if (markdown === undefined) {
+    return errorResult("VALIDATION_ERROR", `markdownPath was not found: ${markdownPath}`);
+  }
+  const title = extractArticleTitle(markdown, resolvedMarkdown.attachment.path, explicitTitle);
+  const draftAssets = prepareArticleMarkdown(markdown, resolvedMarkdown.attachment.path);
   const resolvedInlineImages: ArticleInlineImage[] = [];
   for (const image of draftAssets.inlineImages) {
     const resolved = await resolveArticleAttachment(image.path, image.marker);
