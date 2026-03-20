@@ -1091,6 +1091,60 @@ describe("createXAdapter", () => {
     });
   });
 
+  it("sets one article draft cover image by id", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-cover-"));
+    tempDirs.add(tempDir);
+    const coverPath = join(tempDir, "cover.png");
+    await writeFile(coverPath, "cover-bytes");
+    const { page, getUploadedFiles } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "article.setCoverImage", input: { id: "2035000000000000000", coverImagePath: coverPath } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      articleId: "2035000000000000000",
+      editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+      hasCoverImage: true,
+      sessionScoped: false,
+    });
+    expect(getUploadedFiles()).toEqual([coverPath]);
+  });
+
+  it("updates one article draft from markdown by id", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-update-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    const inlinePath = join(tempDir, "inline.png");
+    await writeFile(markdownPath, "# Updated title\n\nUpdated body.\n\n![inline](./inline.png)\n");
+    await writeFile(inlinePath, "inline-bytes");
+    const { page, getUploadedFiles, getArticleDraftState } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "article.updateMarkdown", input: { id: "2035000000000000000", markdownPath } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      articleId: "2035000000000000000",
+      editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+      inlineImageCount: 1,
+      persisted: true,
+      sessionScoped: false,
+      title: "Updated title",
+    });
+    expect(getUploadedFiles()).toEqual([inlinePath]);
+    expect(getArticleDraftState()).toMatchObject({
+      title: "Updated title",
+      markdown: expect.stringContaining("[[WEBMCP_INLINE_IMAGE_1]]"),
+    });
+  });
+
   it("supports dryRun for article.delete", async () => {
     const adapter = createXAdapter();
     const { page } = createMockPage();

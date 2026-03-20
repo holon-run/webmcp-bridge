@@ -617,6 +617,68 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
+    name: "article.setCoverImage",
+    description: "Set or replace the cover image for one existing X article draft",
+    inputSchema: {
+      type: "object",
+      description: "Open one article editor page and set the cover image for the current draft.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Article edit URL or public article URL.",
+          minLength: 1,
+        },
+        id: {
+          type: "string",
+          description: "Article id. Used when url is not provided.",
+          minLength: 1,
+        },
+        coverImagePath: {
+          type: "string",
+          description: "Absolute local image path for the article cover image.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+      },
+      required: ["coverImagePath"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.updateMarkdown",
+    description: "Replace the title and body of one existing X article draft from a local markdown file",
+    inputSchema: {
+      type: "object",
+      description:
+        "Open one article editor page, replace the current title and body from a local markdown file, and upload any local inline images referenced by markdown image syntax.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Article edit URL or public article URL.",
+          minLength: 1,
+        },
+        id: {
+          type: "string",
+          description: "Article id. Used when url is not provided.",
+          minLength: 1,
+        },
+        markdownPath: {
+          type: "string",
+          description: "Absolute local file path to the markdown file to apply.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+        title: {
+          type: "string",
+          description: "Optional title override. When omitted, the first markdown heading becomes the article title.",
+          minLength: 1,
+        },
+      },
+      required: ["markdownPath"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "article.delete",
     description: "Delete one X article draft or published article by edit url, public url, or id",
     inputSchema: {
@@ -3779,6 +3841,35 @@ async function uploadArticleInlineImages(page: Page, images: ArticleInlineImage[
   return { ok: true };
 }
 
+async function clearArticleBody(page: Page): Promise<boolean> {
+  let cleared = false;
+  if (typeof (page as { locator?: unknown }).locator === "function") {
+    const composerLocator = page.locator("[data-testid='composer'][role='textbox']").first();
+    cleared = await composerLocator.click().then(() => true).catch(() => false);
+    if (cleared) {
+      await page.keyboard.press("Meta+A").catch(() => {});
+      await page.keyboard.press("Backspace").catch(() => {});
+      await page.waitForTimeout(200);
+    }
+  }
+  if (cleared) {
+    return true;
+  }
+  return await page.evaluate(({ op }) => {
+    if (op !== "article_clear_body") {
+      return false;
+    }
+    const composer = document.querySelector("[data-testid='composer'][role='textbox']");
+    if (!(composer instanceof HTMLElement)) {
+      return false;
+    }
+    composer.focus();
+    composer.textContent = "";
+    composer.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }, { op: "article_clear_body" }).catch(() => false);
+}
+
 function parseArticleIdFromUrl(url: string): string | undefined {
   const match = url.match(/\/articles\/edit\/(\d+)(?:\/|$)|\/articles\/(\d+)(?:\/|$)/);
   return match?.[1] ?? match?.[2];
@@ -4244,6 +4335,116 @@ async function publishExistingArticle(page: Page, targetUrl: string, timeoutMs: 
     return result;
   }
   return await withEphemeralPage(page, targetUrl, runPublish);
+}
+
+async function withArticleDraftPage<T>(
+  ownerPage: Page,
+  targetUrl: string,
+  run: (articlePage: Page, articleId?: string, sessionScoped?: boolean) => Promise<T>,
+): Promise<T> {
+  const articleId = parseArticleIdFromUrl(targetUrl);
+  const cachedPage = articleId ? getCachedArticleDraftPage(ownerPage, articleId) : undefined;
+  if (cachedPage) {
+    return await run(cachedPage, articleId, true);
+  }
+  return await withEphemeralPage(ownerPage, targetUrl, async (articlePage) => {
+    await waitForArticleEditorSurface(articlePage);
+    await ensureArticleDraftLoaded(articlePage, articleId);
+    return await run(articlePage, articleId, false);
+  });
+}
+
+async function setArticleCoverImage(
+  page: Page,
+  targetUrl: string,
+  coverImagePath: string,
+): Promise<JsonValue> {
+  const resolvedCover = await resolveArticleAttachment(coverImagePath, "coverImagePath");
+  if (!resolvedCover.ok || !resolvedCover.attachment) {
+    return resolvedCover.ok ? errorResult("VALIDATION_ERROR", "coverImagePath was not found") : resolvedCover.result;
+  }
+  const coverAttachment = resolvedCover.attachment;
+  return await withArticleDraftPage(page, targetUrl, async (articlePage, articleId, sessionScoped) => {
+    const coverTriggered = await triggerArticleCoverUpload(articlePage);
+    if (!coverTriggered) {
+      return errorResult("UPSTREAM_CHANGED", "article cover upload controls not found");
+    }
+    const coverUploaded = await uploadArticleFile(articlePage, coverAttachment.path);
+    if (!coverUploaded) {
+      return errorResult("UPSTREAM_CHANGED", "article cover upload failed");
+    }
+    const output: Record<string, JsonValue> = {
+      ok: true,
+      editUrl: articlePage.url(),
+      hasCoverImage: true,
+    };
+    if (articleId) {
+      output.articleId = articleId;
+      output.sessionScoped = sessionScoped === true;
+    }
+    return output;
+  });
+}
+
+async function updateArticleMarkdown(
+  page: Page,
+  targetUrl: string,
+  markdownPath: string,
+  explicitTitle: string | undefined,
+): Promise<JsonValue> {
+  const markdown = await readFile(markdownPath, "utf8").catch(() => undefined);
+  if (markdown === undefined) {
+    return errorResult("VALIDATION_ERROR", "markdownPath was not found");
+  }
+  const title = extractArticleTitle(markdown, markdownPath, explicitTitle);
+  const draftAssets = prepareArticleMarkdown(markdown, markdownPath);
+  const resolvedInlineImages: ArticleInlineImage[] = [];
+  for (const image of draftAssets.inlineImages) {
+    const resolved = await resolveArticleAttachment(image.path, image.marker);
+    if (!resolved.ok || !resolved.attachment) {
+      return resolved.ok
+        ? errorResult("VALIDATION_ERROR", `${image.marker} was not found`)
+        : resolved.result;
+    }
+    resolvedInlineImages.push({
+      ...image,
+      path: resolved.attachment.path,
+      name: resolved.attachment.name,
+    });
+  }
+  return await withArticleDraftPage(page, targetUrl, async (articlePage, articleId, sessionScoped) => {
+    const titleSet = await setArticleTitle(articlePage, title);
+    if (!titleSet) {
+      return errorResult("UPSTREAM_CHANGED", "article title controls not found");
+    }
+    const cleared = await clearArticleBody(articlePage);
+    if (!cleared) {
+      return errorResult("UPSTREAM_CHANGED", "article body controls not found");
+    }
+    const pasted = await pasteArticleMarkdown(articlePage, draftAssets.markdown);
+    if (!pasted) {
+      return errorResult("UPSTREAM_CHANGED", "article markdown paste failed");
+    }
+    const inlineUploadResult = await uploadArticleInlineImages(articlePage, resolvedInlineImages);
+    if (!inlineUploadResult.ok) {
+      return errorResult("UPSTREAM_CHANGED", "article inline image upload failed", {
+        reason: inlineUploadResult.reason,
+      });
+    }
+    const output: Record<string, JsonValue> = {
+      ok: true,
+      title,
+      editUrl: articlePage.url(),
+      inlineImageCount: resolvedInlineImages.length,
+    };
+    if (articleId) {
+      output.articleId = articleId;
+      const persisted = await waitForArticleDraftPersisted(articlePage, articleId, title);
+      output.persisted = persisted;
+      output.sessionScoped = sessionScoped === true || !persisted;
+    }
+    return output;
+  });
 }
 
 async function waitForGrokSurface(page: Page): Promise<void> {
@@ -5565,6 +5766,61 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
           return errorResult("VALIDATION_ERROR", "url or id is required");
         }
         return await publishExistingArticle(page, targetUrl, articlePublishTimeoutMs);
+      }
+
+      if (name === "article.setCoverImage") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
+        if (!articleId && !url) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const coverImagePath = typeof args.coverImagePath === "string" ? args.coverImagePath.trim() : "";
+        if (!coverImagePath) {
+          return errorResult("VALIDATION_ERROR", "coverImagePath is required");
+        }
+        const targetUrl =
+          url && url.includes("/compose/articles/edit/")
+            ? url
+            : articleId
+              ? `https://x.com/compose/articles/edit/${articleId}`
+              : url;
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        return await setArticleCoverImage(page, targetUrl, coverImagePath);
+      }
+
+      if (name === "article.updateMarkdown") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
+        if (!articleId && !url) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const markdownPath = typeof args.markdownPath === "string" ? args.markdownPath.trim() : "";
+        if (!markdownPath) {
+          return errorResult("VALIDATION_ERROR", "markdownPath is required");
+        }
+        const explicitTitle = typeof args.title === "string" ? args.title.trim() : "";
+        const targetUrl =
+          url && url.includes("/compose/articles/edit/")
+            ? url
+            : articleId
+              ? `https://x.com/compose/articles/edit/${articleId}`
+              : url;
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        return await updateArticleMarkdown(page, targetUrl, markdownPath, explicitTitle || undefined);
       }
 
       if (name === "article.delete") {

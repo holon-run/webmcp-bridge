@@ -23,6 +23,8 @@
 - `article.draftMarkdown`: create one X article draft from a local markdown file, with optional cover image.
 - `article.publishMarkdown`: publish one X article from a local markdown file, with optional cover image.
 - `article.publish`: publish one existing X article draft by edit URL, public URL, or ID.
+- `article.setCoverImage`: set or replace the cover image for one existing X article draft.
+- `article.updateMarkdown`: replace the title and body of one existing X article draft from a local markdown file.
 - `article.delete`: delete one X article draft or published article by edit URL, public URL, or ID.
 
 `timeline.home.list`, `timeline.user.list`, `search.tweets.list`, and `favorites.list` support incremental pagination with:
@@ -82,6 +84,19 @@
 - input: `url | id`
 - output: `ok`, `confirmed`, `editUrl`, optional `articleId`, optional `articleUrl`
 - when publishing a session-scoped draft, call it in the same bridge session that created the draft
+
+`article.setCoverImage` exposes:
+
+- input: `url | id`, `coverImagePath`
+- `coverImagePath` is a local absolute file path
+- output: `ok`, `editUrl`, optional `articleId`, `hasCoverImage`, optional `sessionScoped`
+
+`article.updateMarkdown` exposes:
+
+- input: `url | id`, `markdownPath`, optional `title`
+- `markdownPath` is a local absolute file path
+- markdown image syntax with local file paths is supported; local inline images are uploaded through the article editor
+- output: `ok`, `title`, `editUrl`, optional `articleId`, `inlineImageCount`, optional `persisted`, optional `sessionScoped`
 
 `article.delete` exposes:
 
@@ -325,6 +340,36 @@ Publish one draft article:
     "name": "article.publish",
     "arguments": {
       "id": "2035000000000000000"
+    }
+  }
+}
+```
+
+Set one draft cover image:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "article.setCoverImage",
+    "arguments": {
+      "id": "2035000000000000000",
+      "coverImagePath": "/tmp/cover.png"
+    }
+  }
+}
+```
+
+Update one draft from markdown:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "article.updateMarkdown",
+    "arguments": {
+      "id": "2035000000000000000",
+      "markdownPath": "/tmp/post.md"
     }
   }
 }
