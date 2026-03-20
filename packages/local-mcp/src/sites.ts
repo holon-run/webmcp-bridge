@@ -10,6 +10,10 @@ import {
   manifest as fixtureManifest,
 } from "@webmcp-bridge/adapter-fixture";
 import {
+  createAdapter as createGoogleAdapter,
+  manifest as googleManifest,
+} from "@webmcp-bridge/adapter-google";
+import {
   createAdapter as createXAdapter,
   manifest as xManifest,
 } from "@webmcp-bridge/adapter-x";
@@ -19,7 +23,7 @@ import type {
   SiteAdapterModule,
 } from "@webmcp-bridge/playwright";
 
-export type BuiltinSite = "x" | "fixture";
+export type BuiltinSite = "x" | "google" | "fixture";
 
 export type SiteDefinition = {
   id: string;
@@ -41,6 +45,12 @@ const BUILTIN_SITE_DEFINITIONS: Record<BuiltinSite, SiteDefinition> = {
     source: "builtin",
     manifest: xManifest,
     createFallbackAdapter: () => createXAdapter(),
+  },
+  google: {
+    id: "google",
+    source: "builtin",
+    manifest: googleManifest,
+    createFallbackAdapter: () => createGoogleAdapter(),
   },
   fixture: {
     id: "fixture",
@@ -71,6 +81,7 @@ function validateManifest(value: unknown): AdapterManifest {
   const hostPatterns = value.hostPatterns;
   const authProbeTool = value.authProbeTool;
   const deferBridgeUntilAuthenticated = value.deferBridgeUntilAuthenticated;
+  const authPolicy = value.authPolicy;
 
   if (!isNonEmptyString(id)) {
     throw new Error("ADAPTER_CONTRACT_ERROR: manifest.id must be a non-empty string");
@@ -104,6 +115,29 @@ function validateManifest(value: unknown): AdapterManifest {
       "ADAPTER_CONTRACT_ERROR: manifest.deferBridgeUntilAuthenticated must be a boolean when provided",
     );
   }
+  if (authPolicy !== undefined) {
+    if (!isRecord(authPolicy)) {
+      throw new Error("ADAPTER_CONTRACT_ERROR: manifest.authPolicy must be an object when provided");
+    }
+    if (authPolicy.mode !== "none" && authPolicy.mode !== "bootstrap_then_attach") {
+      throw new Error(
+        "ADAPTER_CONTRACT_ERROR: manifest.authPolicy.mode must be none or bootstrap_then_attach",
+      );
+    }
+    if (authPolicy.authProbeTool !== undefined && !isNonEmptyString(authPolicy.authProbeTool)) {
+      throw new Error(
+        "ADAPTER_CONTRACT_ERROR: manifest.authPolicy.authProbeTool must be a non-empty string when provided",
+      );
+    }
+    if (
+      authPolicy.allowAnonymousTools !== undefined &&
+      typeof authPolicy.allowAnonymousTools !== "boolean"
+    ) {
+      throw new Error(
+        "ADAPTER_CONTRACT_ERROR: manifest.authPolicy.allowAnonymousTools must be a boolean when provided",
+      );
+    }
+  }
 
   const output: AdapterManifest = {
     id,
@@ -120,6 +154,28 @@ function validateManifest(value: unknown): AdapterManifest {
   }
   if (deferBridgeUntilAuthenticated !== undefined) {
     output.deferBridgeUntilAuthenticated = deferBridgeUntilAuthenticated;
+  }
+  if (authPolicy !== undefined) {
+    const normalizedAuthPolicy = authPolicy as {
+      mode: "none" | "bootstrap_then_attach";
+      authProbeTool?: string;
+      allowAnonymousTools?: boolean;
+    };
+    output.authPolicy = {
+      mode: normalizedAuthPolicy.mode,
+      ...(normalizedAuthPolicy.authProbeTool !== undefined
+        ? { authProbeTool: normalizedAuthPolicy.authProbeTool }
+        : {}),
+      ...(normalizedAuthPolicy.allowAnonymousTools !== undefined
+        ? { allowAnonymousTools: normalizedAuthPolicy.allowAnonymousTools }
+        : {}),
+    };
+  } else if (authProbeTool !== undefined || deferBridgeUntilAuthenticated !== undefined) {
+    output.authPolicy = {
+      mode: deferBridgeUntilAuthenticated === true ? "bootstrap_then_attach" : "none",
+      ...(authProbeTool !== undefined ? { authProbeTool } : {}),
+      ...(deferBridgeUntilAuthenticated === true ? { allowAnonymousTools: true } : {}),
+    };
   }
   return output;
 }

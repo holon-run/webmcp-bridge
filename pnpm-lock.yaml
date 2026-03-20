@@ -135,6 +135,9 @@ importers:
       '@webmcp-bridge/adapter-fixture':
         specifier: workspace:*
         version: link:../adapter-fixture
+      '@webmcp-bridge/adapter-google':
+        specifier: workspace:*
+        version: link:../adapter-google
       '@webmcp-bridge/adapter-x':
         specifier: workspace:*
         version: link:../adapter-x

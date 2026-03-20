@@ -72,15 +72,35 @@ describe("createLocalMcpStdioServer", () => {
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
       controlMode: "launch" as const,
+      authPolicyMode: "none" as const,
+      authState: "unknown" as const,
+      sessionState: "runtime_active" as const,
+      ownership: "managed" as const,
       mode: "native" as const,
       headless: false,
     })),
     openWindow: vi.fn<() => Promise<"focused" | "opened">>(async () => "focused" as const),
+    bootstrapSession: vi.fn(async () => ({
+      site: "board",
+      targetUrl: "http://127.0.0.1:4173",
+      controlMode: "bootstrap" as const,
+      authPolicyMode: "bootstrap_then_attach" as const,
+      authState: "auth_required" as const,
+      sessionState: "bootstrap_active" as const,
+      ownership: "external" as const,
+      mode: "control-only" as const,
+      headless: false,
+      profilePath: "/tmp/board-profile",
+    })),
     attachSession: vi.fn(async () => ({
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
       controlMode: "attach" as const,
       browserUrl: "http://127.0.0.1:9222",
+      authPolicyMode: "bootstrap_then_attach" as const,
+      authState: "authenticated" as const,
+      sessionState: "runtime_active" as const,
+      ownership: "external" as const,
       mode: "native" as const,
       headless: false,
     })),
@@ -88,8 +108,25 @@ describe("createLocalMcpStdioServer", () => {
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
       controlMode: "launch" as const,
+      authPolicyMode: "none" as const,
+      authState: "authenticated" as const,
+      sessionState: "runtime_active" as const,
+      ownership: "managed" as const,
       mode: "native" as const,
       headless: true,
+    })),
+    resetProfile: vi.fn(async () => ({
+      site: "board",
+      targetUrl: "http://127.0.0.1:4173",
+      controlMode: "bootstrap" as const,
+      authPolicyMode: "bootstrap_then_attach" as const,
+      authState: "unknown" as const,
+      sessionState: "bootstrap_active" as const,
+      ownership: "external" as const,
+      mode: "control-only" as const,
+      headless: false,
+      profilePath: "/tmp/board-profile",
+      lastBackupPath: "/tmp/board-profile-backup",
     })),
     closeBridge: vi.fn(async () => {}),
   };
@@ -106,8 +143,10 @@ describe("createLocalMcpStdioServer", () => {
     onResourceUpdated.mockClear();
     bridgeControl.getState.mockClear();
     bridgeControl.openWindow.mockClear();
+    bridgeControl.bootstrapSession.mockClear();
     bridgeControl.attachSession.mockClear();
     bridgeControl.restartSession.mockClear();
+    bridgeControl.resetProfile.mockClear();
     bridgeControl.closeBridge.mockClear();
 
     output.on("data", (chunk: Buffer | string) => {
@@ -202,9 +241,11 @@ describe("createLocalMcpStdioServer", () => {
       tools: [
         { name: "bridge.window.open" },
         { name: "bridge.session.status" },
+        { name: "bridge.session.bootstrap" },
         { name: "bridge.session.attach" },
         { name: "bridge.session.restart" },
         { name: "bridge.session.stop" },
+        { name: "bridge.session.reset_profile" },
         { name: "bridge.open" },
         { name: "bridge.close" },
         { name: "ping" },
@@ -369,7 +410,7 @@ describe("createLocalMcpStdioServer", () => {
     });
   });
 
-  it("rejects invalid bridge.session.attach input", async () => {
+  it("allows bridge.session.attach without an explicit browserUrl", async () => {
     const response = await request({
       jsonrpc: "2.0",
       id: "2ce",
@@ -380,12 +421,37 @@ describe("createLocalMcpStdioServer", () => {
       },
     });
 
-    expect(bridgeControl.attachSession).not.toHaveBeenCalled();
+    expect(bridgeControl.attachSession).toHaveBeenCalledWith(undefined);
     expect("result" in response ? response.result : undefined).toMatchObject({
       structuredContent: {
-        ok: false,
-        error: {
-          code: "INVALID_ARGUMENT",
+        ok: true,
+        restarted: true,
+        session: {
+          controlMode: "attach",
+        },
+      },
+    });
+  });
+
+  it("handles bridge.session.bootstrap locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2ce-bootstrap",
+      method: "tools/call",
+      params: {
+        name: "bridge.session.bootstrap",
+        arguments: {},
+      },
+    });
+
+    expect(bridgeControl.bootstrapSession).toHaveBeenCalledOnce();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        bootstrapped: true,
+        session: {
+          controlMode: "bootstrap",
+          sessionState: "bootstrap_active",
         },
       },
     });
@@ -415,6 +481,29 @@ describe("createLocalMcpStdioServer", () => {
         session: {
           controlMode: "launch",
           headless: true,
+        },
+      },
+    });
+  });
+
+  it("handles bridge.session.reset_profile locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2cf-reset",
+      method: "tools/call",
+      params: {
+        name: "bridge.session.reset_profile",
+        arguments: {},
+      },
+    });
+
+    expect(bridgeControl.resetProfile).toHaveBeenCalledOnce();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        reset: true,
+        session: {
+          lastBackupPath: "/tmp/board-profile-backup",
         },
       },
     });
