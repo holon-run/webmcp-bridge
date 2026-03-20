@@ -203,4 +203,41 @@ describe("startLocalMcpBridge", () => {
       mode: "attach",
     });
   });
+
+  it("fails closed when attach startup and recovery both fail", async () => {
+    const launchRuntime = createRuntimeHandle();
+    runtimeQueue = [launchRuntime];
+    startedRuntimeHandles = [];
+
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    await startLocalMcpBridge({
+      url: "http://127.0.0.1:4173",
+      serviceVersion: "0.1.0-test",
+      input: new PassThrough(),
+    });
+
+    await expect(capturedServerOptions?.bridgeControl.attachSession("http://127.0.0.1:9222")).rejects.toThrow(
+      "missing mocked runtime handle",
+    );
+    await vi.waitFor(() => {
+      expect(serverHandle.close).toHaveBeenCalledOnce();
+    });
+    await expect(capturedServerOptions?.bridgeControl.restartSession({})).rejects.toThrow(
+      "SESSION_NOT_AVAILABLE: local-mcp bridge session is closed",
+    );
+  });
+
+  it("rejects attach-incompatible browser channel configuration before runtime startup", async () => {
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+
+    await expect(
+      startLocalMcpBridge({
+        url: "http://127.0.0.1:4173",
+        browserUrl: "http://127.0.0.1:9222",
+        browserChannel: "chrome",
+        serviceVersion: "0.1.0-test",
+        input: new PassThrough(),
+      }),
+    ).rejects.toThrow("CONFIG_ERROR: --browser-url cannot be combined with --browser-channel");
+  });
 });

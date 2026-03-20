@@ -453,7 +453,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
 
   private toBridgeErrorResult(error: unknown): JsonValue {
     const message = error instanceof Error ? error.message : String(error);
-    const code = message.split(":")[0] || "BRIDGE_CONTROL_FAILED";
+    const codeMatch = /^([A-Z][A-Z0-9_]*):/.exec(message);
+    const code = codeMatch?.[1] ?? "BRIDGE_CONTROL_FAILED";
     return {
       ok: false,
       error: {

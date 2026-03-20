@@ -114,6 +114,12 @@ function createRuntimeStartOptions(
     nextOptions.preferNative = baseOptions.preferNative;
   }
   if (sessionConfig.controlMode === "attach") {
+    if (baseOptions.browserChannel !== undefined) {
+      throw new Error("CONFIG_ERROR: --browser-url cannot be combined with --browser-channel");
+    }
+    if (baseOptions.chromiumLoginWorkaround !== undefined) {
+      throw new Error("CONFIG_ERROR: --browser-url cannot be combined with --chromium-login-workaround");
+    }
     if (sessionConfig.browserUrl !== undefined) {
       nextOptions.browserUrl = sessionConfig.browserUrl;
     }
@@ -268,6 +274,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
 
   let server: LocalMcpStdioServer | undefined;
   let closed = false;
+  let lifecycleTransition = Promise.resolve();
   const resourceUpdatedListeners = new Set<(uri: string) => void>();
   let unsubscribeRuntimeResourceUpdates: (() => void) | undefined;
   let ownerSessionGeneration = 0;
@@ -293,7 +300,23 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     });
   };
 
-  const closeResources = async (): Promise<void> => {
+  const runLifecycleTransition = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const previousTransition = lifecycleTransition;
+    let releaseTransition!: () => void;
+    lifecycleTransition = new Promise<void>((resolve) => {
+      releaseTransition = resolve;
+    });
+    await previousTransition.catch(() => {
+      // Ignore previous transition failures so later lifecycle operations can still proceed.
+    });
+    try {
+      return await operation();
+    } finally {
+      releaseTransition();
+    }
+  };
+
+  const closeResourcesInternal = async (): Promise<void> => {
     if (closed) {
       return;
     }
@@ -306,7 +329,15 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     }
   };
 
-  const restartRuntime = async (restartOptions: LocalBridgeSessionRestartOptions): Promise<LocalBridgeState> => {
+  const closeResources = async (): Promise<void> => {
+    await runLifecycleTransition(async () => {
+      await closeResourcesInternal();
+    });
+  };
+
+  const restartRuntimeInternal = async (
+    restartOptions: LocalBridgeSessionRestartOptions,
+  ): Promise<LocalBridgeState> => {
     if (closed) {
       throw new Error("SESSION_NOT_AVAILABLE: local-mcp bridge session is closed");
     }
@@ -326,9 +357,18 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         bindRuntime(recoveredRuntime, previousSessionConfig);
       } catch (recoveryError) {
         options.onError?.(recoveryError);
+        try {
+          await closeResourcesInternal();
+        } catch (closeError) {
+          options.onError?.(closeError);
+        }
       }
       throw error;
     }
+  };
+
+  const restartRuntime = async (restartOptions: LocalBridgeSessionRestartOptions): Promise<LocalBridgeState> => {
+    return await runLifecycleTransition(async () => await restartRuntimeInternal(restartOptions));
   };
 
   const gateway = {

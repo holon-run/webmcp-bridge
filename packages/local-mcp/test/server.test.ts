@@ -420,6 +420,30 @@ describe("createLocalMcpStdioServer", () => {
     });
   });
 
+  it("maps non-prefixed bridge control errors to a stable default code", async () => {
+    bridgeControl.restartSession.mockRejectedValueOnce(new Error("plain restart failure"));
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2cg",
+      method: "tools/call",
+      params: {
+        name: "bridge.session.restart",
+        arguments: {},
+      },
+    });
+
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "BRIDGE_CONTROL_FAILED",
+          message: "plain restart failure",
+        },
+      },
+    });
+  });
+
   it("handles bridge.close locally and closes asynchronously", async () => {
     const response = await request({
       jsonrpc: "2.0",
