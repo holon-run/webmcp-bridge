@@ -44,6 +44,7 @@ export type StartLocalMcpBridgeOptions = {
 export type LocalMcpBridgeHandle = {
   site: string;
   targetUrl: string;
+  controlMode: "launch" | "attach";
   mode: "native" | "polyfill" | "adapter-shim";
   headless: boolean;
   close: () => Promise<void>;
@@ -177,6 +178,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         getState: () => ({
           site: runtime.site,
           targetUrl: runtime.targetUrl,
+          controlMode: runtime.controlMode,
           mode: runtime.mode,
           headless: runtime.headless,
         }),
@@ -221,6 +223,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
   return {
     site: runtime.site,
     targetUrl: runtime.targetUrl,
+    controlMode: runtime.controlMode,
     mode: runtime.mode,
     headless: runtime.headless,
     close: async (): Promise<void> => {

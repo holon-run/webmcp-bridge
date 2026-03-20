@@ -16,6 +16,7 @@ function resetOwnerSessionEnded(): void {
 const runtimeHandle = {
   site: "board",
   targetUrl: "http://127.0.0.1:4173",
+  controlMode: "launch" as const,
   mode: "native" as const,
   headless: false,
   gateway: {
