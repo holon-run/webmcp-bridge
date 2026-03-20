@@ -99,6 +99,12 @@ describe("parseCliArgs", () => {
     expect(parsed.chromiumLoginWorkaround).toBe(true);
   });
 
+  it("rejects chromium login workaround for non-chromium browsers", () => {
+    expect(() =>
+      parseCliArgs(["--url", "https://board.holon.run", "--browser", "firefox", "--chromium-login-workaround"]),
+    ).toThrow("--chromium-login-workaround requires --browser chromium (received firefox)");
+  });
+
   it("throws on unsupported browser", () => {
     expect(() => parseCliArgs(["--site", "x", "--browser", "edge"])).toThrow(
       "unsupported browser: edge",

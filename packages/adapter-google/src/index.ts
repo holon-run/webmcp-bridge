@@ -851,8 +851,13 @@ async function downloadGeminiImages(
         await buttonLocator.nth(index).click();
         const download = await downloadPromise;
         const suggestedName = download.suggestedFilename();
-        const extension = extname(suggestedName) || ".png";
-        const filename = suggestedName || `gemini-image-${index + 1}${extension}`;
+        const suggestedExtension = extname(suggestedName);
+        const extension = suggestedExtension || ".png";
+        const filename = suggestedName
+          ? suggestedExtension
+            ? suggestedName
+            : `${suggestedName}${extension}`
+          : `gemini-image-${index + 1}${extension}`;
         const path = join(artifactDir, filename);
         await download.saveAs(path);
         artifact = {

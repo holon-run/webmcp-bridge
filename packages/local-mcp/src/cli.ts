@@ -189,6 +189,9 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
   if (!site && !adapterModule && !url) {
     throw new Error("missing required --url or one of --site/--adapter-module");
   }
+  if (chromiumLoginWorkaround && browser !== "chromium") {
+    throw new Error(`--chromium-login-workaround requires --browser chromium (received ${browser})`);
+  }
 
   const options: LocalMcpCliOptions = {
     browser,

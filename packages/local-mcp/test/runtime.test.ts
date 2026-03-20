@@ -227,6 +227,28 @@ describe("startLocalMcpRuntime", () => {
     ).rejects.toThrow("CONFIG_ERROR: --browser-url requires --browser chromium");
   });
 
+  it("rejects chromium login workaround for non-chromium engines", async () => {
+    await expect(
+      startLocalMcpRuntime({
+        siteDefinition: {
+          id: "test",
+          source: "native",
+          manifest: {
+            id: "test",
+            displayName: "Test",
+            version: "0.1.0",
+            bridgeApiVersion: "0.1.0",
+            defaultUrl: "https://example.com",
+            hostPatterns: ["example.com"],
+          },
+        },
+        url: "https://example.com",
+        browser: "firefox",
+        chromiumLoginWorkaround: true,
+      }),
+    ).rejects.toThrow("CONFIG_ERROR: --chromium-login-workaround requires --browser chromium");
+  });
+
   it("rejects browser attach urls when a browser channel override is also set", async () => {
     await expect(
       startLocalMcpRuntime({

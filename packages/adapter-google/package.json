@@ -36,8 +36,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@webmcp-bridge/adapter-utils": "workspace:*",
     "@webmcp-bridge/core": "workspace:*",
-    "@webmcp-bridge/playwright": "workspace:*"
+    "@webmcp-bridge/playwright": "workspace:*",
+    "playwright": "^1.58.2"
   },
   "license": "MIT"
 }

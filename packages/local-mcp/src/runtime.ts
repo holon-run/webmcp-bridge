@@ -362,6 +362,11 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   if (browserUrl && browserChannel) {
     throw new Error("CONFIG_ERROR: --browser-url cannot be combined with --browser-channel");
   }
+  if (options.chromiumLoginWorkaround && browserEngine !== "chromium") {
+    throw new Error(
+      `CONFIG_ERROR: --chromium-login-workaround requires --browser chromium (received ${browserEngine})`,
+    );
+  }
   if (browserUrl && options.chromiumLoginWorkaround) {
     throw new Error("CONFIG_ERROR: --browser-url cannot be combined with --chromium-login-workaround");
   }
