@@ -890,6 +890,7 @@ export const manifest: AdapterManifest = {
   defaultUrl: GEMINI_URL,
   hostPatterns: ["google.com", "*.google.com"],
   authProbeTool: "auth.get",
+  deferBridgeUntilAuthenticated: true,
 };
 
 export function createAdapter(): SiteAdapter {

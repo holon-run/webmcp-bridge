@@ -30,6 +30,7 @@ export type AdapterManifest = {
   defaultUrl?: string;
   hostPatterns: string[];
   authProbeTool?: string;
+  deferBridgeUntilAuthenticated?: boolean;
 };
 
 export type SiteAdapter = {

@@ -10,6 +10,7 @@ import type { JsonValue } from "@webmcp-bridge/core";
 import {
   createWebMcpPageGateway,
   type CreateWebMcpPageGatewayOptions,
+  type SiteAdapter,
   type WebMcpPageGateway,
   type WebMcpResourceDefinition,
   type WebMcpToolDefinition,
@@ -77,6 +78,8 @@ export type LocalMcpRuntime = {
   openWindow: () => Promise<"focused" | "opened">;
   close: () => Promise<void>;
 };
+
+type AuthState = "authenticated" | "auth_required" | "challenge_required";
 
 function isChromiumAutomationWorkaroundEnabled(enabledOverride?: boolean): boolean {
   if (enabledOverride !== undefined) {
@@ -228,6 +231,21 @@ export function resolveRecoveryNavigationUrl(
     return targetUrl;
   }
   return isUrlAllowed(currentUrl, hostPatterns) ? undefined : targetUrl;
+}
+
+function readAuthState(value: unknown): AuthState | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const state = (value as { state?: unknown }).state;
+  if (state === "authenticated" || state === "auth_required" || state === "challenge_required") {
+    return state;
+  }
+  return undefined;
+}
+
+export function shouldDeferBridgeForAuthState(state: AuthState | undefined): boolean {
+  return state === "auth_required" || state === "challenge_required";
 }
 
 export function shouldEndOwnerSessionAfterPageClose(headless: boolean, openPageCount: number): boolean {
@@ -388,6 +406,11 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     await currentGatewaySession?.close().catch(() => {
       // Cleanup should be best-effort when process is terminating.
     });
+    if (deferredAdapterStarted && deferredAdapter && currentPage && !currentPage.isClosed()) {
+      await deferredAdapter.stop?.({ page: currentPage }).catch(() => {
+        // Cleanup should be best-effort when process is terminating.
+      });
+    }
     pageGatewayResourceCleanup?.();
     pageLifecycleCleanup?.();
     if (browser) {
@@ -413,6 +436,63 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   if (fallbackAdapterFactory) {
     gatewayOptions.fallbackAdapter = fallbackAdapterFactory();
   }
+  const authProbeTool = site.manifest.authProbeTool;
+  const deferBridgeUntilAuthenticated =
+    site.manifest.deferBridgeUntilAuthenticated === true &&
+    typeof authProbeTool === "string" &&
+    authProbeTool.length > 0 &&
+    typeof fallbackAdapterFactory === "function";
+  let deferredAdapter: SiteAdapter | undefined;
+  let deferredAdapterStarted = false;
+
+  const ensureDeferredAdapterStarted = async (page: Page): Promise<SiteAdapter | undefined> => {
+    if (!deferBridgeUntilAuthenticated) {
+      return undefined;
+    }
+    if (!deferredAdapter && fallbackAdapterFactory) {
+      deferredAdapter = fallbackAdapterFactory();
+    }
+    if (!deferredAdapter) {
+      return undefined;
+    }
+    if (!deferredAdapterStarted) {
+      await deferredAdapter.start?.({ page });
+      deferredAdapterStarted = true;
+    }
+    return deferredAdapter;
+  };
+
+  const callDeferredAdapterTool = async (
+    page: Page,
+    name: string,
+    input: JsonValue,
+  ): Promise<JsonValue> => {
+    const adapter = await ensureDeferredAdapterStarted(page);
+    if (!adapter) {
+      throw new Error("SESSION_NOT_AVAILABLE: fallback adapter is unavailable");
+    }
+    return await adapter.callTool({ name, input }, { page });
+  };
+
+  const listDeferredAdapterTools = async (page: Page): Promise<WebMcpToolDefinition[]> => {
+    const adapter = await ensureDeferredAdapterStarted(page);
+    if (!adapter) {
+      return [];
+    }
+    const tools = await adapter.listTools({ page });
+    return tools.map((tool) => ({
+      ...tool,
+      inputSchema: tool.inputSchema ?? { type: "object" },
+    }));
+  };
+
+  const shouldDeferGatewayCreation = async (page: Page): Promise<boolean> => {
+    if (!deferBridgeUntilAuthenticated || !authProbeTool) {
+      return false;
+    }
+    const result = await callDeferredAdapterTool(page, authProbeTool, {} as JsonValue);
+    return shouldDeferBridgeForAuthState(readAuthState(result));
+  };
 
   const initializePageSession = async (navigate = true): Promise<void> => {
     if (!context) {
@@ -468,6 +548,14 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       } catch (error) {
         throw mapNavigationError(error, targetUrl, "goto");
       }
+    }
+
+    if (await shouldDeferGatewayCreation(pageForEvents)) {
+      pageGatewayResourceCleanup?.();
+      pageGatewayResourceCleanup = undefined;
+      currentMode = deferredAdapter ? "adapter-shim" : "polyfill";
+      gatewayStale = false;
+      return;
     }
 
     currentGatewaySession = await createWebMcpPageGateway(pageForEvents, gatewayOptions);
@@ -534,6 +622,17 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     }
   };
 
+  const maybeEnsureGatewaySession = async (): Promise<boolean> => {
+    if (!currentPage || currentPage.isClosed()) {
+      throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+    }
+    if (currentGatewaySession && !gatewayStale) {
+      return true;
+    }
+    await rebuildGatewaySession();
+    return Boolean(currentGatewaySession);
+  };
+
   try {
     if (browserUrl) {
       const attachedSession = await connectToExternalBrowserContext(browserUrl);
@@ -579,37 +678,47 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         await currentPage.bringToFront();
         return "opened";
       }
-      if (gatewayStale || !currentGatewaySession) {
-        await rebuildGatewaySession();
-      }
+      await maybeEnsureGatewaySession();
       await currentPage.bringToFront();
       return "focused";
     };
 
     const gateway: LocalMcpGateway = {
       listTools: async (): Promise<ReadonlyArray<WebMcpToolDefinition>> => {
-        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+        if (!currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        if (!(await maybeEnsureGatewaySession())) {
+          return await listDeferredAdapterTools(currentPage);
         }
         return await withGatewayRecovery(async () => await currentGatewaySession!.listTools());
       },
       callTool: async (name: string, input: Record<string, unknown>): Promise<JsonValue> => {
-        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+        if (!currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        if (!(await maybeEnsureGatewaySession())) {
+          return await callDeferredAdapterTool(currentPage, name, input as JsonValue);
         }
         return await withGatewayRecovery(
           async () => await currentGatewaySession!.callTool(name, input as JsonValue),
         );
       },
       listResources: async (): Promise<ReadonlyArray<WebMcpResourceDefinition>> => {
-        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+        if (!currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        if (!(await maybeEnsureGatewaySession())) {
+          return [];
         }
         return await withGatewayRecovery(async () => await currentGatewaySession!.listResources());
       },
       readResource: async (uri: string): Promise<JsonValue> => {
-        if (!currentGatewaySession || !currentPage || currentPage.isClosed()) {
+        if (!currentPage || currentPage.isClosed()) {
           throw new Error("SESSION_NOT_AVAILABLE: current page is closed");
+        }
+        if (!(await maybeEnsureGatewaySession())) {
+          throw new Error(`RESOURCE_NOT_FOUND: ${uri}`);
         }
         return await withGatewayRecovery(async () => await currentGatewaySession!.readResource(uri));
       },

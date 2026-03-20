@@ -11,6 +11,7 @@ import {
   resolveRecoveryNavigationUrl,
   resolveTargetUrl,
   selectPreferredPage,
+  shouldDeferBridgeForAuthState,
   shouldEndOwnerSessionAfterPageClose,
   startLocalMcpRuntime,
 } from "../src/runtime.js";
@@ -118,6 +119,18 @@ describe("shouldEndOwnerSessionAfterPageClose", () => {
 
   it("does not end a headless session from page-close semantics", () => {
     expect(shouldEndOwnerSessionAfterPageClose(true, 0)).toBe(false);
+  });
+});
+
+describe("shouldDeferBridgeForAuthState", () => {
+  it("defers bridge initialization while auth is still required", () => {
+    expect(shouldDeferBridgeForAuthState("auth_required")).toBe(true);
+    expect(shouldDeferBridgeForAuthState("challenge_required")).toBe(true);
+  });
+
+  it("allows bridge initialization after authentication is complete", () => {
+    expect(shouldDeferBridgeForAuthState("authenticated")).toBe(false);
+    expect(shouldDeferBridgeForAuthState(undefined)).toBe(false);
   });
 });
 
