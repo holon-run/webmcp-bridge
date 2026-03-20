@@ -410,6 +410,15 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         },
       };
     }
+    if (name !== "bridge.session.stop" && name !== "bridge.close") {
+      return {
+        ok: false,
+        error: {
+          code: "BRIDGE_TOOL_NOT_SUPPORTED",
+          message: `unsupported bridge tool: ${name}`,
+        },
+      };
+    }
 
     setTimeout(() => {
       void options.bridgeControl.closeBridge().catch(options.onError);
