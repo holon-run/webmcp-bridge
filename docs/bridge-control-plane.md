@@ -43,6 +43,8 @@ Implemented in this refactor:
 
 - `bridge.window.open`
 - `bridge.session.status`
+- `bridge.session.attach`
+- `bridge.session.restart`
 - `bridge.session.stop`
 - legacy aliases: `bridge.open`, `bridge.close`
 
@@ -51,10 +53,20 @@ Implemented in this refactor:
 - `site`
 - `targetUrl`
 - `controlMode` (`launch` | `attach`)
+- `browserUrl` (when attached)
 - `mode` (`native` | `polyfill` | `adapter-shim`)
 - `headless`
 
-This is intentionally small. It is enough to let clients distinguish local control-plane state from page tools without prematurely committing to a profile metadata format.
+`bridge.session.attach` and `bridge.session.restart` are the first executable lifecycle controls:
+
+- `bridge.session.attach`
+  - restarts the current bridge runtime into `attach` mode
+  - requires an explicit `browserUrl`
+- `bridge.session.restart`
+  - restarts the current bridge runtime in place
+  - can keep the current mode or switch between `launch` and `attach`
+
+This is still intentionally narrow. It is enough to let clients switch runtime ownership without prematurely committing to a profile metadata format or a bootstrap browser launcher contract.
 
 ## Future Lifecycle Model
 
@@ -80,8 +92,6 @@ This implies a future session state machine roughly like:
 The control-plane namespace leaves room for future methods such as:
 
 - `bridge.session.bootstrap`
-- `bridge.session.attach`
-- `bridge.session.restart`
 - `bridge.session.reset_profile`
 
 ## Adapter Direction

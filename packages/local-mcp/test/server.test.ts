@@ -76,6 +76,21 @@ describe("createLocalMcpStdioServer", () => {
       headless: false,
     })),
     openWindow: vi.fn<() => Promise<"focused" | "opened">>(async () => "focused" as const),
+    attachSession: vi.fn(async () => ({
+      site: "board",
+      targetUrl: "http://127.0.0.1:4173",
+      controlMode: "attach" as const,
+      browserUrl: "http://127.0.0.1:9222",
+      mode: "native" as const,
+      headless: false,
+    })),
+    restartSession: vi.fn(async () => ({
+      site: "board",
+      targetUrl: "http://127.0.0.1:4173",
+      controlMode: "launch" as const,
+      mode: "native" as const,
+      headless: true,
+    })),
     closeBridge: vi.fn(async () => {}),
   };
 
@@ -91,6 +106,8 @@ describe("createLocalMcpStdioServer", () => {
     onResourceUpdated.mockClear();
     bridgeControl.getState.mockClear();
     bridgeControl.openWindow.mockClear();
+    bridgeControl.attachSession.mockClear();
+    bridgeControl.restartSession.mockClear();
     bridgeControl.closeBridge.mockClear();
 
     output.on("data", (chunk: Buffer | string) => {
@@ -185,6 +202,8 @@ describe("createLocalMcpStdioServer", () => {
       tools: [
         { name: "bridge.window.open" },
         { name: "bridge.session.status" },
+        { name: "bridge.session.attach" },
+        { name: "bridge.session.restart" },
         { name: "bridge.session.stop" },
         { name: "bridge.open" },
         { name: "bridge.close" },
@@ -321,6 +340,84 @@ describe("createLocalMcpStdioServer", () => {
     });
     expect("result" in response ? response.result?.content : undefined).toEqual([]);
     expect("result" in response ? response.result?.isError : undefined).toBe(true);
+  });
+
+  it("handles bridge.session.attach locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2cd",
+      method: "tools/call",
+      params: {
+        name: "bridge.session.attach",
+        arguments: {
+          browserUrl: "http://127.0.0.1:9222",
+        },
+      },
+    });
+
+    expect(bridgeControl.attachSession).toHaveBeenCalledWith("http://127.0.0.1:9222");
+    expect(callTool).not.toHaveBeenCalled();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        restarted: true,
+        session: {
+          controlMode: "attach",
+          browserUrl: "http://127.0.0.1:9222",
+        },
+      },
+    });
+  });
+
+  it("rejects invalid bridge.session.attach input", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2ce",
+      method: "tools/call",
+      params: {
+        name: "bridge.session.attach",
+        arguments: {},
+      },
+    });
+
+    expect(bridgeControl.attachSession).not.toHaveBeenCalled();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "INVALID_ARGUMENT",
+        },
+      },
+    });
+  });
+
+  it("handles bridge.session.restart locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2cf",
+      method: "tools/call",
+      params: {
+        name: "bridge.session.restart",
+        arguments: {
+          headless: true,
+        },
+      },
+    });
+
+    expect(bridgeControl.restartSession).toHaveBeenCalledWith({
+      headless: true,
+    });
+    expect(callTool).not.toHaveBeenCalled();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        restarted: true,
+        session: {
+          controlMode: "launch",
+          headless: true,
+        },
+      },
+    });
   });
 
   it("handles bridge.close locally and closes asynchronously", async () => {
