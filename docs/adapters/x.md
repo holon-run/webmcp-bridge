@@ -19,6 +19,7 @@
 - `user.get`: read a user profile summary by handle.
 - `tweet.create`: submit a text post with optional `dryRun`.
 - `tweet.reply`: reply to one tweet by URL or ID, with optional `dryRun`.
+- `tweet.delete`: delete one tweet by URL or ID, with optional `dryRun`.
 - `grok.chat`: send one prompt to Grok, optionally upload local files, and return the assistant reply.
 - `article.draftMarkdown`: create one X article draft from a local markdown file, with optional cover image.
 - `article.publishMarkdown`: publish one X article from a local markdown file, with optional cover image.
@@ -53,6 +54,11 @@
 
 - input: `url | id`, `limit`
 - output: `root`, `focal`, `tweets`, `source`, optional `incomplete`, optional `nextCursor`
+
+`tweet.delete` exposes:
+
+- input: `url | id`, optional `dryRun`
+- output: `ok`, optional `dryRun`, optional `deleteVisible`, optional `confirmed`, optional `tweetId`, optional `url`
 
 `tweet.media.download` exposes:
 
@@ -254,6 +260,20 @@ Reply to a tweet:
     "arguments": {
       "url": "https://x.com/jack/status/20",
       "text": "Thanks, this is useful."
+    }
+  }
+}
+```
+
+Delete a tweet:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "tweet.delete",
+    "arguments": {
+      "id": "1234567890123456789"
     }
   }
 }

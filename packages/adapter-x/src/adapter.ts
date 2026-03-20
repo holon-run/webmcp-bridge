@@ -499,6 +499,26 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
+    name: "tweet.delete",
+    description: "Delete one tweet by url or id",
+    annotations: {
+      readOnlyHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      description: "Open a tweet detail page and delete one tweet owned by the authenticated account.",
+      properties: {
+        url: { type: "string", description: "Tweet URL, for example https://x.com/<user>/status/<id>." },
+        id: { type: "string", description: "Tweet id. Used when url is not provided." },
+        dryRun: {
+          type: "boolean",
+          description: "When true, validate delete controls without confirming the destructive action.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "grok.chat",
     description: "Send one prompt to Grok from the authenticated X session",
     inputSchema: {
@@ -3344,6 +3364,136 @@ async function waitForReplyConfirmation(
   return await waitForComposeConfirmation(page, text, secondPassTimeoutMs);
 }
 
+async function deleteTweetDetail(page: Page, targetUrl: string, dryRun: boolean): Promise<JsonValue> {
+  const matchId = targetUrl.match(/status\/(\d+)/)?.[1];
+  return await withEphemeralPage(page, targetUrl, async (detailPage) => {
+    await waitForTweetSurface(detailPage);
+
+    const menuOpened = await detailPage.evaluate(({ op }) => {
+      if (op !== "tweet_open_delete_menu") {
+        return false;
+      }
+      const menuButton = Array.from(document.querySelectorAll<HTMLElement>("button, div[role='button']")).find((element) => {
+        const testId = element.getAttribute("data-testid") || "";
+        const aria = (element.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+        return testId === "caret" || aria === "More";
+      });
+      if (!menuButton) {
+        return false;
+      }
+      menuButton.click();
+      return true;
+    }, { op: "tweet_open_delete_menu" }).catch(() => false);
+    if (!menuOpened) {
+      return errorResult("UPSTREAM_CHANGED", "tweet delete controls not found", {
+        reason: "more_button_not_found",
+      });
+    }
+
+    const deleteReady = await detailPage.waitForFunction(() => {
+      return Array.from(document.querySelectorAll<HTMLElement>("[role='menuitem'], button, div[role='button']")).some((element) => {
+        const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+        return text === "Delete";
+      });
+    }, undefined, { timeout: 5_000 }).then(() => true).catch(() => false);
+    if (!deleteReady) {
+      return errorResult("UPSTREAM_CHANGED", "tweet delete controls not found", {
+        reason: "delete_menu_item_not_found",
+      });
+    }
+
+    if (dryRun) {
+      const output: Record<string, JsonValue> = {
+        ok: true,
+        dryRun: true,
+        deleteVisible: true,
+      };
+      if (matchId) {
+        output.tweetId = matchId;
+      }
+      output.url = targetUrl;
+      return output;
+    }
+
+    const firstDelete = await detailPage.evaluate(({ op }) => {
+      if (op !== "tweet_click_delete_menu_item") {
+        return false;
+      }
+      const item = Array.from(document.querySelectorAll<HTMLElement>("[role='menuitem'], button, div[role='button']")).find((element) => {
+        const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+        return text === "Delete";
+      });
+      if (!item) {
+        return false;
+      }
+      item.click();
+      return true;
+    }, { op: "tweet_click_delete_menu_item" }).catch(() => false);
+    if (!firstDelete) {
+      return errorResult("UPSTREAM_CHANGED", "tweet delete controls not found", {
+        reason: "delete_menu_click_failed",
+      });
+    }
+
+    await detailPage.waitForTimeout(700);
+    await detailPage.evaluate(({ op }) => {
+      if (op !== "tweet_confirm_delete") {
+        return;
+      }
+      const dialog = document.querySelector("[role='dialog'], [data-testid='confirmationSheetDialog']");
+      const dialogButtons = dialog
+        ? Array.from(dialog.querySelectorAll<HTMLElement>("button, div[role='button']"))
+        : [];
+      const dialogConfirm = dialogButtons.find((element) => {
+        const testId = element.getAttribute("data-testid") || "";
+        const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+        return testId === "confirmationSheetConfirm" || text === "Delete";
+      });
+      if (dialogConfirm) {
+        dialogConfirm.click();
+        return;
+      }
+      const fallback = Array.from(document.querySelectorAll<HTMLElement>("button, div[role='button']")).filter((element) => {
+        const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+        return text === "Delete";
+      });
+      fallback[fallback.length - 1]?.click();
+    }, { op: "tweet_confirm_delete" }).catch(() => {});
+
+    const deleted = await detailPage
+      .waitForFunction(
+        ({ tweetId }) => {
+          const bodyText = document.body?.innerText || "";
+          if (bodyText.includes("This Post was deleted") || bodyText.includes("This Tweet was deleted")) {
+            return true;
+          }
+          if (tweetId) {
+            const currentUrl = window.location.href;
+            return !currentUrl.includes(`/status/${tweetId}`);
+          }
+          return false;
+        },
+        { tweetId: matchId },
+        { timeout: 15_000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    if (!deleted) {
+      return errorResult("ACTION_UNCONFIRMED", "tweet delete was not confirmed");
+    }
+
+    const output: Record<string, JsonValue> = {
+      ok: true,
+      confirmed: true,
+      url: targetUrl,
+    };
+    if (matchId) {
+      output.tweetId = matchId;
+    }
+    return output;
+  });
+}
+
 async function waitForArticleEditorSurface(page: Page): Promise<void> {
   await page
     .waitForFunction(() => {
@@ -5627,6 +5777,22 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
 
         const dryRun = args.dryRun === true;
         return await replyToTweet(page, targetUrl, text, dryRun, composeConfirmTimeoutMs);
+      }
+
+      if (name === "tweet.delete") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        if (!url && !id) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const targetUrl = url || `https://x.com/i/web/status/${encodeURIComponent(id)}`;
+        const dryRun = args.dryRun === true;
+        return await deleteTweetDetail(page, targetUrl, dryRun);
       }
 
       if (name === "grok.chat") {
