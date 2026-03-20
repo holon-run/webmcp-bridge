@@ -807,68 +807,6 @@ function parseDataUri(uri: string): { mimeType?: string; buffer: Buffer } | unde
   }
 }
 
-function toTweetMediaArray(value: unknown): TweetMedia[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const output: TweetMedia[] = [];
-  for (const rawEntry of value) {
-    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
-      continue;
-    }
-    const entry = rawEntry as Record<string, unknown>;
-    const type = entry.type;
-    const url = entry.url;
-    if (
-      (type !== "photo" && type !== "video" && type !== "animated_gif")
-      || typeof url !== "string"
-      || url.trim().length === 0
-    ) {
-      continue;
-    }
-    const media: TweetMedia = {
-      type,
-      url,
-    };
-    if (typeof entry.previewUrl === "string" && entry.previewUrl.trim()) {
-      media.previewUrl = entry.previewUrl;
-    }
-    if (typeof entry.width === "number" && Number.isFinite(entry.width)) {
-      media.width = entry.width;
-    }
-    if (typeof entry.height === "number" && Number.isFinite(entry.height)) {
-      media.height = entry.height;
-    }
-    if (typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)) {
-      media.durationMs = entry.durationMs;
-    }
-    if (Array.isArray(entry.variants)) {
-      const variants = entry.variants.flatMap((rawVariant) => {
-        if (!rawVariant || typeof rawVariant !== "object" || Array.isArray(rawVariant)) {
-          return [];
-        }
-        const variantRecord = rawVariant as Record<string, unknown>;
-        if (typeof variantRecord.url !== "string" || !variantRecord.url.trim()) {
-          return [];
-        }
-        const variant: TweetMediaVariant = { url: variantRecord.url };
-        if (typeof variantRecord.contentType === "string" && variantRecord.contentType.trim()) {
-          variant.contentType = variantRecord.contentType;
-        }
-        if (typeof variantRecord.bitrate === "number" && Number.isFinite(variantRecord.bitrate)) {
-          variant.bitrate = variantRecord.bitrate;
-        }
-        return [variant];
-      });
-      if (variants.length > 0) {
-        media.variants = variants;
-      }
-    }
-    output.push(media);
-  }
-  return output;
-}
-
 function normalizeTweetMediaForDownload(media: TweetMedia): TweetMedia {
   if (media.type !== "photo") {
     return media;
