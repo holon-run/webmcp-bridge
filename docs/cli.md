@@ -39,10 +39,12 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 - Adapter-shim mode: when adapter source is configured and native is unavailable, fallback adapter logic handles tools.
 - URL selection is `--url` first, otherwise adapter `manifest.defaultUrl`; startup fails closed if target host is outside adapter `hostPatterns`.
 - Stdio transport only in MVP.
-- local-mcp always exposes two bridge control tools in addition to page tools:
-  - `bridge.open`: focus the current headed browser session, or start a new headed session if the previous window was closed
-  - `bridge.close`: close the current bridge session
-- `bridge.open` returns `UNSUPPORTED_IN_HEADLESS_SESSION` when invoked through a headless link.
+- local-mcp exposes a reserved `bridge.*` control namespace in addition to page tools:
+  - `bridge.window.open`: focus the current headed browser session, or start a new headed session if the previous window was closed
+  - `bridge.session.status`: return local-mcp control-plane state for the current site session
+  - `bridge.session.stop`: close the current bridge session
+  - `bridge.open` and `bridge.close` remain available as legacy aliases
+- `bridge.window.open` and `bridge.open` return `UNSUPPORTED_IN_HEADLESS_SESSION` when invoked through a headless link.
 - If `--browser-channel` is set, `--browser` must remain `chromium`; other engines reject channel overrides.
 - If `--browser-url` is set, local-mcp attaches to an already running Chromium browser and does not launch a new profile itself.
 

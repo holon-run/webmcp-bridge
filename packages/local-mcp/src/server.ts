@@ -27,13 +27,16 @@ export type LocalMcpGateway = {
   onResourceUpdated: (listener: (uri: string) => void) => () => void;
 };
 
+export type LocalBridgeState = {
+  site: string;
+  targetUrl: string;
+  controlMode: "launch" | "attach";
+  mode: "native" | "polyfill" | "adapter-shim";
+  headless: boolean;
+};
+
 export type LocalBridgeControl = {
-  getState: () => {
-    site: string;
-    targetUrl: string;
-    mode: "native" | "polyfill" | "adapter-shim";
-    headless: boolean;
-  };
+  getState: () => LocalBridgeState;
   openWindow: () => Promise<"focused" | "opened">;
   closeBridge: () => Promise<void>;
 };
@@ -324,13 +327,31 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private bridgeTools(): ReadonlyArray<WebMcpToolDefinition> {
     return [
       {
-        name: "bridge.open",
+        name: "bridge.window.open",
         description: "Open or focus the browser window for the current headed local-mcp session.",
         inputSchema: { type: "object", additionalProperties: false },
       },
       {
+        name: "bridge.session.status",
+        description: "Return local-mcp bridge session state for the current site session.",
+        inputSchema: { type: "object", additionalProperties: false },
+        annotations: {
+          readOnlyHint: true,
+        },
+      },
+      {
+        name: "bridge.session.stop",
+        description: "Stop the current local-mcp bridge session.",
+        inputSchema: { type: "object", additionalProperties: false },
+      },
+      {
+        name: "bridge.open",
+        description: "Legacy alias for bridge.window.open.",
+        inputSchema: { type: "object", additionalProperties: false },
+      },
+      {
         name: "bridge.close",
-        description: "Close the current local-mcp browser session and end the bridge process.",
+        description: "Legacy alias for bridge.session.stop.",
         inputSchema: { type: "object", additionalProperties: false },
       },
     ];
@@ -342,18 +363,25 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   }
 
   private isBridgeToolName(name: string): boolean {
-    return name === "bridge.open" || name === "bridge.close";
+    return (
+      name === "bridge.window.open" ||
+      name === "bridge.session.status" ||
+      name === "bridge.session.stop" ||
+      name === "bridge.open" ||
+      name === "bridge.close"
+    );
   }
 
   private async callBridgeTool(options: LocalMcpStdioServerOptions, name: string): Promise<JsonValue> {
     const state = options.bridgeControl.getState();
-    if (name === "bridge.open") {
+    if (name === "bridge.window.open" || name === "bridge.open") {
       try {
         const windowState = await options.bridgeControl.openWindow();
         return {
           ok: true,
           site: state.site,
           targetUrl: state.targetUrl,
+          controlMode: state.controlMode,
           mode: state.mode,
           headless: state.headless,
           windowState,
@@ -370,6 +398,18 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         };
       }
     }
+    if (name === "bridge.session.status") {
+      return {
+        ok: true,
+        session: {
+          site: state.site,
+          targetUrl: state.targetUrl,
+          controlMode: state.controlMode,
+          mode: state.mode,
+          headless: state.headless,
+        },
+      };
+    }
 
     setTimeout(() => {
       void options.bridgeControl.closeBridge().catch(options.onError);
@@ -378,6 +418,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       ok: true,
       site: state.site,
       targetUrl: state.targetUrl,
+      controlMode: state.controlMode,
       mode: state.mode,
       headless: state.headless,
       closing: true,

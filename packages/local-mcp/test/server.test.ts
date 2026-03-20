@@ -71,6 +71,7 @@ describe("createLocalMcpStdioServer", () => {
     getState: vi.fn(() => ({
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
+      controlMode: "launch" as const,
       mode: "native" as const,
       headless: false,
     })),
@@ -181,7 +182,40 @@ describe("createLocalMcpStdioServer", () => {
 
     expect(listTools).toHaveBeenCalledOnce();
     expect("result" in response ? response.result : undefined).toMatchObject({
-      tools: [{ name: "bridge.open" }, { name: "bridge.close" }, { name: "ping" }],
+      tools: [
+        { name: "bridge.window.open" },
+        { name: "bridge.session.status" },
+        { name: "bridge.session.stop" },
+        { name: "bridge.open" },
+        { name: "bridge.close" },
+        { name: "ping" },
+      ],
+    });
+  });
+
+  it("handles bridge.window.open locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2a",
+      method: "tools/call",
+      params: {
+        name: "bridge.window.open",
+        arguments: {},
+      },
+    });
+
+    expect(bridgeControl.openWindow).toHaveBeenCalledOnce();
+    expect(callTool).not.toHaveBeenCalled();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        site: "board",
+        targetUrl: "http://127.0.0.1:4173",
+        controlMode: "launch",
+        mode: "native",
+        headless: false,
+        windowState: "focused",
+      },
     });
   });
 
@@ -203,6 +237,7 @@ describe("createLocalMcpStdioServer", () => {
         ok: true,
         site: "board",
         targetUrl: "http://127.0.0.1:4173",
+        controlMode: "launch",
         mode: "native",
         headless: false,
         windowState: "focused",
@@ -227,6 +262,34 @@ describe("createLocalMcpStdioServer", () => {
       structuredContent: {
         ok: true,
         windowState: "opened",
+      },
+    });
+  });
+
+  it("returns bridge.session.status locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2bc",
+      method: "tools/call",
+      params: {
+        name: "bridge.session.status",
+        arguments: {},
+      },
+    });
+
+    expect(callTool).not.toHaveBeenCalled();
+    expect(bridgeControl.openWindow).not.toHaveBeenCalled();
+    expect(bridgeControl.closeBridge).not.toHaveBeenCalled();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        session: {
+          site: "board",
+          targetUrl: "http://127.0.0.1:4173",
+          controlMode: "launch",
+          mode: "native",
+          headless: false,
+        },
       },
     });
   });
@@ -275,6 +338,30 @@ describe("createLocalMcpStdioServer", () => {
       structuredContent: {
         ok: true,
         site: "board",
+        controlMode: "launch",
+        closing: true,
+      },
+    });
+    await waitFor(() => bridgeControl.closeBridge.mock.calls.length === 1);
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it("handles bridge.session.stop locally and closes asynchronously", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2e",
+      method: "tools/call",
+      params: {
+        name: "bridge.session.stop",
+        arguments: {},
+      },
+    });
+
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        site: "board",
+        controlMode: "launch",
         closing: true,
       },
     });

@@ -70,6 +70,7 @@ export type LocalMcpRuntime = {
   site: string;
   siteDefinition: SiteDefinition;
   targetUrl: string;
+  controlMode: "launch" | "attach";
   mode: "native" | "polyfill" | "adapter-shim";
   headless: boolean;
   page: Page;
@@ -372,6 +373,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   }
   const browserType = resolveBrowserType(browserEngine);
   const targetUrl = resolveTargetUrl(options.url, site.manifest.defaultUrl);
+  const controlMode = browserUrl ? "attach" : "launch";
   if (!isUrlAllowed(targetUrl, site.manifest.hostPatterns)) {
     throw new Error("URL_NOT_ALLOWED: target url host is not allowed by adapter hostPatterns");
   }
@@ -743,6 +745,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       get targetUrl() {
         return targetUrl;
       },
+      controlMode,
       get mode() {
         return currentMode;
       },
