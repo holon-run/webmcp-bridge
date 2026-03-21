@@ -33,6 +33,11 @@ describe("resolveSiteSource", () => {
     const site = await resolveSiteSource({ site: "x" });
     expect(site.source).toBe("builtin");
     expect(site.id).toBe("x");
+    expect(site.manifest.authPolicy).toEqual({
+      mode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+    });
   });
 
   it("resolves external adapter module by relative path", async () => {

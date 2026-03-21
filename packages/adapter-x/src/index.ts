@@ -14,8 +14,9 @@ export const manifest: AdapterManifest = {
   defaultUrl: "https://x.com/home",
   hostPatterns: ["x.com", "www.x.com", "*.x.com"],
   authPolicy: {
-    mode: "none",
+    mode: "bootstrap_then_attach",
     authProbeTool: "auth.get",
+    allowAnonymousTools: true,
   },
 };
 

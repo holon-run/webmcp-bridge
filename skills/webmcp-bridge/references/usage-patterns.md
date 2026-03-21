@@ -16,9 +16,14 @@ board-webmcp-cli nodes.list
 command -v x-webmcp-cli
 command -v x-webmcp-ui
 skills/webmcp-bridge/scripts/ensure-links.sh --name x --site x
+x-webmcp-ui bridge.session.status
+x-webmcp-ui bridge.session.bootstrap
 x-webmcp-cli -h
 x-webmcp-cli timeline.home.list -h
 ```
+
+For auth-sensitive built-in sites such as `x`, expect the first headed run to require manual
+sign-in against the managed profile before page tools become available.
 
 ## Third-party adapter module
 

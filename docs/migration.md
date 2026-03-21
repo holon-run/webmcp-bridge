@@ -11,7 +11,7 @@
 - Start local-mcp via CLI:
 
 ```bash
-node packages/local-mcp/dist/cli.js --site x
+node packages/local-mcp/dist/cli.js --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
 ```
 
 - Use `createWebMcpPageGateway` directly when integrating Playwright manually.
@@ -20,4 +20,5 @@ node packages/local-mcp/dist/cli.js --site x
 
 - Native WebMCP is preferred automatically.
 - If native is unavailable, shim + fallback adapter is used automatically.
+- Auth-sensitive adapters such as `x` and `google` now use managed profile bootstrap/attach lifecycle instead of Playwright-driven login startup.
 - local-mcp stdio transport now reuses `@modelcontextprotocol/sdk` (`Server` + `StdioServerTransport`) instead of custom framing code.

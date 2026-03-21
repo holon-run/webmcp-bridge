@@ -148,7 +148,14 @@ node packages/local-mcp/dist/cli.js --url https://board.holon.run --headless
 Built-in fallback adapter mode:
 
 ```bash
-webmcp-local-mcp --site x --headless
+webmcp-local-mcp --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
+```
+
+For auth-sensitive sites such as `x` and `google`, the recommended first step is a headed
+session with a managed profile so local-mcp can bootstrap a normal browser for manual sign-in:
+
+```bash
+webmcp-local-mcp --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
 ```
 
 Deterministic fixture mode:
