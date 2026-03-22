@@ -103,6 +103,11 @@ type ArticleDraftAssets = {
   inlineImages: ArticleInlineImage[];
 };
 
+type ArticleImage = {
+  url: string;
+  alt?: string;
+};
+
 export type CreateXAdapterOptions = {
   composeConfirmTimeoutMs?: number;
   grokResponseTimeoutMs?: number;
@@ -549,6 +554,30 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
       },
       required: ["prompt"],
       additionalProperties: false,
+    },
+  },
+  {
+    name: "article.get",
+    description: "Read one X article by public url, edit url, or id",
+    inputSchema: {
+      type: "object",
+      description: "Fetch one X article using public article URL, edit URL, or article id.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Public article URL or edit URL.",
+          minLength: 1,
+        },
+        id: {
+          type: "string",
+          description: "Article id. Used when url is not provided.",
+          minLength: 1,
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
     },
   },
   {
@@ -3963,6 +3992,270 @@ function parseArticleIdFromUrl(url: string): string | undefined {
   return match?.[1] ?? match?.[2];
 }
 
+function normalizeArticleUrl(url?: string, articleId?: string): string | undefined {
+  const trimmed = typeof url === "string" ? url.trim() : "";
+  if (trimmed) {
+    return trimmed;
+  }
+  return articleId ? `https://x.com/compose/articles/edit/${encodeURIComponent(articleId)}` : undefined;
+}
+
+function sanitizeArticleText(text: string): string {
+  return text
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function waitForArticleReadSurface(page: Page): Promise<void> {
+  await page
+    .waitForFunction(() => {
+      const title = document.querySelector("h1, textarea");
+      const composer = document.querySelector("[data-testid='composer'][role='textbox']");
+      const articleNodes = document.querySelectorAll("article, main img[src], script[type='application/ld+json']").length;
+      return title !== null || composer !== null || articleNodes > 0;
+    }, undefined, { timeout: 12_000 })
+    .catch(() => {});
+  await page.waitForTimeout(600);
+}
+
+async function readArticleFromEditorPage(
+  page: Page,
+  articleId?: string,
+  sessionScoped?: boolean,
+): Promise<JsonValue> {
+  const article = await page.evaluate(({ op }) => {
+    if (op !== "article_collect_editor") {
+      return undefined;
+    }
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const title =
+      document.querySelector<HTMLTextAreaElement>("textarea")?.value?.trim() ||
+      normalize(document.querySelector<HTMLElement>("h1")?.innerText || "");
+    const composer = document.querySelector<HTMLElement>("[data-testid='composer'][role='textbox']");
+    const rawText = (composer?.innerText || composer?.textContent || "").trim();
+    const images = Array.from(document.querySelectorAll<HTMLImageElement>("img[src]"))
+      .map((img) => ({
+        url: img.currentSrc || img.src,
+        alt: normalize(img.alt || ""),
+        width: img.naturalWidth || 0,
+        height: img.naturalHeight || 0,
+      }))
+      .filter((item) => /^https?:\/\//.test(item.url))
+      .filter((item) => item.width > 64 || item.height > 64);
+    const deduped = new Map<string, { url: string; alt?: string }>();
+    for (const image of images) {
+      if (!deduped.has(image.url)) {
+        deduped.set(image.url, image.alt ? { url: image.url, alt: image.alt } : { url: image.url });
+      }
+    }
+    return {
+      title,
+      text: rawText,
+      images: Array.from(deduped.values()),
+      editUrl: window.location.href,
+    };
+  }, { op: "article_collect_editor" }).catch(() => undefined);
+
+  if (!article || typeof article !== "object") {
+    return errorResult("UPSTREAM_CHANGED", "article editor content not found");
+  }
+
+  const title = typeof article.title === "string" ? article.title : "";
+  const rawText = typeof article.text === "string" ? article.text : "";
+  const normalizedTitleHeading = title ? `# ${title}` : "";
+  let text = sanitizeArticleText(rawText);
+  if (normalizedTitleHeading && text.startsWith(normalizedTitleHeading)) {
+    text = sanitizeArticleText(text.slice(normalizedTitleHeading.length));
+  }
+  const images = Array.isArray(article.images) ? article.images : [];
+  const coverImage = images[0];
+  const inlineImages = coverImage ? images.slice(1) : images;
+  const output: Record<string, JsonValue> = {
+    article: {
+      ...(articleId ? { id: articleId } : {}),
+      title,
+      text,
+      editUrl: typeof article.editUrl === "string" ? article.editUrl : page.url(),
+      images: inlineImages,
+      source: "editor",
+    },
+  };
+  if (coverImage && typeof coverImage === "object" && coverImage !== null && "url" in coverImage) {
+    (output.article as Record<string, JsonValue>).coverImageUrl = (coverImage as { url: string }).url;
+  }
+  if (articleId) {
+    (output.article as Record<string, JsonValue>).sessionScoped = sessionScoped === true;
+  }
+  if (sessionScoped === true) {
+    (output.article as Record<string, JsonValue>).published = false;
+  }
+  return output;
+}
+
+async function readArticleFromPublicPage(page: Page, targetUrl: string): Promise<JsonValue> {
+  return await withEphemeralReadOnlyPage(page, targetUrl, async (readPage) => {
+    await waitForArticleReadSurface(readPage);
+    const article = await readPage.evaluate(({ op }) => {
+      if (op !== "article_collect_public") {
+        return undefined;
+      }
+      const normalizeInline = (value: string): string => value.replace(/\s+/g, " ").trim();
+      const normalizeBlock = (value: string): string =>
+        value.replace(/\u00a0/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+      const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
+      const readJsonLd = (): Record<string, unknown> | undefined => {
+        const scripts = Array.from(document.querySelectorAll<HTMLScriptElement>("script[type='application/ld+json']"));
+        for (const script of scripts) {
+          const raw = script.textContent?.trim();
+          if (!raw) {
+            continue;
+          }
+          try {
+            const parsed = JSON.parse(raw);
+            const queue = asArray(parsed);
+            while (queue.length > 0) {
+              const next = queue.shift();
+              if (!next || typeof next !== "object") {
+                continue;
+              }
+              const record = next as Record<string, unknown>;
+              const typeValue = record["@type"];
+              const types = asArray(typeValue).filter((item): item is string => typeof item === "string");
+              if (types.some((item) => item.toLowerCase().includes("article"))) {
+                return record;
+              }
+              const graph = record["@graph"];
+              if (graph) {
+                queue.push(...asArray(graph));
+              }
+            }
+          } catch {
+            continue;
+          }
+        }
+        return undefined;
+      };
+
+      const ld = readJsonLd();
+      const ldHeadline = typeof ld?.headline === "string" ? normalizeInline(ld.headline) : "";
+      const ldBody = typeof ld?.articleBody === "string" ? normalizeBlock(ld.articleBody) : "";
+      const ldImage = typeof ld?.image === "string"
+        ? ld.image
+        : Array.isArray(ld?.image)
+          ? ld.image.find((item): item is string => typeof item === "string")
+          : undefined;
+      const ldAuthor = (() => {
+        const author = ld?.author;
+        if (!author || typeof author !== "object" || Array.isArray(author)) {
+          return undefined;
+        }
+        const authorRecord = author as Record<string, unknown>;
+        const name = typeof authorRecord.name === "string" ? normalizeInline(authorRecord.name) : "";
+        const url = typeof authorRecord.url === "string" ? authorRecord.url : "";
+        const handleMatch = url.match(/x\.com\/([^/?#]+)/i);
+        return {
+          name,
+          handle: handleMatch?.[1] ? `@${handleMatch[1].replace(/^@+/, "")}` : undefined,
+        };
+      })();
+
+      const title =
+        ldHeadline ||
+        normalizeInline(document.querySelector<HTMLElement>("h1")?.innerText || "") ||
+        normalizeInline(document.querySelector("meta[property='og:title']")?.getAttribute("content") || "");
+      const articleTextCandidates = [
+        ...Array.from(document.querySelectorAll<HTMLElement>("main article [dir='auto'], main article div[lang], main article p")),
+        ...Array.from(document.querySelectorAll<HTMLElement>("article [dir='auto'], article div[lang], article p")),
+      ]
+        .map((node) => normalizeBlock(node.innerText || node.textContent || ""))
+        .filter((value) => value.length > 0);
+      const text = ldBody || articleTextCandidates.join("\n\n");
+      const canonicalUrl =
+        document.querySelector<HTMLLinkElement>("link[rel='canonical']")?.href ||
+        document.querySelector("meta[property='og:url']")?.getAttribute("content") ||
+        window.location.href;
+      const articleIdMatch = canonicalUrl.match(/\/articles\/(\d+)(?:[/?#]|$)/) || window.location.href.match(/\/articles\/(\d+)(?:[/?#]|$)/);
+      const allImages = Array.from(document.querySelectorAll<HTMLImageElement>("img[src]"))
+        .map((img) => ({
+          url: img.currentSrc || img.src,
+          alt: normalizeInline(img.alt || ""),
+          width: img.naturalWidth || 0,
+          height: img.naturalHeight || 0,
+        }))
+        .filter((item) => /^https?:\/\//.test(item.url))
+        .filter((item) => item.width > 100 || item.height > 100);
+      const imageByUrl = new Map<string, { url: string; alt?: string }>();
+      for (const image of allImages) {
+        if (!imageByUrl.has(image.url)) {
+          imageByUrl.set(image.url, image.alt ? { url: image.url, alt: image.alt } : { url: image.url });
+        }
+      }
+      const coverImageUrl =
+        (typeof ldImage === "string" && /^https?:\/\//.test(ldImage) ? ldImage : undefined) ||
+        Array.from(imageByUrl.keys())[0];
+      const images = Array.from(imageByUrl.values()).filter((item) => item.url !== coverImageUrl);
+      return {
+        id: articleIdMatch?.[1],
+        url: canonicalUrl,
+        title,
+        text,
+        coverImageUrl,
+        images,
+        authorName: ldAuthor?.name,
+        authorHandle: ldAuthor?.handle,
+      };
+    }, { op: "article_collect_public" }).catch(() => undefined);
+
+    if (!article || typeof article !== "object") {
+      return errorResult("UPSTREAM_CHANGED", "article content not found");
+    }
+    const outputArticle: Record<string, JsonValue> = {
+      source: "public",
+      published: true,
+      title: typeof article.title === "string" ? article.title : "",
+      text: sanitizeArticleText(typeof article.text === "string" ? article.text : ""),
+      url: typeof article.url === "string" ? article.url : targetUrl,
+      images: Array.isArray(article.images) ? article.images : [],
+    };
+    if (typeof article.id === "string" && article.id) {
+      outputArticle.id = article.id;
+    }
+    if (typeof article.coverImageUrl === "string" && article.coverImageUrl) {
+      outputArticle.coverImageUrl = article.coverImageUrl;
+    }
+    if (typeof article.authorName === "string" && article.authorName) {
+      outputArticle.authorName = article.authorName;
+    }
+    if (typeof article.authorHandle === "string" && article.authorHandle) {
+      outputArticle.authorHandle = article.authorHandle;
+    }
+    return { article: outputArticle };
+  });
+}
+
+async function readArticleByUrl(page: Page, targetUrl: string): Promise<JsonValue> {
+  const articleId = parseArticleIdFromUrl(targetUrl);
+  const useEditor = targetUrl.includes("/compose/articles/edit/");
+  if (articleId) {
+    const cachedPage = getCachedArticleDraftPage(page, articleId);
+    if (cachedPage) {
+      await waitForArticleEditorSurface(cachedPage);
+      await ensureArticleDraftLoaded(cachedPage, articleId);
+      return await readArticleFromEditorPage(cachedPage, articleId, true);
+    }
+  }
+  if (useEditor) {
+    return await withEphemeralPage(page, targetUrl, async (articlePage) => {
+      await waitForArticleEditorSurface(articlePage);
+      await ensureArticleDraftLoaded(articlePage, articleId);
+      return await readArticleFromEditorPage(articlePage, articleId, false);
+    });
+  }
+  return await readArticleFromPublicPage(page, targetUrl);
+}
+
 async function publishArticleEditor(
   page: Page,
   timeoutMs: number,
@@ -5818,6 +6111,20 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
           resolvedAttachments.attachments,
           conversationId || undefined,
         );
+      }
+
+      if (name === "article.get") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const targetUrl = normalizeArticleUrl(url, id);
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        return await readArticleByUrl(page, targetUrl);
       }
 
       if (name === "article.draftMarkdown") {
