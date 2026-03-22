@@ -504,7 +504,7 @@ async function listBrowserProcesses(): Promise<BrowserProcessEntry[]> {
       stdout += chunk;
     });
     child.once("error", () => resolve([]));
-    child.once("exit", () => {
+    child.once("close", () => {
       const entries = stdout
         .split("\n")
         .map((line) => line.trim())
@@ -562,7 +562,7 @@ async function waitForBrowserProcessForProfile(
     if (match) {
       return match.pid;
     }
-    await new Promise((resolve) => setTimeout(resolve, PROCESS_EXIT_POLL_INTERVAL_MS));
+    await new Promise((resolve) => setTimeout(resolve, CDP_READY_POLL_INTERVAL_MS));
   }
   return undefined;
 }
