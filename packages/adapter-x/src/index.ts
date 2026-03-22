@@ -9,13 +9,14 @@ import { createXAdapter } from "./adapter.js";
 export const manifest: AdapterManifest = {
   id: "x.com",
   displayName: "X",
-  version: "0.4.0",
+  version: "0.5.0",
   bridgeApiVersion: "1.0.0",
   defaultUrl: "https://x.com/home",
   hostPatterns: ["x.com", "www.x.com", "*.x.com"],
   authPolicy: {
-    mode: "none",
+    mode: "bootstrap_then_attach",
     authProbeTool: "auth.get",
+    allowAnonymousTools: true,
   },
 };
 

@@ -2,6 +2,21 @@
 
 `@webmcp-bridge/adapter-x` provides the real fallback adapter for X/Twitter flows when a page does not expose native `navigator.modelContext`.
 
+## Local-mcp session model
+
+When X is used through `@webmcp-bridge/local-mcp`, it is treated as an auth-sensitive site.
+The recommended startup path is:
+
+1. start `local-mcp` with `--site x --user-data-dir <profile>` in headed mode
+2. let `bridge.session.bootstrap` open a normal browser for manual sign-in when needed
+3. let local-mcp reattach to the authenticated profile for page automation
+
+Example:
+
+```bash
+webmcp-local-mcp --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
+```
+
 ## Tools
 
 - `auth.get`: detect `authenticated`, `auth_required`, or `challenge_required`.

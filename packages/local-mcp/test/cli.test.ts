@@ -128,6 +128,11 @@ describe("resolveSiteDefinition", () => {
     const site = resolveSiteDefinition("x");
     expect(site.manifest.defaultUrl).toContain("x.com");
     expect(site.manifest.hostPatterns).toContain("x.com");
+    expect(site.manifest.authPolicy).toEqual({
+      mode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+    });
   });
 
   it("resolves fixture site preset", () => {
