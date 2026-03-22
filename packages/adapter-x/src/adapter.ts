@@ -103,11 +103,6 @@ type ArticleDraftAssets = {
   inlineImages: ArticleInlineImage[];
 };
 
-type ArticleImage = {
-  url: string;
-  alt?: string;
-};
-
 export type CreateXAdapterOptions = {
   composeConfirmTimeoutMs?: number;
   grokResponseTimeoutMs?: number;
@@ -4095,7 +4090,7 @@ async function readArticleFromEditorPage(
 }
 
 async function readArticleFromPublicPage(page: Page, targetUrl: string): Promise<JsonValue> {
-  return await withEphemeralReadOnlyPage(page, targetUrl, async (readPage) => {
+  return await withEphemeralPage(page, targetUrl, async (readPage) => {
     await waitForArticleReadSurface(readPage);
     const article = await readPage.evaluate(({ op }) => {
       if (op !== "article_collect_public") {
