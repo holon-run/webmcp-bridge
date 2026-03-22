@@ -1287,15 +1287,44 @@ async function detectAuth(page: Page): Promise<AuthProbeResult> {
   }, { op: "detect_auth" });
 }
 
+function isTransientExecutionContextError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("execution context was destroyed") ||
+    message.includes("cannot find context with specified id") ||
+    message.includes("target closed")
+  );
+}
+
+async function detectAuthWithRetry(page: Page): Promise<AuthProbeResult> {
+  for (let attempt = 0; attempt < AUTH_STABILIZE_ATTEMPTS; attempt += 1) {
+    try {
+      return await detectAuth(page);
+    } catch (error) {
+      if (!isTransientExecutionContextError(error) || attempt === AUTH_STABILIZE_ATTEMPTS - 1) {
+        throw error;
+      }
+      await page.waitForLoadState("domcontentloaded").catch(() => {
+        // The page may still be mid-navigation; let the retry loop continue.
+      });
+      await page.waitForTimeout(AUTH_STABILIZE_DELAY_MS);
+    }
+  }
+  return { state: "auth_required", signals: ["auth_unknown"] };
+}
+
 async function detectAuthStable(page: Page): Promise<AuthProbeResult> {
-  let auth = await detectAuth(page);
+  let auth = await detectAuthWithRetry(page);
   for (let attempt = 1; attempt < AUTH_STABILIZE_ATTEMPTS; attempt += 1) {
     const shouldRetry = auth.state === "auth_required" && auth.signals.includes("auth_unknown");
     if (!shouldRetry) {
       return auth;
     }
     await page.waitForTimeout(AUTH_STABILIZE_DELAY_MS);
-    auth = await detectAuth(page);
+    auth = await detectAuthWithRetry(page);
   }
   return auth;
 }
@@ -1303,7 +1332,7 @@ async function detectAuthStable(page: Page): Promise<AuthProbeResult> {
 async function warmupAuthProbe(page: Page): Promise<void> {
   const deadline = Date.now() + AUTH_WARMUP_TIMEOUT_MS;
   for (;;) {
-    const auth = await detectAuth(page);
+    const auth = await detectAuthWithRetry(page);
     const stable = !(auth.state === "auth_required" && auth.signals.includes("auth_unknown"));
     if (stable || Date.now() >= deadline) {
       return;

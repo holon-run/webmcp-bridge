@@ -23,13 +23,17 @@ import {
   backupAndResetProfile,
   describeSessionStateFromAuth,
   ensureManagedProfile,
+  findBrowserProcessForProfile,
+  focusBrowserWindow,
   isProcessRunning,
   launchBootstrapBrowser,
   launchManagedAttachBrowser,
   readSessionMetadata,
   resolveAuthPolicy,
+  stopBrowserProcess,
   stopManagedBrowser,
   updateSessionMetadata,
+  waitForProcessExit,
   type BridgeAuthState,
   type BridgeControlMode,
   type BridgeSessionOwnership,
@@ -43,6 +47,9 @@ import {
   type BuiltinSite,
   type SiteDefinition,
 } from "./sites.js";
+
+const BOOTSTRAP_BROWSER_CLOSE_TIMEOUT_MS = 5_000;
+const BOOTSTRAP_PROFILE_RELEASE_DELAY_MS = 500;
 
 export type StartLocalMcpBridgeOptions = {
   site?: BuiltinSite;
@@ -156,10 +163,11 @@ function buildRuntimeStartOptions(
     if (!browserUrl) {
       throw new Error("CONFIG_ERROR: attach mode requires a browserUrl");
     }
-    if (baseOptions.browserChannel !== undefined) {
+    const explicitAttach = baseOptions.browserUrl !== undefined;
+    if (explicitAttach && baseOptions.browserChannel !== undefined) {
       throw new Error("CONFIG_ERROR: --browser-url cannot be combined with --browser-channel");
     }
-    if (baseOptions.chromiumLoginWorkaround !== undefined) {
+    if (explicitAttach && baseOptions.chromiumLoginWorkaround !== undefined) {
       throw new Error("CONFIG_ERROR: --browser-url cannot be combined with --chromium-login-workaround");
     }
     nextOptions.browserUrl = browserUrl;
@@ -258,6 +266,36 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     syncFromMetadata(nextMetadata);
   };
 
+  const hasRunningBootstrapBrowser = async (sourceMetadata?: SessionMetadata): Promise<boolean> => {
+    const activeMetadata = sourceMetadata ?? metadata;
+    if (!activeMetadata) {
+      return false;
+    }
+    if (
+      authPolicy.mode !== "bootstrap_then_attach" ||
+      activeMetadata.controlMode !== "bootstrap" ||
+      activeMetadata.ownership !== "external"
+    ) {
+      return false;
+    }
+    if (await isProcessRunning(activeMetadata.browserPid)) {
+      return true;
+    }
+    if (!profilePath) {
+      return false;
+    }
+    const discoveredPid = await findBrowserProcessForProfile(profilePath);
+    if (!discoveredPid) {
+      return false;
+    }
+    if (discoveredPid !== activeMetadata.browserPid) {
+      await writeMetadata({
+        browserPid: discoveredPid,
+      });
+    }
+    return true;
+  };
+
   const bindRuntime = (nextRuntime: LocalMcpRuntime, nextOwnership: BridgeSessionOwnership): void => {
     runtime = nextRuntime;
     runtimeMode = nextRuntime.mode;
@@ -352,6 +390,9 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       throw new Error("UNSUPPORTED_SESSION_CONTROL: bootstrap is available only for auth-sensitive managed sessions");
     }
     await closeRuntime();
+    if (await hasRunningBootstrapBrowser()) {
+      return refreshStatus();
+    }
     if (metadata?.ownership === "managed") {
       await stopManagedBrowser(metadata);
     }
@@ -432,6 +473,23 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     if (!attachBrowserUrl) {
       if (authPolicy.mode !== "bootstrap_then_attach" || !profilePath) {
         throw new Error("CONFIG_ERROR: bridge.session.attach requires browserUrl when no managed attach session exists");
+      }
+      if (!explicitBrowserUrl && (await hasRunningBootstrapBrowser())) {
+        const bootstrapPid = metadata?.browserPid ?? (profilePath ? await findBrowserProcessForProfile(profilePath) : undefined);
+        await stopBrowserProcess(bootstrapPid);
+        const didExit = await waitForProcessExit(bootstrapPid, BOOTSTRAP_BROWSER_CLOSE_TIMEOUT_MS);
+        if (!didExit) {
+          throw new Error(
+            `BOOTSTRAP_BROWSER_CLOSE_TIMEOUT: timed out waiting for bootstrap browser ${String(bootstrapPid)} to exit`,
+          );
+        }
+        await writeMetadata({
+          controlMode: "none",
+          ownership: "none",
+          browserUrl: null,
+          browserPid: null,
+        });
+        await new Promise((resolve) => setTimeout(resolve, BOOTSTRAP_PROFILE_RELEASE_DELAY_MS));
       }
       await ensureManagedProfile(profilePath);
       const attachOptions = {
@@ -574,6 +632,11 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       return;
     }
 
+    const hasRunningBootstrapExternal = await hasRunningBootstrapBrowser(metadata);
+    if (hasRunningBootstrapExternal) {
+      return;
+    }
+
     const hasRunningManagedAttach =
       metadata.controlMode === "attach" &&
       metadata.browserUrl !== undefined &&
@@ -643,6 +706,12 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
             return await runtime.openWindow();
           }
           if (authPolicy.mode === "bootstrap_then_attach") {
+            if (await hasRunningBootstrapBrowser()) {
+              await focusBrowserWindow(options.browserChannel).catch(() => {
+                // Focusing an external browser is best-effort; reuse still avoids duplicate windows.
+              });
+              return "focused";
+            }
             await runLifecycleTransition(async () => {
               await bootstrapSessionInternal(authState);
             });
