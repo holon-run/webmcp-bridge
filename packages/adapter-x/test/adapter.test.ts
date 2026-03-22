@@ -28,6 +28,10 @@ type Behavior = {
   statusUrl?: string;
   articleEditUrl: string;
   articlePublicUrl: string;
+  articleReadTitle: string;
+  articleReadText: string;
+  articleReadCoverImageUrl?: string;
+  articleReadImages: Array<{ url: string; alt?: string }>;
   articleOpenOk: boolean;
   articlePasteOk: boolean;
   articleCoverTriggerOk: boolean;
@@ -75,6 +79,10 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     statusUrl: "https://x.com/example/status/123",
     articleEditUrl: "https://x.com/compose/articles/edit/2035000000000000000",
     articlePublicUrl: "https://x.com/i/articles/2035000000000000000",
+    articleReadTitle: "Mock Article Title",
+    articleReadText: "Mock article body",
+    articleReadCoverImageUrl: "https://pbs.twimg.com/media/mock-cover.jpg",
+    articleReadImages: [{ url: "https://pbs.twimg.com/media/mock-inline.jpg", alt: "inline" }],
     articleOpenOk: true,
     articlePasteOk: true,
     articleCoverTriggerOk: true,
@@ -265,6 +273,28 @@ function createMockPage(partial: Partial<Behavior> = {}) {
           currentUrl,
           editUrl: behavior.articleEditUrl,
           publicUrl: behavior.articlePublishConfirmed ? behavior.articlePublicUrl : undefined,
+        };
+      }
+
+      if (command.op === "article_collect_editor") {
+        return {
+          title: articleTitle || behavior.articleReadTitle,
+          text: articleMarkdown || behavior.articleReadText,
+          images: behavior.articleReadImages,
+          editUrl: currentUrl,
+        };
+      }
+
+      if (command.op === "article_collect_public") {
+        return {
+          id: "2035000000000000000",
+          url: behavior.articlePublicUrl,
+          title: behavior.articleReadTitle,
+          text: behavior.articleReadText,
+          coverImageUrl: behavior.articleReadCoverImageUrl,
+          images: behavior.articleReadImages,
+          authorName: "Mock Author",
+          authorHandle: "@mockauthor",
         };
       }
 
@@ -639,6 +669,7 @@ describe("createXAdapter", () => {
         "tweet.reply",
         "tweet.delete",
         "grok.chat",
+        "article.get",
       ]),
     );
   });
@@ -1101,6 +1132,84 @@ describe("createXAdapter", () => {
       error: {
         code: "VALIDATION_ERROR",
         message: "markdownPath is required",
+      },
+    });
+  });
+
+  it("returns validation error for article.get without id/url", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool({ name: "article.get", input: {} }, { page: page as never });
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "url or id is required",
+      },
+    });
+  });
+
+  it("reads one published article by public url", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      articleReadTitle: "Published Article",
+      articleReadText: "Published article body",
+      articleReadCoverImageUrl: "https://pbs.twimg.com/media/published-cover.jpg",
+      articleReadImages: [{ url: "https://pbs.twimg.com/media/published-inline.jpg", alt: "inline" }],
+    });
+
+    const result = await adapter.callTool(
+      { name: "article.get", input: { url: "https://x.com/i/articles/2035000000000000000" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      article: {
+        id: "2035000000000000000",
+        url: "https://x.com/i/articles/2035000000000000000",
+        title: "Published Article",
+        text: "Published article body",
+        coverImageUrl: "https://pbs.twimg.com/media/published-cover.jpg",
+        images: [{ url: "https://pbs.twimg.com/media/published-inline.jpg", alt: "inline" }],
+        authorName: "Mock Author",
+        authorHandle: "@mockauthor",
+        source: "public",
+        published: true,
+      },
+    });
+  });
+
+  it("reads one cached article draft by id", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-read-draft-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "draft.md");
+    await writeFile(markdownPath, "# Draft Title\n\nDraft body");
+    const { page } = createMockPage({
+      articleReadImages: [],
+    });
+
+    await adapter.callTool(
+      {
+        name: "article.draftMarkdown",
+        input: { markdownPath },
+      },
+      { page: page as never },
+    );
+
+    const result = await adapter.callTool({ name: "article.get", input: { id: "2035000000000000000" } }, { page: page as never });
+
+    expect(result).toEqual({
+      article: {
+        id: "2035000000000000000",
+        title: "Draft Title",
+        text: "Draft body",
+        editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+        images: [],
+        source: "editor",
+        published: false,
+        sessionScoped: true,
       },
     });
   });

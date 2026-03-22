@@ -36,6 +36,7 @@ webmcp-local-mcp --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
 - `tweet.reply`: reply to one tweet by URL or ID, with optional `dryRun`.
 - `tweet.delete`: delete one tweet by URL or ID, with optional `dryRun`.
 - `grok.chat`: send one prompt to Grok, optionally upload local files, and return the assistant reply.
+- `article.get`: read one X article by public URL, edit URL, or ID.
 - `article.draftMarkdown`: create one X article draft from a local markdown file, with optional cover image.
 - `article.publishMarkdown`: publish one X article from a local markdown file, with optional cover image.
 - `article.publish`: publish one existing X article draft by edit URL, public URL, or ID.
@@ -91,6 +92,14 @@ webmcp-local-mcp --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
 - markdown image syntax with local file paths is supported; local inline images are uploaded through the article editor
 - output: `ok`, `title`, `editUrl`, optional `articleId`, `inlineImageCount`, `hasCoverImage`, `persisted`, `sessionScoped`
 - when `persisted=false`, the draft is only guaranteed to be publishable or deletable within the current bridge session; call `article.publish` or `article.delete` before the session is discarded
+
+`article.get` exposes:
+
+- input: `url | id`
+- when `id` is provided without `url`, the adapter opens the article editor URL for the authenticated account
+- output: `article`
+- `article` may include `id`, `title`, `text`, `url`, `editUrl`, `coverImageUrl`, `images`, `authorName`, `authorHandle`, `source`, `published`, optional `sessionScoped`
+- `source=editor` means the adapter read the authenticated editor view; `source=public` means it read a public article page
 
 `article.publishMarkdown` exposes:
 
@@ -346,6 +355,20 @@ Create one article draft from markdown:
     "arguments": {
       "markdownPath": "/tmp/post.md",
       "coverImagePath": "/tmp/cover.png"
+    }
+  }
+}
+```
+
+Read one article:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "article.get",
+    "arguments": {
+      "id": "2035000000000000000"
     }
   }
 }
