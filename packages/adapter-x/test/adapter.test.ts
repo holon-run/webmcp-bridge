@@ -12,6 +12,7 @@ import { createXAdapter } from "../src/index.js";
 type Behavior = {
   authState: "authenticated" | "auth_required" | "challenge_required";
   authSignals: string[];
+  detectAuthErrors?: string[];
   timelineItems: Array<{ id: string; text: string; url?: string; media?: Array<Record<string, unknown>> }>;
   timelineDomBatches?: Array<Array<{ id: string; text: string; url?: string; media?: Array<Record<string, unknown>> }>>;
   networkNextCursor?: string;
@@ -52,6 +53,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   let articleMarkdown = "";
   let articleDeleteMenuOpen = false;
   let tweetDeleteMenuOpen = false;
+  const pendingDetectAuthErrors = [...(partial.detectAuthErrors ?? [])];
   let routedHandler:
     | ((
         route: {
@@ -126,6 +128,10 @@ function createMockPage(partial: Partial<Behavior> = {}) {
 
       const command = arg as Record<string, unknown>;
       if (command.op === "detect_auth") {
+        const nextDetectAuthError = pendingDetectAuthErrors.shift();
+        if (nextDetectAuthError) {
+          throw new Error(nextDetectAuthError);
+        }
         return {
           state: behavior.authState,
           signals: behavior.authSignals,
@@ -423,6 +429,10 @@ function createMockPage(partial: Partial<Behavior> = {}) {
 
       const command = arg as Record<string, unknown>;
       if (command.op === "detect_auth") {
+        const nextDetectAuthError = pendingDetectAuthErrors.shift();
+        if (nextDetectAuthError) {
+          throw new Error(nextDetectAuthError);
+        }
         return {
           state: behavior.authState,
           signals: behavior.authSignals,
@@ -717,6 +727,25 @@ describe("createXAdapter", () => {
         },
       },
     });
+  });
+
+  it("retries transient detectAuth failures during adapter start", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      detectAuthErrors: ["Execution context was destroyed"],
+    });
+
+    await expect(adapter.start?.({ page: page as never })).resolves.toBeUndefined();
+    expect(page.evaluate).toHaveBeenCalled();
+  });
+
+  it("does not swallow non-transient detectAuth failures during adapter start", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      detectAuthErrors: ["boom"],
+    });
+
+    await expect(adapter.start?.({ page: page as never })).rejects.toThrow("boom");
   });
 
   it("supports dry-run compose without waiting confirmation", async () => {

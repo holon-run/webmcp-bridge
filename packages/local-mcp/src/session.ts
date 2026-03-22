@@ -65,6 +65,8 @@ const SESSION_METADATA_VERSION = 1;
 const SESSION_METADATA_PATH = ".webmcp-bridge/session.json";
 const CDP_READY_TIMEOUT_MS = 10_000;
 const CDP_READY_POLL_INTERVAL_MS = 250;
+const PROCESS_EXIT_TIMEOUT_MS = 5_000;
+const PROCESS_EXIT_POLL_INTERVAL_MS = 100;
 
 function timestamp(): string {
   return new Date().toISOString();
@@ -414,6 +416,24 @@ async function resolveChromiumExecutable(channel: BrowserChannel | undefined): P
   );
 }
 
+function getChromiumAppName(channel: BrowserChannel | undefined): string | undefined {
+  const normalizedChannel = channel ?? "chrome";
+  if (process.platform !== "darwin") {
+    return undefined;
+  }
+  const appNames: Record<BrowserChannel, string> = {
+    chrome: "Google Chrome",
+    "chrome-beta": "Google Chrome Beta",
+    "chrome-dev": "Google Chrome Dev",
+    "chrome-canary": "Google Chrome Canary",
+    msedge: "Microsoft Edge",
+    "msedge-beta": "Microsoft Edge Beta",
+    "msedge-dev": "Microsoft Edge Dev",
+    "msedge-canary": "Microsoft Edge Canary",
+  };
+  return appNames[normalizedChannel];
+}
+
 function buildBootstrapArgs(options: BootstrapBrowserOptions): string[] {
   return [
     `--user-data-dir=${options.userDataDir}`,
@@ -465,6 +485,50 @@ async function waitForCdp(browserUrl: string, timeoutMs = CDP_READY_TIMEOUT_MS):
   throw new Error(`BROWSER_ATTACH_TIMEOUT: timed out waiting for remote debugging at ${browserUrl}`);
 }
 
+type BrowserProcessEntry = {
+  pid: number;
+  command: string;
+};
+
+async function listBrowserProcesses(): Promise<BrowserProcessEntry[]> {
+  if (process.platform === "win32") {
+    return [];
+  }
+  return await new Promise<BrowserProcessEntry[]>((resolve) => {
+    let stdout = "";
+    const child = spawn("ps", ["-ax", "-o", "pid=,command="], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.once("error", () => resolve([]));
+    child.once("close", () => {
+      const entries = stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const match = line.match(/^(\d+)\s+(.*)$/);
+          if (!match) {
+            return undefined;
+          }
+          return {
+            pid: Number.parseInt(match[1] ?? "", 10),
+            command: match[2] ?? "",
+          };
+        })
+        .filter((entry): entry is BrowserProcessEntry => entry !== undefined && Number.isInteger(entry.pid));
+      resolve(entries);
+    });
+  });
+}
+
+function isRootBrowserProcessForProfile(command: string, userDataDir: string): boolean {
+  return command.includes(`--user-data-dir=${userDataDir}`) && !command.includes("--type=");
+}
+
 function spawnDetachedBrowser(executable: string, args: string[]): number | undefined {
   const child = spawn(executable, args, {
     detached: true,
@@ -474,10 +538,40 @@ function spawnDetachedBrowser(executable: string, args: string[]): number | unde
   return child.pid ?? undefined;
 }
 
+async function waitForProcessExitInternal(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await isProcessRunning(pid))) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, PROCESS_EXIT_POLL_INTERVAL_MS));
+  }
+  return !(await isProcessRunning(pid));
+}
+
+async function waitForBrowserProcessForProfile(
+  userDataDir: string,
+  timeoutMs: number,
+): Promise<number | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const entries = await listBrowserProcesses();
+    const match = entries
+      .filter((entry) => isRootBrowserProcessForProfile(entry.command, userDataDir))
+      .sort((left, right) => right.pid - left.pid)[0];
+    if (match) {
+      return match.pid;
+    }
+    await new Promise((resolve) => setTimeout(resolve, CDP_READY_POLL_INTERVAL_MS));
+  }
+  return undefined;
+}
+
 export async function launchBootstrapBrowser(options: BootstrapBrowserOptions): Promise<{ pid?: number }> {
   const executable = await resolveChromiumExecutable(options.browserChannel);
   const pid = spawnDetachedBrowser(executable, buildBootstrapArgs(options));
-  return { ...(pid !== undefined ? { pid } : {}) };
+  const trackedPid = (await waitForBrowserProcessForProfile(options.userDataDir, CDP_READY_TIMEOUT_MS)) ?? pid;
+  return { ...(trackedPid !== undefined ? { pid: trackedPid } : {}) };
 }
 
 export async function launchManagedAttachBrowser(
@@ -496,9 +590,10 @@ export async function launchManagedAttachBrowser(
     options.targetUrl,
   ]);
   await waitForCdp(browserUrl);
+  const trackedPid = (await waitForBrowserProcessForProfile(options.userDataDir, CDP_READY_TIMEOUT_MS)) ?? pid;
   return {
     browserUrl,
-    ...(pid !== undefined ? { pid } : {}),
+    ...(trackedPid !== undefined ? { pid: trackedPid } : {}),
   };
 }
 
@@ -514,13 +609,13 @@ export async function isProcessRunning(pid: number | undefined): Promise<boolean
   }
 }
 
-export async function stopManagedBrowser(metadata: SessionMetadata): Promise<void> {
-  if (metadata.ownership !== "managed" || !(await isProcessRunning(metadata.browserPid))) {
+export async function stopBrowserProcess(pid: number | undefined): Promise<void> {
+  if (!(await isProcessRunning(pid))) {
     return;
   }
   if (process.platform === "win32") {
     await new Promise<void>((resolve) => {
-      const child = spawn("taskkill", ["/PID", String(metadata.browserPid), "/T", "/F"], {
+      const child = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
         stdio: "ignore",
       });
       child.once("exit", () => resolve());
@@ -529,14 +624,49 @@ export async function stopManagedBrowser(metadata: SessionMetadata): Promise<voi
     return;
   }
   try {
-    process.kill(-(metadata.browserPid as number), "SIGTERM");
+    process.kill(-(pid as number), "SIGTERM");
   } catch {
     try {
-      process.kill(metadata.browserPid as number, "SIGTERM");
+      process.kill(pid as number, "SIGTERM");
     } catch {
       // Ignore missing/stale processes during cleanup.
     }
   }
+}
+
+export async function waitForProcessExit(pid: number | undefined, timeoutMs = PROCESS_EXIT_TIMEOUT_MS): Promise<boolean> {
+  if (!pid) {
+    return true;
+  }
+  return await waitForProcessExitInternal(pid, timeoutMs);
+}
+
+export async function focusBrowserWindow(browserChannel: BrowserChannel | undefined): Promise<boolean> {
+  const appName = getChromiumAppName(browserChannel);
+  if (!appName) {
+    return false;
+  }
+  return await new Promise<boolean>((resolve) => {
+    const child = spawn("open", ["-a", appName], {
+      stdio: "ignore",
+    });
+    child.once("exit", (code) => resolve(code === 0));
+    child.once("error", () => resolve(false));
+  });
+}
+
+export async function findBrowserProcessForProfile(userDataDir: string): Promise<number | undefined> {
+  const entries = await listBrowserProcesses();
+  return entries
+    .filter((entry) => isRootBrowserProcessForProfile(entry.command, userDataDir))
+    .sort((left, right) => right.pid - left.pid)[0]?.pid;
+}
+
+export async function stopManagedBrowser(metadata: SessionMetadata): Promise<void> {
+  if (metadata.ownership !== "managed" || !(await isProcessRunning(metadata.browserPid))) {
+    return;
+  }
+  await stopBrowserProcess(metadata.browserPid);
 }
 
 export function assertAuthSensitiveBrowserSupport(
