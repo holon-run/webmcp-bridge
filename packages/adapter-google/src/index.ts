@@ -649,6 +649,7 @@ async function readGeminiResponseState(
   return await page.evaluate(
     ({ mode: requestedMode, previousResponseText, previousImageCount }) => {
         const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
+        const normalizedPreviousResponseText = normalize(previousResponseText || "");
         const visible = (element: Element | null): element is HTMLElement => {
           if (!(element instanceof HTMLElement)) {
             return false;
@@ -754,7 +755,7 @@ async function readGeminiResponseState(
           !hasStopControl &&
           hasResponseFeedback &&
           responseText &&
-          responseText !== previousResponseText
+          responseText !== normalizedPreviousResponseText
         ) {
           return {
             status: "ready" as const,

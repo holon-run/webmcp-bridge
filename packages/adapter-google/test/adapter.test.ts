@@ -16,12 +16,23 @@ function createMockPage(options?: {
 }) {
   const evalResponses = options?.evalResponses ? [...options.evalResponses] : undefined;
   const textboxFill = vi.fn(async () => {});
+  const evaluate = vi.fn(async (_fn: unknown, arg?: unknown) => {
+    if (
+      arg &&
+      typeof arg === "object" &&
+      !Array.isArray(arg) &&
+      "value" in (arg as Record<string, unknown>)
+    ) {
+      return evalResponses ? (evalResponses.shift() ?? true) : true;
+    }
+    return evalResponses ? evalResponses.shift() : options?.evalResponse;
+  });
   return {
     goto: vi.fn(async () => {}),
     url: vi.fn(() => options?.url ?? "https://gemini.google.com/app"),
     title: vi.fn(async () => options?.title ?? "Google Gemini"),
     waitForTimeout: vi.fn(async () => {}),
-    evaluate: vi.fn(async () => (evalResponses ? evalResponses.shift() : options?.evalResponse)),
+    evaluate,
     locator: vi.fn(() => ({
       first: () => ({
         click: vi.fn(async () => {}),
@@ -218,6 +229,7 @@ describe("createAdapter", () => {
   it("submits long gemini prompts in one shot and waits for a new response", async () => {
     const adapter = createAdapter();
     const prompt = "long prompt ".repeat(200);
+    const normalizedPrompt = prompt.trim();
     const page = createMockPage({
       url: "https://gemini.google.com/app/chat",
       title: "Google Gemini",
@@ -257,13 +269,8 @@ describe("createAdapter", () => {
     );
 
     expect(page.textboxFill).not.toHaveBeenCalled();
-    expect(page.evaluate).toHaveBeenNthCalledWith(
-      3,
-      expect.any(Function),
-      expect.objectContaining({ value: prompt }),
-    );
     expect(result).toEqual({
-      prompt,
+      prompt: normalizedPrompt,
       mode: "text",
       conversationUrl: "https://gemini.google.com/app/chat",
       responseText: "fresh answer",

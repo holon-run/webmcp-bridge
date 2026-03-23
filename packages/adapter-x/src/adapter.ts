@@ -5676,8 +5676,21 @@ async function submitGrokPrompt(page: Page, prompt: string): Promise<GrokCompose
         }
         if (element instanceof HTMLElement && element.isContentEditable) {
           element.focus();
-          element.textContent = value;
+          try {
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+            document.execCommand("insertText", false, value);
+          } catch {
+            // Ignore and fallback to direct assignment below.
+          }
+          if ((element.textContent ?? "").trim() !== value) {
+            element.textContent = value;
+          }
           element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
           return true;
         }
         return false;
@@ -6068,7 +6081,11 @@ async function waitForGrokResponse(
       }
     }
 
-    await page.waitForTimeout(1_000);
+    const remainingIdleMs = idleDeadline - Date.now();
+    const sleepMs = Math.min(1_000, Math.max(0, remainingIdleMs));
+    if (sleepMs > 0) {
+      await page.waitForTimeout(sleepMs);
+    }
   }
 
   return { confirmed: false };

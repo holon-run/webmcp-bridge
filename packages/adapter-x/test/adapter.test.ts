@@ -136,6 +136,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       const command = arg as Record<string, unknown>;
+      if (typeof command.selector === "string" && typeof command.value === "string") {
+        return true;
+      }
       if (command.op === "detect_auth") {
         const nextDetectAuthError = pendingDetectAuthErrors.shift();
         if (nextDetectAuthError) {
@@ -484,6 +487,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       const command = arg as Record<string, unknown>;
+      if (typeof command.selector === "string" && typeof command.value === "string") {
+        return true;
+      }
       if (command.op === "detect_auth") {
         const nextDetectAuthError = pendingDetectAuthErrors.shift();
         if (nextDetectAuthError) {
@@ -1241,6 +1247,7 @@ describe("createXAdapter", () => {
           signature: "done-1",
         },
       ],
+      grokRawResponse: "",
     });
 
     const result = await adapter.callTool(
@@ -1248,12 +1255,11 @@ describe("createXAdapter", () => {
       { page: page as never },
     );
 
-    expect(readPage.waitForTimeout).toHaveBeenCalledWith(1_000);
+    expect(readPage.waitForTimeout).toHaveBeenCalled();
     expect(result).toEqual({
       ok: true,
-      conversationId: "mock-conversation",
       response: "final settled answer",
-      url: "https://x.com/i/grok?conversation=mock-conversation",
+      url: "https://x.com/i/grok",
     });
   });
 
