@@ -97,6 +97,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     tweetDeleteConfirmed: true,
     ...partial,
   };
+  const articleIdFromPublicUrl = behavior.articlePublicUrl.match(/\/article(?:s)?\/(\d+)/)?.[1] ?? "2035000000000000000";
 
   const grokNetworkResponseText = behavior.confirmGrok
     ? (behavior.grokRawResponse
@@ -296,8 +297,8 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       if (command.op === "article_collect_public") {
         if (behavior.articlePublicUnsupported) {
           return {
-            id: "2035000000000000000",
-            url: "https://x.com/i/article/2035000000000000000",
+            id: articleIdFromPublicUrl,
+            url: `https://x.com/i/article/${articleIdFromPublicUrl}`,
             title: "X",
             text: "",
             coverImageUrl: undefined,
@@ -306,7 +307,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
           };
         }
         return {
-          id: "2035000000000000000",
+          id: articleIdFromPublicUrl,
           url: behavior.articlePublicUrl,
           title: behavior.articleReadTitle,
           text: behavior.articleReadText,
