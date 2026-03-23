@@ -21,11 +21,11 @@ done
 
 rg -q '^name:\s*board-webmcp\s*$' "$SKILL_FILE" || fail 'invalid skill name'
 rg -q '^description:\s*.+' "$SKILL_FILE" || fail 'missing description'
-rg -q 'command -v board-webmcp' "$SKILL_FILE" || fail 'missing link-first check'
-rg -q 'board-webmcp -h' "$SKILL_FILE" || fail 'missing help-first usage'
-rg -q 'board-webmcp nodes.list -h' "$SKILL_FILE" || fail 'missing operation help example'
-rg -q 'board-webmcp nodes.upsert' "$SKILL_FILE" || fail 'missing write example'
-rg -q 'board-webmcp diagram.export format=json' "$SKILL_FILE" || fail 'missing key=value example'
+rg -q 'command -v board-webmcp-cli' "$SKILL_FILE" || fail 'missing link-first check'
+rg -q 'board-webmcp-cli -h' "$SKILL_FILE" || fail 'missing help-first usage'
+rg -q 'board-webmcp-cli nodes.list -h' "$SKILL_FILE" || fail 'missing operation help example'
+rg -q 'board-webmcp-cli nodes.upsert' "$SKILL_FILE" || fail 'missing write example'
+rg -q 'board-webmcp-cli diagram.export format=json' "$SKILL_FILE" || fail 'missing key=value example'
 rg -q 'bridge.session.mode.set' "$SKILL_FILE" || fail 'missing explicit mode switch guidance'
 rg -q '~/.uxc/webmcp-profile/board' "$SKILL_FILE" || fail 'missing profile convention'
 

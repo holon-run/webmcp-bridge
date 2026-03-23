@@ -69,7 +69,7 @@ link_args=("${launcher_parts[@]}" --url "$url" --headless --no-auto-login-fallba
 
 link_value="$(shell_join "${link_args[@]}")"
 
-"${link_command[@]}" board-webmcp "$link_value" --daemon-exclusive "$profile" --daemon-idle-ttl 0 --force >/dev/null
+"${link_command[@]}" board-webmcp-cli "$link_value" --daemon-exclusive "$profile" --daemon-idle-ttl 0 --force >/dev/null
 
-printf 'linked %s -> %s\n' 'board-webmcp' "$link_value"
+printf 'linked %s -> %s\n' 'board-webmcp-cli' "$link_value"
 printf 'profile %s\n' "$profile"

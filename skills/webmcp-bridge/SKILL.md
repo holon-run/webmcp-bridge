@@ -27,24 +27,24 @@ If the target site does not expose native WebMCP and does not already have a fal
    - default profile root: `~/.uxc/webmcp-profile/<site>`
    - never share one profile across different sites
 3. Create or refresh the fixed link for that site:
-   - `command -v <site>-webmcp`
+   - `command -v <site>-webmcp-cli`
    - if the link is missing or the source config changed, run `skills/webmcp-bridge/scripts/ensure-links.sh`
 4. Inspect the bridge and tool schema before calling tools:
-   - `<site>-webmcp -h`
-   - `<site>-webmcp <operation> -h`
-   - `<site>-webmcp <operation> field=value`
-   - `<site>-webmcp <operation> '{"field":"value"}'`
+   - `<site>-webmcp-cli -h`
+   - `<site>-webmcp-cli <operation> -h`
+   - `<site>-webmcp-cli <operation> field=value`
+   - `<site>-webmcp-cli <operation> '{"field":"value"}'`
 5. Treat presentation mode as explicit runtime state, not command-name intent:
-   - check current state with `<site>-webmcp bridge.session.status`
-   - or `<site>-webmcp bridge.session.mode.get`
+   - check current state with `<site>-webmcp-cli bridge.session.status`
+   - or `<site>-webmcp-cli bridge.session.mode.get`
    - `--headless` or `--no-headless` only sets the preferred default for bridge-managed sessions
    - the actual runtime mode is `presentationMode`
 6. Switch modes explicitly when needed:
    - for normal automation, stay in `headless`
-   - for login, MFA, or human collaboration, run `<site>-webmcp bridge.session.mode.set '{"mode":"headed"}'`
-   - then open or focus the visible session with `<site>-webmcp bridge.open`
+   - for login, MFA, or human collaboration, run `<site>-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'`
+   - then open or focus the visible session with `<site>-webmcp-cli bridge.open`
    - if the user manually closes that window, the headed owner session ends; run `bridge.open` again to start a new headed session on the same profile
-   - close the visible owner session with `<site>-webmcp bridge.close`
+   - close the visible owner session with `<site>-webmcp-cli bridge.close`
 7. Parse JSON output only:
    - success path: `.ok == true`, consume `.data`
    - failure path: `.ok == false`, inspect `.error.code` and `.error.message`
@@ -53,7 +53,7 @@ If the target site does not expose native WebMCP and does not already have a fal
 
 Every site gets one fixed command:
 
-- `<site>-webmcp`
+- `<site>-webmcp-cli`
 
 The link must keep one stable site profile and daemon lock:
 

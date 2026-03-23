@@ -110,7 +110,7 @@ if [[ -n "$browser" ]]; then
   source_args+=(--browser "$browser")
 fi
 
-link_name="${name}-webmcp"
+link_name="${name}-webmcp-cli"
 link_command=(uxc link)
 if [[ -n "$link_dir" ]]; then
   mkdir -p "$link_dir"

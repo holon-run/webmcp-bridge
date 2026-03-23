@@ -6,12 +6,12 @@ Use a fixed naming scheme so humans and agents can predict the command names.
 
 For site name `<site>`:
 
-- Link: `<site>-webmcp`
+- Link: `<site>-webmcp-cli`
 
 Examples:
 
-- `board-webmcp`
-- `x-webmcp`
+- `board-webmcp-cli`
+- `x-webmcp-cli`
 
 ## Profile Layout
 
@@ -34,10 +34,10 @@ For auth-sensitive sites such as `x` and `google`, the shared profile is also th
 ## Link Creation Pattern
 
 ```bash
-command -v <site>-webmcp
+command -v <site>-webmcp-cli
 skills/webmcp-bridge/scripts/ensure-links.sh --name <site> --url <url>
-<site>-webmcp -h
-<site>-webmcp <operation> -h
+<site>-webmcp-cli -h
+<site>-webmcp-cli <operation> -h
 ```
 
 ## Invocation Pattern
@@ -45,19 +45,19 @@ skills/webmcp-bridge/scripts/ensure-links.sh --name <site> --url <url>
 Prefer `key=value` for simple inputs:
 
 ```bash
-<site>-webmcp <operation> field=value
+<site>-webmcp-cli <operation> field=value
 ```
 
 For nested payloads, use one positional JSON object:
 
 ```bash
-<site>-webmcp <operation> '{"field":"value"}'
+<site>-webmcp-cli <operation> '{"field":"value"}'
 ```
 
 When mode matters, inspect and switch it explicitly:
 
 ```bash
-<site>-webmcp bridge.session.mode.get
-<site>-webmcp bridge.session.mode.set '{"mode":"headed"}'
-<site>-webmcp bridge.open
+<site>-webmcp-cli bridge.session.mode.get
+<site>-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'
+<site>-webmcp-cli bridge.open
 ```

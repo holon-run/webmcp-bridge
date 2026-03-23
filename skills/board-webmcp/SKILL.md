@@ -18,34 +18,34 @@ Use this skill to operate the native board demo through `@webmcp-bridge/local-mc
 ## Core Workflow
 
 1. Ensure the fixed board link exists:
-   - `command -v board-webmcp`
+   - `command -v board-webmcp-cli`
    - if missing or pointed at the wrong URL, run `skills/board-webmcp/scripts/ensure-links.sh`
 2. Inspect the bridge and tool schema before calling tools:
-   - `board-webmcp -h`
-   - `board-webmcp nodes.list -h`
-   - `board-webmcp nodes.upsert -h`
+   - `board-webmcp-cli -h`
+   - `board-webmcp-cli nodes.list -h`
+   - `board-webmcp-cli nodes.upsert -h`
 3. Read current board state:
-   - non-collaborative automation: `board-webmcp nodes.list`, `board-webmcp edges.list`
+   - non-collaborative automation: `board-webmcp-cli nodes.list`, `board-webmcp-cli edges.list`
    - collaborative visible session:
-     - `board-webmcp bridge.session.mode.set '{"mode":"headed"}'`
-     - `board-webmcp bridge.open`
-     - `board-webmcp nodes.list`
-     - `board-webmcp edges.list`
+     - `board-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'`
+     - `board-webmcp-cli bridge.open`
+     - `board-webmcp-cli nodes.list`
+     - `board-webmcp-cli edges.list`
 4. Apply updates with structured inputs:
-   - `board-webmcp diagram.export format=json`
+   - `board-webmcp-cli diagram.export format=json`
    - collaborative visible session should keep the same runtime in `headed`
-   - `board-webmcp nodes.upsert '{"nodes":[{"label":"Fraud Service","kind":"service"}]}'`
-   - `board-webmcp edges.upsert '{"edges":[{"sourceNodeId":"gateway","targetNodeId":"orders","protocol":"grpc"}]}'`
-   - `board-webmcp layout.apply mode=layered`
-   - `board-webmcp diagram.export format=json`
+   - `board-webmcp-cli nodes.upsert '{"nodes":[{"label":"Fraud Service","kind":"service"}]}'`
+   - `board-webmcp-cli edges.upsert '{"edges":[{"sourceNodeId":"gateway","targetNodeId":"orders","protocol":"grpc"}]}'`
+   - `board-webmcp-cli layout.apply mode=layered`
+   - `board-webmcp-cli diagram.export format=json`
 5. When a human is editing or reviewing the same board live:
-   - check current state with `board-webmcp bridge.session.status`
-   - if needed, switch to headed with `board-webmcp bridge.session.mode.set '{"mode":"headed"}'`
-   - `board-webmcp bridge.open`
-   - keep all reads and writes on `board-webmcp` for that same collaborative session
-   - `board-webmcp selection.get`
-   - `board-webmcp bridge.close`
-   - if the human closed the board window manually, the headed owner session has ended; run `board-webmcp bridge.open` again to start a new headed session on the same profile
+   - check current state with `board-webmcp-cli bridge.session.status`
+   - if needed, switch to headed with `board-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'`
+   - `board-webmcp-cli bridge.open`
+   - keep all reads and writes on `board-webmcp-cli` for that same collaborative session
+   - `board-webmcp-cli selection.get`
+   - `board-webmcp-cli bridge.close`
+   - if the human closed the board window manually, the headed owner session has ended; run `board-webmcp-cli bridge.open` again to start a new headed session on the same profile
 
 ## Default Target
 
@@ -84,7 +84,7 @@ npx playwright install
 - `board.holon.run` is a shared demo. Writes are visible on the board surface and persisted in browser storage for that profile.
 - Prefer explicit `bridge.session.mode.set` over relying on a new launcher invocation to change runtime mode.
 - Before collaborative editing, confirm the runtime is actually `headed`.
-- If the human closes that window manually, the headed owner session ends. The next `board-webmcp bridge.open` starts a new headed session on the same profile.
+- If the human closes that window manually, the headed owner session ends. The next `board-webmcp-cli bridge.open` starts a new headed session on the same profile.
 - Keep the board profile isolated from other sites.
 - Use JSON output for automation. Do not depend on human-formatted text output.
 
