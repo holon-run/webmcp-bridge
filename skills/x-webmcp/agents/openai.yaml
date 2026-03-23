@@ -1,0 +1,7 @@
+interface:
+  display_name: "X WebMCP"
+  short_description: "Operate X and Grok through local-mcp"
+  default_prompt: "Use $x-webmcp to connect to X through the built-in adapter, verify auth state, and read or write X/Grok data through local-mcp."
+
+policy:
+  allow_implicit_invocation: true
