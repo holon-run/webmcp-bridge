@@ -88,6 +88,11 @@ type TweetMediaArtifact = {
   sourceUrl: string;
 };
 
+type TweetArticleRef = {
+  id: string;
+  url?: string;
+};
+
 type ArticleAttachment = {
   path: string;
   name: string;
@@ -124,6 +129,7 @@ const GROK_ARTIFACT_DIR_PREFIX = "webmcp-bridge-grok-";
 const TWEET_MEDIA_ARTIFACT_DIR_PREFIX = "webmcp-bridge-x-media-";
 const ARTICLE_INLINE_IMAGE_MARKER_PREFIX = "[[WEBMCP_INLINE_IMAGE_";
 const ALLOWED_TWEET_MEDIA_HOSTS = new Set(["pbs.twimg.com", "video.twimg.com"]);
+const ALLOWED_X_HOSTS = new Set(["x.com", "www.x.com", "twitter.com", "www.twitter.com"]);
 
 const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
   globalKey: "__WEBMCP_X_CAPTURE__",
@@ -139,7 +145,10 @@ const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
         url.includes("/UserTweets") ||
         url.includes("/UserMedia") ||
         url.includes("/UserTweetsAndReplies") ||
-        url.includes("/SearchTimeline")
+        url.includes("/SearchTimeline") ||
+        url.includes("/ArticleEntitiesSlice") ||
+        url.includes("/ArticleRedirectScreenQuery") ||
+        url.includes("/UserArticlesTweets")
       )
     );
   })`,
@@ -154,6 +163,9 @@ const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
     else if (url.includes("/UserMedia")) op = "UserMedia";
     else if (url.includes("/UserTweets")) op = "UserTweets";
     else if (url.includes("/SearchTimeline")) op = "SearchTimeline";
+    else if (url.includes("/ArticleEntitiesSlice")) op = "ArticleEntitiesSlice";
+    else if (url.includes("/ArticleRedirectScreenQuery")) op = "ArticleRedirectScreenQuery";
+    else if (url.includes("/UserArticlesTweets")) op = "UserArticlesTweets";
     return { ...entry, op };
   })`,
   maxEntries: 80,
@@ -566,6 +578,11 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         id: {
           type: "string",
           description: "Article id. Used when url is not provided.",
+          minLength: 1,
+        },
+        authorHandle: {
+          type: "string",
+          description: "Optional article author handle, for example jolestar or @jolestar. Used for profile articles fallback when public article route is unavailable.",
           minLength: 1,
         },
       },
@@ -1348,6 +1365,7 @@ type TweetCard = {
   author?: string;
   createdAt?: string;
   media?: TweetMedia[];
+  article?: TweetArticleRef;
 };
 
 type TimelineItem = {
@@ -1358,6 +1376,7 @@ type TimelineItem = {
   summary?: string;
   tweetText?: string;
   media?: TweetMedia[];
+  article?: TweetArticleRef;
 };
 
 type TimelinePage = {
@@ -1397,6 +1416,33 @@ function canonicalizeStatusUrl(input: string | undefined, fallbackId?: string): 
       return `${url.origin}/i/web/status/${statusId}`;
     }
     return `${url.origin}/${handle}/status/${statusId}`;
+  } catch {
+    return input;
+  }
+}
+
+function canonicalizeArticleUrl(input: string | undefined, fallbackId?: string): string | undefined {
+  if (!input) {
+    return fallbackId ? `https://x.com/i/article/${fallbackId}` : undefined;
+  }
+  try {
+    const url = new URL(input);
+    if (!ALLOWED_X_HOSTS.has(url.hostname.toLowerCase())) {
+      return input;
+    }
+    const segments = url.pathname.split("/").filter(Boolean);
+    const articleIndex = segments.findIndex((segment) => segment === "article" || segment === "articles");
+    if (articleIndex < 0) {
+      return input;
+    }
+    const articleId = segments[articleIndex + 1] ?? fallbackId;
+    if (!articleId) {
+      return input;
+    }
+    if (articleIndex > 0 && segments[0] !== "i") {
+      return `${url.origin}/${segments[0]}/article/${articleId}`;
+    }
+    return `${url.origin}/i/article/${articleId}`;
   } catch {
     return input;
   }
@@ -1735,6 +1781,20 @@ async function readTimelineViaNetwork(
               if (media.length > 0) {
                 item.media = media as unknown as TweetMedia[];
               }
+              const articleResult =
+                (((tweet?.article as Record<string, unknown> | undefined)?.article_results as Record<string, unknown> | undefined)
+                  ?.result as Record<string, unknown> | undefined) ?? undefined;
+              const articleRestId = typeof articleResult?.rest_id === "string" ? articleResult.rest_id : "";
+              if (articleRestId) {
+                const screenName = typeof userLegacy.screen_name === "string" ? userLegacy.screen_name : "";
+                const articleUrl = screenName
+                  ? `https://x.com/${screenName.replace(/^@+/, "")}/article/${articleRestId}`
+                  : `https://x.com/i/article/${articleRestId}`;
+                item.article = {
+                  id: articleRestId,
+                  url: articleUrl,
+                };
+              }
               outputItems.push(item);
             }
           }
@@ -1958,7 +2018,7 @@ async function extractTweetCards(
       }
     };
     const dedupe = new Set<string>();
-    const items: Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[] }> = [];
+    const items: Array<{ id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[]; article?: TweetArticleRef }> = [];
     const collectDomMedia = (root: ParentNode): Array<Record<string, unknown>> => {
       const output: Array<Record<string, unknown>> = [];
       const seen = new Set<string>();
@@ -2004,7 +2064,7 @@ async function extractTweetCards(
 
       return output;
     };
-    const pushItem = (item: { id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[] }): void => {
+    const pushItem = (item: { id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[]; article?: TweetArticleRef }): void => {
       const dedupeKey = `${item.id}:${item.text}`;
       if (!item.text || dedupe.has(dedupeKey)) {
         return;
@@ -2030,7 +2090,7 @@ async function extractTweetCards(
 
       const authorRaw = article.querySelector<HTMLElement>("[data-testid='User-Name']")?.textContent ?? "";
       const createdAtRaw = article.querySelector<HTMLTimeElement>("time")?.dateTime ?? "";
-      const item: { id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[] } = { id, text };
+      const item: { id: string; text: string; url?: string; author?: string; createdAt?: string; media?: TweetMedia[]; article?: TweetArticleRef } = { id, text };
       if (url) {
         item.url = url;
       }
@@ -2044,6 +2104,15 @@ async function extractTweetCards(
       const media = collectDomMedia(article);
       if (media.length > 0) {
         item.media = media as unknown as TweetMedia[];
+      }
+      const articleAnchor =
+        article.querySelector<HTMLAnchorElement>("a[href*='/article/'], a[href*='/i/article/'], a[href*='/articles/']");
+      const articleUrl = canonicalizeArticleUrl(articleAnchor?.href);
+      const articleId = articleUrl ? articleUrl.match(/\/article(?:s)?\/(\d+)/)?.[1] : undefined;
+      if (articleId) {
+        item.article = articleUrl
+          ? { id: articleId, url: articleUrl }
+          : { id: articleId };
       }
       pushItem(item);
       if (items.length >= maxItems) {
@@ -2066,13 +2135,22 @@ async function extractTweetCards(
         const matchedId = statusAnchor?.href?.match(/status\/(\d+)/)?.[1];
         const url = canonicalizeStatusUrl(statusAnchor?.href, matchedId);
         const id = url?.match(/status\/(\d+)/)?.[1] ?? `cell-${items.length + 1}`;
-        const item: { id: string; text: string; url?: string; media?: TweetMedia[] } = { id, text };
+        const item: { id: string; text: string; url?: string; media?: TweetMedia[]; article?: TweetArticleRef } = { id, text };
         if (url) {
           item.url = url;
         }
         const media = collectDomMedia(cell);
         if (media.length > 0) {
           item.media = media as unknown as TweetMedia[];
+        }
+        const articleAnchor =
+          cell.querySelector<HTMLAnchorElement>("a[href*='/article/'], a[href*='/i/article/'], a[href*='/articles/']");
+        const articleUrl = canonicalizeArticleUrl(articleAnchor?.href);
+        const articleId = articleUrl ? articleUrl.match(/\/article(?:s)?\/(\d+)/)?.[1] : undefined;
+        if (articleId) {
+          item.article = articleUrl
+            ? { id: articleId, url: articleUrl }
+            : { id: articleId };
         }
         pushItem(item);
       }
@@ -2489,6 +2567,9 @@ function mapTweetCards(items: TweetCard[]): TimelineItem[] {
     }
     if (item.media && item.media.length > 0) {
       mapped.media = item.media;
+    }
+    if (item.article) {
+      mapped.article = item.article;
     }
     return mapped;
   });
@@ -4012,8 +4093,41 @@ async function clearArticleBody(page: Page): Promise<boolean> {
 }
 
 function parseArticleIdFromUrl(url: string): string | undefined {
-  const match = url.match(/\/articles\/edit\/(\d+)(?:[/?#]|$)|\/articles\/(\d+)(?:[/?#]|$)/);
-  return match?.[1] ?? match?.[2];
+  let parsed: URL;
+  try {
+    parsed = new URL(url, "https://x.com");
+  } catch {
+    return undefined;
+  }
+  if (!ALLOWED_X_HOSTS.has(parsed.hostname.toLowerCase())) {
+    return undefined;
+  }
+  const match = parsed.pathname.match(
+    /^\/(?:compose\/articles\/edit|i\/article|i\/articles|[^/]+\/article|articles)\/(\d+)(?:\/|$)/,
+  );
+  return match?.[1];
+}
+
+async function waitForCapturedOperation(page: Page, op: string, timeoutMs = 10_000): Promise<void> {
+  await page.waitForFunction(
+    ({ targetOp }) => {
+      const globalAny = window as unknown as {
+        __WEBMCP_X_CAPTURE__?: {
+          entries?: Array<{
+            op?: string;
+            url?: string;
+            method?: string;
+          }>;
+        };
+      };
+      const entries = Array.isArray(globalAny.__WEBMCP_X_CAPTURE__?.entries)
+        ? globalAny.__WEBMCP_X_CAPTURE__!.entries!
+        : [];
+      return entries.some((entry) => entry && entry.op === targetOp && !!entry.url && !!entry.method);
+    },
+    { targetOp: op },
+    { timeout: timeoutMs },
+  ).catch(() => {});
 }
 
 function normalizeArticleUrl(url?: string, articleId?: string): string | undefined {
@@ -4118,6 +4232,583 @@ async function readArticleFromEditorPage(
   return output;
 }
 
+function parseArticleReadErrorCode(value: JsonValue): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const error = "error" in value ? (value as Record<string, unknown>).error : undefined;
+  if (!error || typeof error !== "object" || Array.isArray(error)) {
+    return undefined;
+  }
+  return typeof (error as Record<string, unknown>).code === "string"
+    ? ((error as Record<string, unknown>).code as string)
+    : undefined;
+}
+
+async function readArticleFromOwnedSlices(page: Page, articleId: string): Promise<JsonValue> {
+  return await withEphemeralPage(page, "https://x.com/compose/articles", async (articlePage) => {
+    await waitForCapturedOperation(articlePage, "ArticleEntitiesSlice", 12_000);
+    const article = await articlePage.evaluate(async ({ op, articleId: targetArticleId }) => {
+      if (op !== "article_collect_owned") {
+        return undefined;
+      }
+
+      const globalAny = window as unknown as {
+        __WEBMCP_X_CAPTURE__?: {
+          entries?: Array<{
+            op?: string;
+            url?: string;
+            method?: string;
+            headers?: Record<string, string>;
+          }>;
+        };
+      };
+
+      const capture = globalAny.__WEBMCP_X_CAPTURE__;
+      const entries = Array.isArray(capture?.entries) ? capture.entries : [];
+
+      const pickTemplate = (): { url: string; method: string; headers: Record<string, string> } | null => {
+        for (let i = entries.length - 1; i >= 0; i -= 1) {
+          const entry = entries[i];
+          if (!entry || entry.op !== "ArticleEntitiesSlice" || !entry.url || !entry.method) {
+            continue;
+          }
+          return {
+            url: entry.url,
+            method: entry.method,
+            headers: entry.headers ?? {},
+          };
+        }
+        return null;
+      };
+
+      const template = pickTemplate();
+      if (!template) {
+        return { error: "no_template" };
+      }
+
+      const sanitizeHeaders = (headers?: Record<string, string>): Record<string, string> => {
+        const blockedPrefixes = ["sec-", ":"];
+        const blockedExact = new Set(["host", "content-length", "cookie", "origin", "referer", "connection"]);
+        const output: Record<string, string> = {};
+        if (!headers) {
+          return output;
+        }
+        for (const [key, value] of Object.entries(headers)) {
+          const normalized = key.toLowerCase();
+          if (blockedExact.has(normalized) || blockedPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+            continue;
+          }
+          output[normalized] = value;
+        }
+        return output;
+      };
+
+      const normalizeText = (value: string): string =>
+        value.replace(/\u00a0/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+      const normalizeInline = (value: string): string => value.replace(/\s+/g, " ").trim();
+      const parseJsonSafely = (value: string | null): Record<string, unknown> => {
+        if (!value) {
+          return {};
+        }
+        try {
+          const parsed = JSON.parse(value);
+          return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+        } catch {
+          return {};
+        }
+      };
+      const toHttpsImage = (value: unknown): string | undefined =>
+        typeof value === "string" && /^https?:\/\//.test(value) ? value : undefined;
+      const parseMediaImage = (value: unknown): { url: string; alt?: string }[] => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          return [];
+        }
+        const record = value as Record<string, unknown>;
+        const url =
+          toHttpsImage(record.original_img_url) ??
+          toHttpsImage(record.media_url_https) ??
+          toHttpsImage(record.media_url) ??
+          toHttpsImage((record.image_info as Record<string, unknown> | undefined)?.original_img_url);
+        if (!url) {
+          return [];
+        }
+        const alt = typeof record.alt_text === "string" ? normalizeInline(record.alt_text) : "";
+        return [alt ? { url, alt } : { url }];
+      };
+      const parseBlocksText = (value: unknown): string => {
+        if (!Array.isArray(value)) {
+          return "";
+        }
+        const lines: string[] = [];
+        for (const rawBlock of value) {
+          if (!rawBlock || typeof rawBlock !== "object" || Array.isArray(rawBlock)) {
+            continue;
+          }
+          const block = rawBlock as Record<string, unknown>;
+          const rawText = typeof block.text === "string" ? block.text : "";
+          const text = normalizeText(rawText);
+          if (!text) {
+            lines.push("");
+            continue;
+          }
+          const type = typeof block.type === "string" ? block.type : "";
+          if (type === "unordered-list-item") {
+            lines.push(`- ${text}`);
+          } else if (type === "ordered-list-item") {
+            lines.push(`1. ${text}`);
+          } else {
+            lines.push(text);
+          }
+        }
+        return normalizeText(lines.join("\n"));
+      };
+      const extractNextCursor = (sliceInfo: unknown): string | undefined => {
+        if (!sliceInfo || typeof sliceInfo !== "object" || Array.isArray(sliceInfo)) {
+          return undefined;
+        }
+        const record = sliceInfo as Record<string, unknown>;
+        const keys = ["next_cursor", "nextCursor", "cursor", "bottom_cursor"];
+        for (const key of keys) {
+          if (typeof record[key] === "string" && record[key]) {
+            return record[key] as string;
+          }
+        }
+        return undefined;
+      };
+      const templateUrl = new URL(template.url, location.origin);
+      const templateVariables = parseJsonSafely(templateUrl.searchParams.get("variables"));
+      const templateFeatures = parseJsonSafely(templateUrl.searchParams.get("features"));
+      const headers = sanitizeHeaders(template.headers);
+      const userId = typeof templateVariables.userId === "string" ? templateVariables.userId : "";
+      if (!userId) {
+        return { error: "missing_user_id" };
+      }
+
+      const fetchSlice = async (lifecycle: "Draft" | "Published", cursor?: string): Promise<unknown> => {
+        const vars: Record<string, unknown> = {
+          ...templateVariables,
+          userId,
+          lifecycle,
+          count: 20,
+        };
+        if (cursor) {
+          vars.cursor = cursor;
+        } else {
+          delete vars.cursor;
+        }
+        const requestUrl = new URL(template.url, location.origin);
+        requestUrl.searchParams.set("variables", JSON.stringify(vars));
+        if (Object.keys(templateFeatures).length > 0) {
+          requestUrl.searchParams.set("features", JSON.stringify(templateFeatures));
+        }
+        const response = await fetch(requestUrl.toString(), {
+          method: template.method,
+          headers,
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error(`http_${response.status}`);
+        }
+        return await response.json();
+      };
+
+      for (const lifecycle of ["Draft", "Published"] as const) {
+        let cursor: string | undefined;
+        for (let pageIndex = 0; pageIndex < 8; pageIndex += 1) {
+          let responseJson: unknown;
+          try {
+            responseJson = await fetchSlice(lifecycle, cursor);
+          } catch (error) {
+            return { error: String(error) };
+          }
+          const slice =
+            ((responseJson as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined)?.user as
+              | Record<string, unknown>
+              | undefined;
+          const result = (slice?.result as Record<string, unknown> | undefined)?.articles_article_mixer_slice as
+            | Record<string, unknown>
+            | undefined;
+          const items = Array.isArray(result?.items) ? result.items : [];
+          for (const rawItem of items) {
+            if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+              continue;
+            }
+            const item = rawItem as Record<string, unknown>;
+            const articleResult = (item.article_entity_results as Record<string, unknown> | undefined)?.result as
+              | Record<string, unknown>
+              | undefined;
+            if (!articleResult) {
+              continue;
+            }
+            const restId = typeof articleResult.rest_id === "string" ? articleResult.rest_id : "";
+            if (restId !== targetArticleId) {
+              continue;
+            }
+            const title = typeof articleResult.title === "string" ? normalizeInline(articleResult.title) : "";
+            const text = parseBlocksText((articleResult.content_state as Record<string, unknown> | undefined)?.blocks);
+            const metadata = (articleResult.metadata as Record<string, unknown> | undefined) ?? {};
+            const authorResult = ((metadata.author_results as Record<string, unknown> | undefined)?.result ??
+              {}) as Record<string, unknown>;
+            const authorCore = (authorResult.core as Record<string, unknown> | undefined) ?? {};
+            const authorName = typeof authorCore.name === "string" ? normalizeInline(authorCore.name) : "";
+            const authorHandleRaw = typeof authorCore.screen_name === "string" ? authorCore.screen_name : "";
+            const authorHandle = authorHandleRaw ? `@${authorHandleRaw.replace(/^@+/, "")}` : "";
+            const coverMedia = articleResult.cover_media;
+            const mediaEntities = Array.isArray(articleResult.media_entities) ? articleResult.media_entities : [];
+            const coverImage = parseMediaImage(coverMedia)[0];
+            const inlineImages = mediaEntities.flatMap((entry) => parseMediaImage(entry));
+            const dedupedImages: Array<{ url: string; alt?: string }> = [];
+            const seenImageUrls = new Set<string>();
+            for (const image of inlineImages) {
+              if (!seenImageUrls.has(image.url) && image.url !== coverImage?.url) {
+                seenImageUrls.add(image.url);
+                dedupedImages.push(image);
+              }
+            }
+            const output: Record<string, JsonValue> = {
+              id: restId,
+              title,
+              text,
+              url: `https://x.com/i/article/${restId}`,
+              images: dedupedImages as unknown as JsonValue,
+              source: "owner_slice",
+              published: lifecycle === "Published",
+            };
+            if (coverImage?.url) {
+              output.coverImageUrl = coverImage.url;
+            }
+            if (authorName) {
+              output.authorName = authorName;
+            }
+            if (authorHandle) {
+              output.authorHandle = authorHandle;
+            }
+            return output;
+          }
+          cursor = extractNextCursor(result?.slice_info);
+          if (!cursor) {
+            break;
+          }
+        }
+      }
+      return { error: "not_found" };
+    }, { op: "article_collect_owned", articleId }).catch(() => undefined);
+
+    if (!article || typeof article !== "object") {
+      return errorResult("UPSTREAM_CHANGED", "article owner fallback failed");
+    }
+    if ("error" in article) {
+      return errorResult("UPSTREAM_CHANGED", "article owner fallback failed", article);
+    }
+    const outputArticle: Record<string, JsonValue> = {
+      id: articleId,
+      title: typeof article.title === "string" ? article.title : "",
+      text: sanitizeArticleText(typeof article.text === "string" ? article.text : ""),
+      url: typeof article.url === "string" ? article.url : `https://x.com/i/article/${articleId}`,
+      images: Array.isArray(article.images) ? article.images : [],
+      source: typeof article.source === "string" ? article.source : "owner_slice",
+      published: article.published === true,
+    };
+    if (typeof article.coverImageUrl === "string" && article.coverImageUrl) {
+      outputArticle.coverImageUrl = article.coverImageUrl;
+    }
+    if (typeof article.authorName === "string" && article.authorName) {
+      outputArticle.authorName = article.authorName;
+    }
+    if (typeof article.authorHandle === "string" && article.authorHandle) {
+      outputArticle.authorHandle = article.authorHandle;
+    }
+    return { article: outputArticle };
+  });
+}
+
+async function readArticleFromProfileArticles(
+  page: Page,
+  articleId: string,
+  authorHandle: string,
+): Promise<JsonValue> {
+  const normalizedHandle = authorHandle.replace(/^@+/, "").trim();
+  if (!normalizedHandle) {
+    return errorResult("VALIDATION_ERROR", "authorHandle must be a non-empty string");
+  }
+  return await withEphemeralPage(page, `https://x.com/${encodeURIComponent(normalizedHandle)}/articles`, async (articlePage) => {
+    await waitForCapturedOperation(articlePage, "UserArticlesTweets", 15_000);
+    const article = await articlePage.evaluate(async ({ op, articleId: targetArticleId }) => {
+      if (op !== "article_collect_profile") {
+        return undefined;
+      }
+
+      const globalAny = window as unknown as {
+        __WEBMCP_X_CAPTURE__?: {
+          entries?: Array<{
+            op?: string;
+            url?: string;
+            method?: string;
+            headers?: Record<string, string>;
+          }>;
+        };
+      };
+
+      const capture = globalAny.__WEBMCP_X_CAPTURE__;
+      const entries = Array.isArray(capture?.entries) ? capture.entries : [];
+      const template = (() => {
+        for (let i = entries.length - 1; i >= 0; i -= 1) {
+          const entry = entries[i];
+          if (!entry || entry.op !== "UserArticlesTweets" || !entry.url || !entry.method) {
+            continue;
+          }
+          return {
+            url: entry.url,
+            method: entry.method,
+            headers: entry.headers ?? {},
+          };
+        }
+        return null;
+      })();
+      if (!template) {
+        return { error: "no_template" };
+      }
+
+      const sanitizeHeaders = (headers?: Record<string, string>): Record<string, string> => {
+        const blockedPrefixes = ["sec-", ":"];
+        const blockedExact = new Set(["host", "content-length", "cookie", "origin", "referer", "connection"]);
+        const output: Record<string, string> = {};
+        if (!headers) {
+          return output;
+        }
+        for (const [key, value] of Object.entries(headers)) {
+          const normalized = key.toLowerCase();
+          if (blockedExact.has(normalized) || blockedPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+            continue;
+          }
+          output[normalized] = value;
+        }
+        return output;
+      };
+      const normalizeText = (value: string): string =>
+        value.replace(/\u00a0/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+      const normalizeInline = (value: string): string => value.replace(/\s+/g, " ").trim();
+      const parseJsonSafely = (value: string | null): Record<string, unknown> => {
+        if (!value) {
+          return {};
+        }
+        try {
+          const parsed = JSON.parse(value);
+          return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+        } catch {
+          return {};
+        }
+      };
+      const toHttpsImage = (value: unknown): string | undefined =>
+        typeof value === "string" && /^https?:\/\//.test(value) ? value : undefined;
+      const parseMediaImage = (value: unknown): { url: string; alt?: string }[] => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          return [];
+        }
+        const record = value as Record<string, unknown>;
+        const url =
+          toHttpsImage(record.original_img_url) ??
+          toHttpsImage(record.media_url_https) ??
+          toHttpsImage(record.media_url) ??
+          toHttpsImage((record.image_info as Record<string, unknown> | undefined)?.original_img_url);
+        if (!url) {
+          return [];
+        }
+        const alt = typeof record.alt_text === "string" ? normalizeInline(record.alt_text) : "";
+        return [alt ? { url, alt } : { url }];
+      };
+      const parseBlocksText = (value: unknown): string => {
+        if (!Array.isArray(value)) {
+          return "";
+        }
+        const lines: string[] = [];
+        for (const rawBlock of value) {
+          if (!rawBlock || typeof rawBlock !== "object" || Array.isArray(rawBlock)) {
+            continue;
+          }
+          const block = rawBlock as Record<string, unknown>;
+          const rawText = typeof block.text === "string" ? block.text : "";
+          const text = normalizeText(rawText);
+          if (!text) {
+            lines.push("");
+            continue;
+          }
+          const type = typeof block.type === "string" ? block.type : "";
+          if (type === "unordered-list-item") {
+            lines.push(`- ${text}`);
+          } else if (type === "ordered-list-item") {
+            lines.push(`1. ${text}`);
+          } else {
+            lines.push(text);
+          }
+        }
+        return normalizeText(lines.join("\n"));
+      };
+      const extractNextCursor = (instructions: unknown[]): string | undefined => {
+        for (const instruction of instructions) {
+          if (!instruction || typeof instruction !== "object" || Array.isArray(instruction)) {
+            continue;
+          }
+          const entries = Array.isArray((instruction as Record<string, unknown>).entries)
+            ? ((instruction as Record<string, unknown>).entries as unknown[])
+            : [];
+          for (const rawEntry of entries) {
+            if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+              continue;
+            }
+            const entry = rawEntry as Record<string, unknown>;
+            const content = (entry.content as Record<string, unknown> | undefined) ?? {};
+            const cursorType = typeof content.cursorType === "string" ? content.cursorType : "";
+            const value = typeof content.value === "string" ? content.value : "";
+            if (cursorType === "Bottom" && value) {
+              return value;
+            }
+          }
+        }
+        return undefined;
+      };
+      const templateUrl = new URL(template.url, location.origin);
+      const templateVariables = parseJsonSafely(templateUrl.searchParams.get("variables"));
+      const templateFeatures = parseJsonSafely(templateUrl.searchParams.get("features"));
+      const templateFieldToggles = parseJsonSafely(templateUrl.searchParams.get("fieldToggles"));
+      const headers = sanitizeHeaders(template.headers);
+      templateFieldToggles.withArticlePlainText = true;
+
+      const fetchTimeline = async (cursor?: string): Promise<unknown> => {
+        const vars: Record<string, unknown> = {
+          ...templateVariables,
+          count: 20,
+        };
+        if (cursor) {
+          vars.cursor = cursor;
+        } else {
+          delete vars.cursor;
+        }
+        const requestUrl = new URL(template.url, location.origin);
+        requestUrl.searchParams.set("variables", JSON.stringify(vars));
+        if (Object.keys(templateFeatures).length > 0) {
+          requestUrl.searchParams.set("features", JSON.stringify(templateFeatures));
+        }
+        if (Object.keys(templateFieldToggles).length > 0) {
+          requestUrl.searchParams.set("fieldToggles", JSON.stringify(templateFieldToggles));
+        }
+        const response = await fetch(requestUrl.toString(), {
+          method: template.method,
+          headers,
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error(`http_${response.status}`);
+        }
+        return await response.json();
+      };
+
+      let cursor: string | undefined;
+      for (let pageIndex = 0; pageIndex < 8; pageIndex += 1) {
+        let responseJson: unknown;
+        try {
+          responseJson = await fetchTimeline(cursor);
+        } catch (error) {
+          return { error: String(error) };
+        }
+        const dataRecord = (responseJson as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined;
+        const userRecord = dataRecord?.user as Record<string, unknown> | undefined;
+        const resultRecord = userRecord?.result as Record<string, unknown> | undefined;
+        const timelineRecord = resultRecord?.timeline as Record<string, unknown> | undefined;
+        const timelineInnerRecord = timelineRecord?.timeline as Record<string, unknown> | undefined;
+        const instructions = timelineInnerRecord?.instructions;
+        const entries = Array.isArray(instructions) ? instructions : [];
+        for (const instruction of entries) {
+          if (!instruction || typeof instruction !== "object" || Array.isArray(instruction)) {
+            continue;
+          }
+          const timelineEntries = Array.isArray((instruction as Record<string, unknown>).entries)
+            ? ((instruction as Record<string, unknown>).entries as unknown[])
+            : [];
+          for (const rawEntry of timelineEntries) {
+            if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+              continue;
+            }
+            const entry = rawEntry as Record<string, unknown>;
+            const tweetResult =
+              (((entry.content as Record<string, unknown> | undefined)?.itemContent as Record<string, unknown> | undefined)
+                ?.tweet_results as Record<string, unknown> | undefined)?.result as Record<string, unknown> | undefined;
+            const articleResult =
+              (((tweetResult?.article as Record<string, unknown> | undefined)?.article_results as Record<string, unknown> | undefined)
+                ?.result as Record<string, unknown> | undefined) ?? undefined;
+            if (!articleResult) {
+              continue;
+            }
+            const restId = typeof articleResult.rest_id === "string" ? articleResult.rest_id : "";
+            if (restId !== targetArticleId) {
+              continue;
+            }
+            const metadata = (articleResult.metadata as Record<string, unknown> | undefined) ?? {};
+            const title = typeof articleResult.title === "string" ? normalizeInline(articleResult.title) : "";
+            const previewText = typeof articleResult.preview_text === "string" ? normalizeText(articleResult.preview_text) : "";
+            const plainText = typeof articleResult.plain_text === "string" ? normalizeText(articleResult.plain_text) : "";
+            const text = plainText || parseBlocksText((articleResult.content_state as Record<string, unknown> | undefined)?.blocks) || previewText;
+            const coverImage = parseMediaImage(articleResult.cover_media)[0];
+            const mediaEntities = Array.isArray(articleResult.media_entities) ? articleResult.media_entities : [];
+            const inlineImages = mediaEntities.flatMap((entry) => parseMediaImage(entry));
+            const dedupedImages: Array<{ url: string; alt?: string }> = [];
+            const seenImageUrls = new Set<string>();
+            for (const image of inlineImages) {
+              if (!seenImageUrls.has(image.url) && image.url !== coverImage?.url) {
+                seenImageUrls.add(image.url);
+                dedupedImages.push(image);
+              }
+            }
+            const output: Record<string, JsonValue> = {
+              id: restId,
+              title,
+              text,
+              url: `https://x.com/i/article/${restId}`,
+              images: dedupedImages as unknown as JsonValue,
+              source: "profile_articles",
+              published: true,
+            };
+            if (coverImage?.url) {
+              output.coverImageUrl = coverImage.url;
+            }
+            if (typeof metadata.first_published_at_secs === "number") {
+              output.firstPublishedAtSecs = metadata.first_published_at_secs;
+            }
+            return output;
+          }
+        }
+        cursor = extractNextCursor(entries);
+        if (!cursor) {
+          break;
+        }
+      }
+      return { error: "not_found" };
+    }, { op: "article_collect_profile", articleId }).catch(() => undefined);
+
+    if (!article || typeof article !== "object") {
+      return errorResult("UPSTREAM_CHANGED", "article profile fallback failed");
+    }
+    if ("error" in article) {
+      return errorResult("UPSTREAM_CHANGED", "article profile fallback failed", article);
+    }
+    const outputArticle: Record<string, JsonValue> = {
+      id: articleId,
+      title: typeof article.title === "string" ? article.title : "",
+      text: sanitizeArticleText(typeof article.text === "string" ? article.text : ""),
+      url: typeof article.url === "string" ? article.url : `https://x.com/i/article/${articleId}`,
+      images: Array.isArray(article.images) ? article.images : [],
+      source: typeof article.source === "string" ? article.source : "profile_articles",
+      published: true,
+      authorHandle: `@${normalizedHandle}`,
+    };
+    if (typeof article.coverImageUrl === "string" && article.coverImageUrl) {
+      outputArticle.coverImageUrl = article.coverImageUrl;
+    }
+    return { article: outputArticle };
+  });
+}
+
 async function readArticleFromPublicPage(page: Page, targetUrl: string): Promise<JsonValue> {
   return await withEphemeralPage(page, targetUrl, async (readPage) => {
     await waitForArticleReadSurface(readPage);
@@ -4220,6 +4911,7 @@ async function readArticleFromPublicPage(page: Page, targetUrl: string): Promise
         (typeof ldImage === "string" && /^https?:\/\//.test(ldImage) ? ldImage : undefined) ||
         Array.from(imageByUrl.keys())[0];
       const images = Array.from(imageByUrl.values()).filter((item) => item.url !== coverImageUrl);
+      const bodyText = normalizeBlock(document.body?.innerText || "");
       return {
         id: articleIdMatch?.[1],
         url: canonicalUrl,
@@ -4229,19 +4921,34 @@ async function readArticleFromPublicPage(page: Page, targetUrl: string): Promise
         images,
         authorName: ldAuthor?.name,
         authorHandle: ldAuthor?.handle,
+        unsupported: bodyText.includes("This page is not supported."),
       };
     }, { op: "article_collect_public" }).catch(() => undefined);
 
     if (!article || typeof article !== "object") {
       return errorResult("UPSTREAM_CHANGED", "article content not found");
     }
+    if (article.unsupported === true) {
+      return errorResult("UPSTREAM_CHANGED", "article unavailable on public article route", {
+        reason: "public_article_unsupported",
+      });
+    }
+    const title = typeof article.title === "string" ? article.title : "";
+    const text = sanitizeArticleText(typeof article.text === "string" ? article.text : "");
+    const images = Array.isArray(article.images) ? article.images : [];
+    const coverImageUrl = typeof article.coverImageUrl === "string" ? article.coverImageUrl : "";
+    if ((!title || title === "X") && !text && images.length === 0 && !coverImageUrl) {
+      return errorResult("UPSTREAM_CHANGED", "article content not found on public article route", {
+        reason: "public_article_empty",
+      });
+    }
     const outputArticle: Record<string, JsonValue> = {
       source: "public",
       published: true,
-      title: typeof article.title === "string" ? article.title : "",
-      text: sanitizeArticleText(typeof article.text === "string" ? article.text : ""),
+      title,
+      text,
       url: typeof article.url === "string" ? article.url : targetUrl,
-      images: Array.isArray(article.images) ? article.images : [],
+      images,
     };
     if (typeof article.id === "string" && article.id) {
       outputArticle.id = article.id;
@@ -4259,8 +4966,31 @@ async function readArticleFromPublicPage(page: Page, targetUrl: string): Promise
   });
 }
 
-async function readArticleByUrl(page: Page, targetUrl: string): Promise<JsonValue> {
-  const articleId = parseArticleIdFromUrl(targetUrl);
+async function readArticleByUrl(page: Page, targetUrl: string, authorHandle?: string): Promise<JsonValue> {
+  let articleId = parseArticleIdFromUrl(targetUrl);
+  if (!articleId && /\/status\/\d+(?:[/?#]|$)/.test(targetUrl)) {
+    const tweetResult = await readTweetByUrl(page, targetUrl);
+    if (
+      tweetResult &&
+      typeof tweetResult === "object" &&
+      "tweet" in tweetResult &&
+      tweetResult.tweet &&
+      typeof tweetResult.tweet === "object" &&
+      !Array.isArray(tweetResult.tweet)
+    ) {
+      const tweetRecord = tweetResult.tweet as Record<string, unknown>;
+      const article = tweetRecord.article;
+      if (article && typeof article === "object" && !Array.isArray(article)) {
+        const articleRecord = article as Record<string, unknown>;
+        const nestedUrl = typeof articleRecord.url === "string" ? articleRecord.url : "";
+        const nestedId = typeof articleRecord.id === "string" ? articleRecord.id : "";
+        if (nestedUrl) {
+          targetUrl = nestedUrl;
+        }
+        articleId = nestedId || parseArticleIdFromUrl(nestedUrl);
+      }
+    }
+  }
   const useEditor = targetUrl.includes("/compose/articles/edit/");
   if (articleId) {
     const cachedPage = getCachedArticleDraftPage(page, articleId);
@@ -4277,7 +5007,21 @@ async function readArticleByUrl(page: Page, targetUrl: string): Promise<JsonValu
       return await readArticleFromEditorPage(articlePage, articleId, false);
     });
   }
-  return await readArticleFromPublicPage(page, targetUrl);
+  const publicResult = await readArticleFromPublicPage(page, targetUrl);
+  if (!articleId) {
+    return publicResult;
+  }
+  if (!parseArticleReadErrorCode(publicResult)) {
+    return publicResult;
+  }
+  if (typeof authorHandle === "string" && authorHandle.trim()) {
+    const profileResult = await readArticleFromProfileArticles(page, articleId, authorHandle);
+    if (!parseArticleReadErrorCode(profileResult)) {
+      return profileResult;
+    }
+  }
+  const ownerResult = await readArticleFromOwnedSlices(page, articleId);
+  return parseArticleReadErrorCode(ownerResult) ? publicResult : ownerResult;
 }
 
 async function publishArticleEditor(
@@ -6144,11 +6888,12 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         }
         const url = typeof args.url === "string" ? args.url.trim() : "";
         const id = typeof args.id === "string" ? args.id.trim() : "";
+        const authorHandle = typeof args.authorHandle === "string" ? args.authorHandle.trim() : "";
         const targetUrl = normalizeArticleUrl(url, id);
         if (!targetUrl) {
           return errorResult("VALIDATION_ERROR", "url or id is required");
         }
-        return await readArticleByUrl(page, targetUrl);
+        return await readArticleByUrl(page, targetUrl, authorHandle || undefined);
       }
 
       if (name === "article.draftMarkdown") {

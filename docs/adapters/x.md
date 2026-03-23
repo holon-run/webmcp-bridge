@@ -23,7 +23,7 @@ webmcp-local-mcp --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
 - `timeline.home.list`: read home timeline tweet cards.
 - `timeline.user.list`: read a specific user's timeline tweet cards.
 - `search.tweets.list`: read search result tweet cards.
-- `tweet.get`: read one tweet by URL or ID.
+- `tweet.get`: read one tweet by URL or ID. Tweets that point to an X article may include a lightweight `article` reference with `id` and `url`.
 - `tweet.conversation.get`: read one tweet conversation by URL or ID.
 - `tweet.replies.list`: read reply tweets for one focal tweet by URL or ID.
 - `tweet.thread.get`: read one tweet thread by URL or ID.
@@ -36,7 +36,7 @@ webmcp-local-mcp --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
 - `tweet.reply`: reply to one tweet by URL or ID, with optional `dryRun`.
 - `tweet.delete`: delete one tweet by URL or ID, with optional `dryRun`.
 - `grok.chat`: send one prompt to Grok, optionally upload local files, and return the assistant reply.
-- `article.get`: read one X article by public URL, edit URL, or ID.
+- `article.get`: read one X article by article URL, status URL, edit URL, or ID. Optional `authorHandle` enables profile-articles fallback when `/i/article/...` is unavailable.
 - `article.draftMarkdown`: create one X article draft from a local markdown file, with optional cover image.
 - `article.publishMarkdown`: publish one X article from a local markdown file, with optional cover image.
 - `article.publish`: publish one existing X article draft by edit URL, public URL, or ID.
@@ -59,6 +59,7 @@ webmcp-local-mcp --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
 
 - `media`: zero or more media entries
 - each media entry includes `type`, `url`, and optional `previewUrl`, `width`, `height`, `durationMs`, `variants`
+- `article`: optional article reference with `id` and optional `url`
 
 `tweet.conversation.get` and `tweet.replies.list` expose:
 
@@ -96,9 +97,12 @@ webmcp-local-mcp --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
 `article.get` exposes:
 
 - input: `url | id`
+- article URLs such as `https://x.com/<handle>/article/<id>` are preferred when available
+- status URLs such as `https://x.com/<handle>/status/<tweet_id>` are supported when the tweet carries an article reference
 - when `id` is provided without `url`, the adapter opens the article editor URL for the authenticated account
 - output: `article`
 - `article` may include `id`, `title`, `text`, `url`, `editUrl`, `coverImageUrl`, `images`, `authorName`, `authorHandle`, `source`, `published`, optional `sessionScoped`
+- `article.get` accepts optional `authorHandle` for a profile-articles fallback path when the public article route returns an unavailable shell
 - `source=editor` means the adapter read the authenticated editor view; `source=public` means it read a public article page
 
 `article.publishMarkdown` exposes:
