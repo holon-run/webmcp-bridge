@@ -24,12 +24,12 @@ done
 
 rg -q '^name:\s*webmcp-bridge\s*$' "$SKILL_FILE" || fail 'invalid skill name'
 rg -q '^description:\s*.+' "$SKILL_FILE" || fail 'missing description'
-rg -q 'command -v <site>-webmcp-cli' "$SKILL_FILE" || fail 'missing CLI link-first check'
-rg -q 'command -v <site>-webmcp-ui' "$SKILL_FILE" || fail 'missing UI link-first check'
+rg -q 'command -v <site>-webmcp-cli' "$SKILL_FILE" || fail 'missing link-first check'
 rg -q '<site>-webmcp-cli -h' "$SKILL_FILE" || fail 'missing help-first usage'
 rg -q '<site>-webmcp-cli <operation> -h' "$SKILL_FILE" || fail 'missing operation help example'
 rg -q '<site>-webmcp-cli <operation> field=value' "$SKILL_FILE" || fail 'missing key=value example'
 rg -q "<site>-webmcp-cli <operation> '\{" "$SKILL_FILE" || fail 'missing positional JSON example'
+rg -q 'bridge.session.mode.set' "$SKILL_FILE" || fail 'missing explicit mode switch guidance'
 rg -q '~/.uxc/webmcp-profile/<site>' "$SKILL_FILE" || fail 'missing profile convention'
 
 if rg -q -- '(^|[[:space:]])(list|describe|call)([[:space:]]|$)|--input-json|--args .*[{]' "$SKILL_FILE" "${SKILL_DIR}/references"; then

@@ -1,11 +1,11 @@
 ---
 name: webmcp-bridge
-description: Connect a website to the local-mcp browser bridge through fixed UXC links. Use when the user needs to operate native WebMCP sites or adapter-backed sites through local-mcp, manage per-site browser profiles, or switch between headless and UI bridge modes.
+description: Connect a website to the local-mcp browser bridge through a fixed UXC link. Use when the user needs to operate native WebMCP sites or adapter-backed sites through local-mcp, manage per-site browser profiles, or switch bridge presentation modes explicitly.
 ---
 
 # WebMCP Bridge
 
-Use this skill to operate `@webmcp-bridge/local-mcp` through `uxc` shortcut commands.
+Use this skill to operate `@webmcp-bridge/local-mcp` through one fixed `uxc` shortcut command per site.
 
 If the target site does not expose native WebMCP and does not already have a fallback adapter, switch to `$webmcp-adapter-creator`.
 
@@ -26,55 +26,63 @@ If the target site does not expose native WebMCP and does not already have a fal
 2. Pick one stable site name and one site-scoped profile path:
    - default profile root: `~/.uxc/webmcp-profile/<site>`
    - never share one profile across different sites
-3. Create or refresh the fixed link pair for that site:
+3. Create or refresh the fixed link for that site:
    - `command -v <site>-webmcp-cli`
-   - `command -v <site>-webmcp-ui`
-   - if either is missing or the source config changed, run `skills/webmcp-bridge/scripts/ensure-links.sh`
-4. Use the CLI link for normal automation:
+   - if the link is missing or the source config changed, run `skills/webmcp-bridge/scripts/ensure-links.sh`
+4. Inspect the bridge and tool schema before calling tools:
    - `<site>-webmcp-cli -h`
    - `<site>-webmcp-cli <operation> -h`
    - `<site>-webmcp-cli <operation> field=value`
    - `<site>-webmcp-cli <operation> '{"field":"value"}'`
-5. Use the UI link when a human needs to cooperate with the browser session:
-   - login or MFA challenge
-   - visual confirmation
-   - human and AI editing the same page together
-   - start the visible session with `<site>-webmcp-ui bridge.open`
-   - if the user manually closes that window, the headed owner session ends; run `<site>-webmcp-ui bridge.open` again to start a new headed session on the same profile
-   - close the visible session with `<site>-webmcp-ui bridge.close`
-6. Parse JSON output only:
+5. Treat presentation mode as explicit runtime state, not command-name intent:
+   - check current state with `<site>-webmcp-cli bridge.session.status`
+   - or `<site>-webmcp-cli bridge.session.mode.get`
+   - `--headless` or `--no-headless` only sets the preferred default for bridge-managed sessions
+   - the actual runtime mode is `presentationMode`
+6. Switch modes explicitly when needed:
+   - for normal automation, stay in `headless`
+   - for login, MFA, or human collaboration, run `<site>-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'`
+   - then open or focus the visible session with `<site>-webmcp-cli bridge.open`
+   - if the user manually closes that window, the headed owner session ends; run `bridge.open` again to start a new headed session on the same profile
+   - close the visible owner session with `<site>-webmcp-cli bridge.close`
+7. Parse JSON output only:
    - success path: `.ok == true`, consume `.data`
    - failure path: `.ok == false`, inspect `.error.code` and `.error.message`
 
 ## Link Contract
 
-Every site gets two fixed commands:
+Every site gets one fixed command:
 
-- `<site>-webmcp-cli`: headless bridge for normal tool calls
-- `<site>-webmcp-ui`: headed bridge for login and live collaboration
+- `<site>-webmcp-cli`
 
-Both links must share the same site profile and daemon lock:
+The link must keep one stable site profile and daemon lock:
 
 - profile path: `~/.uxc/webmcp-profile/<site>`
 - daemon key: same as profile path
 
-This shared-profile rule assumes one owner session for that site. Do not run independent headed and headless browser processes against the same profile at the same time.
-
-The CLI link should stay deterministic:
+The generated command should default to:
 
 - use `--headless`
 - use `--no-auto-login-fallback`
 
-The UI link should stay visible:
+This keeps automation deterministic while still allowing runtime switching through:
 
-- use `--no-headless`
+- `bridge.session.mode.get`
+- `bridge.session.mode.set`
+- `bridge.open`
+- `bridge.close`
+
+Do not treat one command invocation as a guarantee that the current runtime has already switched. Always inspect `presentationMode` when mode matters.
 
 ## Guardrails
 
 - Prefer browser-side execution for privileged site actions. Do not move site credentials into local scripts.
 - Do not share one `--user-data-dir` across multiple unrelated sites.
-- If a site is sensitive to headed/headless switching, keep separate profiles for the two modes instead of forcing reuse.
 - Do not dynamically rename link commands at runtime. The skill author chooses the link name once.
+- For managed sessions, use `bridge.session.mode.set` instead of relying on a new launcher invocation to force a mode change.
+- For external attach sessions, `bridge.session.mode.set` is unavailable. Attach to a headed external browser if the task needs a visible window.
+- During `bootstrap_then_attach`, bootstrap is always `headed`. Do not try to switch mode until attach completes.
+- `bridge.open` and `bridge.window.open` return `UNSUPPORTED_IN_HEADLESS_SESSION` when the current runtime is `headless`.
 - For destructive writes, inspect tool help first and require explicit user intent.
 - Use `--url` only for the site the user asked for. Do not silently redirect hosts.
 

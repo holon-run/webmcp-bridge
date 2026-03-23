@@ -4,7 +4,6 @@
 
 ```bash
 command -v board-webmcp-cli
-command -v board-webmcp-ui
 skills/webmcp-bridge/scripts/ensure-links.sh --name board --url https://board.holon.run
 board-webmcp-cli -h
 board-webmcp-cli nodes.list
@@ -14,10 +13,9 @@ board-webmcp-cli nodes.list
 
 ```bash
 command -v x-webmcp-cli
-command -v x-webmcp-ui
 skills/webmcp-bridge/scripts/ensure-links.sh --name x --site x
-x-webmcp-ui bridge.session.status
-x-webmcp-ui bridge.session.bootstrap
+x-webmcp-cli bridge.session.status
+x-webmcp-cli bridge.session.bootstrap
 x-webmcp-cli -h
 x-webmcp-cli timeline.home.list -h
 ```
@@ -42,10 +40,12 @@ custom-site-webmcp-cli -h
 <site>-webmcp-cli <operation> '{"field":"value"}'
 ```
 
-## UI collaboration pattern
+## Mode switch pattern
 
 ```bash
-<site>-webmcp-ui bridge.open
-<site>-webmcp-ui <operation>
-<site>-webmcp-ui bridge.close
+<site>-webmcp-cli bridge.session.mode.get
+<site>-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'
+<site>-webmcp-cli bridge.open
+<site>-webmcp-cli <operation>
+<site>-webmcp-cli bridge.close
 ```

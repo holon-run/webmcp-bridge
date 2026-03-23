@@ -33,6 +33,7 @@ profile=""
 browser=""
 link_dir=""
 local_mcp_command="${WEBMCP_LOCAL_MCP_COMMAND:-npx -y @webmcp-bridge/local-mcp}"
+daemon_idle_ttl="${WEBMCP_DAEMON_IDLE_TTL:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -110,8 +111,7 @@ if [[ -n "$browser" ]]; then
   source_args+=(--browser "$browser")
 fi
 
-cli_name="${name}-webmcp-cli"
-ui_name="${name}-webmcp-ui"
+link_name="${name}-webmcp-cli"
 link_command=(uxc link)
 if [[ -n "$link_dir" ]]; then
   mkdir -p "$link_dir"
@@ -119,15 +119,17 @@ if [[ -n "$link_dir" ]]; then
 fi
 
 read -r -a launcher_parts <<< "$local_mcp_command"
-cli_args=("${launcher_parts[@]}" "${source_args[@]}" --headless --no-auto-login-fallback --user-data-dir "$profile")
-ui_args=("${launcher_parts[@]}" "${source_args[@]}" --no-headless --user-data-dir "$profile")
+link_args=("${launcher_parts[@]}" "${source_args[@]}" --headless --no-auto-login-fallback --user-data-dir "$profile")
 
-cli_command="$(shell_join "${cli_args[@]}")"
-ui_command="$(shell_join "${ui_args[@]}")"
+link_value="$(shell_join "${link_args[@]}")"
 
-"${link_command[@]}" "$cli_name" "$cli_command" --daemon-exclusive "$profile" --force >/dev/null
-"${link_command[@]}" "$ui_name" "$ui_command" --daemon-exclusive "$profile" --daemon-idle-ttl 0 --force >/dev/null
+link_install_args=("$link_name" "$link_value" --daemon-exclusive "$profile")
+if [[ -n "$daemon_idle_ttl" ]]; then
+  link_install_args+=(--daemon-idle-ttl "$daemon_idle_ttl")
+fi
+link_install_args+=(--force)
 
-printf 'linked %s -> %s\n' "$cli_name" "$cli_command"
-printf 'linked %s -> %s\n' "$ui_name" "$ui_command"
+"${link_command[@]}" "${link_install_args[@]}" >/dev/null
+
+printf 'linked %s -> %s\n' "$link_name" "$link_value"
 printf 'profile %s\n' "$profile"

@@ -2,38 +2,67 @@
 
 ## Link exists but points to old config
 
-Recreate both links with `--force` through the helper script:
+Recreate the link with `--force` through the helper script:
 
 ```bash
 skills/webmcp-bridge/scripts/ensure-links.sh --name <site> ...
 ```
 
-The script always refreshes both links.
+The script always refreshes the fixed site link.
 
 ## Headless flow cannot authenticate
 
-Use the UI link so the user can log in directly in the visible browser session:
+Switch the managed session to `headed`, then open the visible window:
 
 ```bash
-<site>-webmcp-ui bridge.open
+<site>-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'
+<site>-webmcp-cli bridge.open
 ```
 
-After login, switch back to the CLI link for normal automation.
+After login, switch back explicitly if needed:
+
+```bash
+<site>-webmcp-cli bridge.session.mode.set '{"mode":"headless"}'
+```
+
+If `bridge.session.mode.set` returns `UNSUPPORTED_SESSION_CONTROL`, the current session is either external attach or bootstrap-only. Use a headed external browser, or finish attach first.
+
+## The command default says headless but the session is still headed
+
+The launcher only sets the preferred default for bridge-managed sessions. It does not force the current live session to restart.
+
+Check actual runtime state:
+
+```bash
+<site>-webmcp-cli bridge.session.status
+```
+
+If the current session is managed, switch it explicitly:
+
+```bash
+<site>-webmcp-cli bridge.session.mode.set '{"mode":"headless"}'
+```
 
 ## UI window flashes open and closes immediately
 
-With current `uxc` and `@webmcp-bridge/local-mcp` releases, `bridge.open` should keep the headed session alive after the command returns.
-
 If the window still flashes open and disappears, verify that:
 
-- `uxc` is updated to a release that includes daemon detach and per-session idle TTL support
-- the `<site>-webmcp-ui` link was recreated after updating `uxc`
+- `uxc` is updated to a recent release
+- the `<site>-webmcp-cli` link was recreated after updating `uxc`
 - the environment can launch Playwright browsers for the current `HOME`
+- `bridge.session.status` reports `presentationMode = headed`
+- the current daemon idle TTL policy is not immediately reaping the process after the command returns
 
 Then rerun:
 
 ```bash
-<site>-webmcp-ui bridge.open
+<site>-webmcp-cli bridge.open
+```
+
+If your environment needs a more aggressive keepalive policy for interactive sessions, recreate the link with an explicit daemon TTL override:
+
+```bash
+WEBMCP_DAEMON_IDLE_TTL=0 skills/webmcp-bridge/scripts/ensure-links.sh --name <site> ...
 ```
 
 ## The user closed the headed browser window manually
@@ -41,7 +70,7 @@ Then rerun:
 Run the same open command again:
 
 ```bash
-<site>-webmcp-ui bridge.open
+<site>-webmcp-cli bridge.open
 ```
 
 Closing the last headed browser window ends that owner session. The next `bridge.open` starts a new headed session on the same profile, without requiring a daemon reset.
