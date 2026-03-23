@@ -15,6 +15,7 @@ function createMockPage(options?: {
   waitForEventError?: Error;
 }) {
   const evalResponses = options?.evalResponses ? [...options.evalResponses] : undefined;
+  const textboxFill = vi.fn(async () => {});
   return {
     goto: vi.fn(async () => {}),
     url: vi.fn(() => options?.url ?? "https://gemini.google.com/app"),
@@ -24,7 +25,7 @@ function createMockPage(options?: {
     locator: vi.fn(() => ({
       first: () => ({
         click: vi.fn(async () => {}),
-        fill: vi.fn(async () => {}),
+        fill: textboxFill,
       }),
       count: vi.fn(async () => 0),
       nth: vi.fn(() => ({
@@ -45,6 +46,7 @@ function createMockPage(options?: {
         saveAs: async () => {},
       };
     }),
+    textboxFill,
   };
 }
 
@@ -211,5 +213,104 @@ describe("createAdapter", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("submits long gemini prompts in one shot and waits for a new response", async () => {
+    const adapter = createAdapter();
+    const prompt = "long prompt ".repeat(200);
+    const page = createMockPage({
+      url: "https://gemini.google.com/app/chat",
+      title: "Google Gemini",
+      evalResponses: [
+        {
+          hasSignInText: false,
+          hasGeminiMarker: true,
+          hasGoogleAccountMarker: false,
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: "previous answer",
+          images: [],
+        },
+        true,
+        {
+          status: "pending",
+          active: true,
+          responseText: "previous answer",
+          fingerprint: "thinking-1",
+        },
+        {
+          status: "ready",
+          responseText: "fresh answer",
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: "fresh answer",
+          images: [],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "gemini.chat", input: { prompt, timeoutMs: 1_000 } },
+      { page: page as never },
+    );
+
+    expect(page.textboxFill).not.toHaveBeenCalled();
+    expect(page.evaluate).toHaveBeenNthCalledWith(
+      3,
+      expect.any(Function),
+      expect.objectContaining({ value: prompt }),
+    );
+    expect(result).toEqual({
+      prompt,
+      mode: "text",
+      conversationUrl: "https://gemini.google.com/app/chat",
+      responseText: "fresh answer",
+      images: [],
+      source: "dom",
+    });
+  });
+
+  it("fails closed when Gemini surfaces an upstream error while waiting", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      url: "https://gemini.google.com/app/chat",
+      title: "Google Gemini",
+      evalResponses: [
+        {
+          hasSignInText: false,
+          hasGeminiMarker: true,
+          hasGoogleAccountMarker: false,
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: null,
+          images: [],
+        },
+        true,
+        {
+          status: "error",
+          message: "Something went wrong",
+        },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "gemini.chat", input: { prompt: "hello", timeoutMs: 1_000 } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "UPSTREAM_CHANGED",
+        message: "Gemini failed to complete the request",
+        details: {
+          mode: "text",
+          message: "Something went wrong",
+          url: "https://gemini.google.com/app/chat",
+        },
+      },
+    });
   });
 });

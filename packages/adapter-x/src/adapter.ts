@@ -5661,7 +5661,32 @@ async function submitGrokPrompt(page: Page, prompt: string): Promise<GrokCompose
     await page.click(composerSelector);
     await page.keyboard.press(selectAllShortcut).catch(() => {});
     await page.keyboard.press("Backspace").catch(() => {});
-    await page.type(composerSelector, prompt, { delay: 12 });
+    const setPromptInOneShot = await page.evaluate(
+      ({ selector, value }) => {
+        const element = document.querySelector(selector);
+        if (!element) {
+          return false;
+        }
+        if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+          element.focus();
+          element.value = value;
+          element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        }
+        if (element instanceof HTMLElement && element.isContentEditable) {
+          element.focus();
+          element.textContent = value;
+          element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+          return true;
+        }
+        return false;
+      },
+      { selector: composerSelector, value: prompt },
+    ).catch(() => false);
+    if (!setPromptInOneShot) {
+      await page.type(composerSelector, prompt, { delay: 12 });
+    }
   } catch {
     return { ok: false, reason: "compose_input_failed" };
   }
@@ -5885,253 +5910,13 @@ async function waitForGrokResponse(
   prompt: string,
   timeoutMs: number,
 ): Promise<{ confirmed: boolean; response?: string }> {
-  try {
-    await page.waitForFunction(
-      ({ op, previous, promptText }) => {
-        if (op !== "grok_wait") {
-          return false;
-        }
+  const startedAt = Date.now();
+  const hardDeadline = startedAt + Math.max(timeoutMs * 3, timeoutMs + 120_000);
+  let idleDeadline = startedAt + timeoutMs;
+  let previousSignature = "";
 
-        const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
-        const previousText = normalize(previous);
-        const normalizedPrompt = normalize(promptText);
-        const isIgnoredResponse = (value: string): boolean => {
-          const lower = value.toLowerCase();
-          return (
-            lower.length < 3 ||
-            lower.startsWith("see new posts") ||
-            lower.startsWith("thought for ") ||
-            lower.startsWith("agents thinking") ||
-            lower.startsWith("ask anything") ||
-            lower === "agents" ||
-            lower === "thinking" ||
-            lower === "expert" ||
-            lower.startsWith("grok") ||
-            lower.includes("explore ") ||
-            lower.includes("discuss ") ||
-            lower.includes("create images") ||
-            lower.includes("edit image") ||
-            lower.includes("latest news") ||
-            lower === normalizedPrompt.toLowerCase() ||
-            lower === previousText.toLowerCase()
-          );
-        };
-        const scope =
-          document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
-          document.querySelector<HTMLElement>("main");
-        if (!scope) {
-          return false;
-        }
-        const lines = (scope.innerText || scope.textContent || "")
-          .split(/\n+/)
-          .map((line) => normalize(line))
-          .filter((line) => line.length > 0);
-        const linePromptIndex = lines.lastIndexOf(normalizedPrompt);
-        if (linePromptIndex >= 0) {
-          const hasStopControl = Array.from(document.querySelectorAll<HTMLElement>("button")).some((button) => {
-            const label = normalize(button.getAttribute("aria-label") ?? button.textContent ?? "").toLowerCase();
-            return label.includes("stop");
-          });
-          let hasLineCandidate = false;
-          for (let index = linePromptIndex + 1; index < lines.length; index += 1) {
-            const candidate = lines[index];
-            if (!candidate || isIgnoredResponse(candidate)) {
-              continue;
-            }
-            hasLineCandidate = true;
-          }
-          if (!hasStopControl && hasLineCandidate) {
-            return true;
-          }
-        }
-        const entries: string[] = [];
-        for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
-          if (node.closest("button, a, textarea, nav")) {
-            continue;
-          }
-          const text = normalize(node.innerText || node.textContent || "");
-          if (!text) {
-            continue;
-          }
-          const childWithSameText = Array.from(node.children).some((child) => {
-            if (!(child instanceof HTMLElement)) {
-              return false;
-            }
-            return normalize(child.innerText || child.textContent || "") === text;
-          });
-          if (childWithSameText) {
-            continue;
-          }
-          if (entries[entries.length - 1] !== text) {
-            entries.push(text);
-          }
-        }
-
-        const hasStopControl = Array.from(document.querySelectorAll<HTMLElement>("button")).some((button) => {
-          const label = normalize(button.getAttribute("aria-label") ?? button.textContent ?? "").toLowerCase();
-          return label.includes("stop");
-        });
-
-        const promptIndex = entries.lastIndexOf(normalizedPrompt);
-        if (promptIndex < 0) {
-          return false;
-        }
-
-        let hasCandidate = false;
-        for (let index = promptIndex + 1; index < entries.length; index += 1) {
-          const candidate = entries[index];
-          if (!candidate || isIgnoredResponse(candidate)) {
-            continue;
-          }
-          hasCandidate = true;
-        }
-
-        return !hasStopControl && hasCandidate;
-      },
-      {
-        op: "grok_wait",
-        previous: (previousResponse ?? "").replace(/\s+/g, " ").trim(),
-        promptText: prompt,
-      },
-      { timeout: timeoutMs },
-    );
-  } catch {
-    return { confirmed: false };
-  }
-
-  const state = await page.evaluate(({ op, promptText, previousText }) => {
-    if (op !== "grok_extract_state") {
-      return undefined;
-    }
-
-    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
-    const normalizedPrompt = normalize(promptText);
-    const normalizedPrevious = normalize(previousText);
-    const isIgnoredResponse = (value: string): boolean => {
-      const lower = value.toLowerCase();
-      return (
-        lower.length < 3 ||
-        lower.startsWith("see new posts") ||
-        lower.startsWith("thought for ") ||
-        lower.startsWith("agents thinking") ||
-        lower.startsWith("ask anything") ||
-        lower === "agents" ||
-        lower === "thinking" ||
-        lower === "expert" ||
-        lower.startsWith("grok") ||
-        lower.includes("explore ") ||
-        lower.includes("discuss ") ||
-        lower.includes("create images") ||
-        lower.includes("edit image") ||
-        lower.includes("latest news") ||
-        lower === normalizedPrompt.toLowerCase() ||
-        lower === normalizedPrevious.toLowerCase()
-      );
-    };
-    const scope =
-      document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
-      document.querySelector<HTMLElement>("main");
-    if (!scope) {
-      return undefined;
-    }
-    const lines = (scope.innerText || scope.textContent || "")
-      .split(/\n+/)
-      .map((line) => normalize(line))
-      .filter((line) => line.length > 0);
-    const lineResponseCandidates: string[] = [];
-    const linePromptIndex = lines.lastIndexOf(normalizedPrompt);
-    if (linePromptIndex >= 0) {
-      for (let index = linePromptIndex + 1; index < lines.length; index += 1) {
-        const candidate = lines[index];
-        if (!candidate || isIgnoredResponse(candidate)) {
-          continue;
-        }
-        lineResponseCandidates.push(candidate);
-      }
-    }
-    let responseForPrompt: string | undefined;
-    if (lineResponseCandidates.length > 0) {
-      responseForPrompt = lineResponseCandidates.sort((left, right) => right.length - left.length)[0];
-    }
-    if (responseForPrompt) {
-      let latestResponse = responseForPrompt;
-      for (let index = lines.length - 1; index >= 0; index -= 1) {
-        const candidate = lines[index];
-        if (!candidate || isIgnoredResponse(candidate)) {
-          continue;
-        }
-        latestResponse = candidate;
-        break;
-      }
-      return {
-        responseForPrompt,
-        latestResponse,
-      };
-    }
-
-    const entries: string[] = [];
-    for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
-      if (node.closest("button, a, textarea, nav")) {
-        continue;
-      }
-      const text = normalize(node.innerText || node.textContent || "");
-      if (!text) {
-        continue;
-      }
-      const childWithSameText = Array.from(node.children).some((child) => {
-        if (!(child instanceof HTMLElement)) {
-          return false;
-        }
-        return normalize(child.innerText || child.textContent || "") === text;
-      });
-      if (childWithSameText) {
-        continue;
-      }
-      if (entries[entries.length - 1] !== text) {
-        entries.push(text);
-      }
-    }
-
-    const responseCandidates: string[] = [];
-    const promptIndex = entries.lastIndexOf(normalizedPrompt);
-    if (promptIndex >= 0) {
-      for (let index = promptIndex + 1; index < entries.length; index += 1) {
-        const candidate = entries[index];
-        if (!candidate || isIgnoredResponse(candidate)) {
-          continue;
-        }
-        responseCandidates.push(candidate);
-      }
-    }
-
-    responseForPrompt = undefined;
-    if (responseCandidates.length > 0) {
-      responseForPrompt = responseCandidates.sort((left, right) => right.length - left.length)[0];
-    }
-
-    let latestResponse: string | undefined;
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const candidate = entries[index];
-      if (!candidate || isIgnoredResponse(candidate)) {
-        continue;
-      }
-      latestResponse = candidate;
-      break;
-    }
-
-    return {
-      responseForPrompt,
-      latestResponse,
-    };
-  }, {
-    op: "grok_extract_state",
-    promptText: prompt,
-    previousText: previousResponse ?? "",
-  });
-
-  if (state && typeof state === "object" && typeof state.responseForPrompt === "string" && state.responseForPrompt.length > 0) {
-    await page.waitForTimeout(600);
-    const settledState = await page.evaluate(({ op, promptText, previousText }) => {
+  while (Date.now() < hardDeadline && Date.now() < idleDeadline) {
+    const state = await page.evaluate(({ op, promptText, previousText }) => {
       if (op !== "grok_extract_state") {
         return undefined;
       }
@@ -6160,11 +5945,20 @@ async function waitForGrokResponse(
           lower === normalizedPrevious.toLowerCase()
         );
       };
+      const hasStopControl = Array.from(document.querySelectorAll<HTMLElement>("button")).some((button) => {
+        const label = normalize(button.getAttribute("aria-label") ?? button.textContent ?? "").toLowerCase();
+        return label.includes("stop");
+      });
       const scope =
         document.querySelector<HTMLElement>("div[aria-label='Grok']") ??
         document.querySelector<HTMLElement>("main");
       if (!scope) {
-        return undefined;
+        return {
+          hasStopControl,
+          responseForPrompt: undefined,
+          latestResponse: undefined,
+          signature: `stop:${String(hasStopControl)}`,
+        };
       }
       const lines = (scope.innerText || scope.textContent || "")
         .split(/\n+/)
@@ -6181,11 +5975,11 @@ async function waitForGrokResponse(
           lineResponseCandidates.push(candidate);
         }
       }
-      if (lineResponseCandidates.length > 0) {
-        return {
-          responseForPrompt: lineResponseCandidates.sort((left, right) => right.length - left.length)[0],
-        };
-      }
+
+      let responseForPrompt =
+        lineResponseCandidates.length > 0
+          ? lineResponseCandidates.sort((left, right) => right.length - left.length)[0]
+          : undefined;
 
       const entries: string[] = [];
       for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
@@ -6210,51 +6004,73 @@ async function waitForGrokResponse(
         }
       }
 
-      const responseCandidates: string[] = [];
-      const promptIndex = entries.lastIndexOf(normalizedPrompt);
-      if (promptIndex >= 0) {
-        for (let index = promptIndex + 1; index < entries.length; index += 1) {
-          const candidate = entries[index];
-          if (!candidate || isIgnoredResponse(candidate)) {
-            continue;
+      if (!responseForPrompt) {
+        const promptIndex = entries.lastIndexOf(normalizedPrompt);
+        if (promptIndex >= 0) {
+          const responseCandidates: string[] = [];
+          for (let index = promptIndex + 1; index < entries.length; index += 1) {
+            const candidate = entries[index];
+            if (!candidate || isIgnoredResponse(candidate)) {
+              continue;
+            }
+            responseCandidates.push(candidate);
           }
-          responseCandidates.push(candidate);
+          if (responseCandidates.length > 0) {
+            responseForPrompt = responseCandidates.sort((left, right) => right.length - left.length)[0];
+          }
         }
       }
 
-      let responseForPrompt: string | undefined;
-      if (responseCandidates.length > 0) {
-        responseForPrompt = responseCandidates.sort((left, right) => right.length - left.length)[0];
+      let latestResponse: string | undefined;
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const candidate = entries[index];
+        if (!candidate || isIgnoredResponse(candidate)) {
+          continue;
+        }
+        latestResponse = candidate;
+        break;
       }
 
       return {
+        hasStopControl,
         responseForPrompt,
+        latestResponse,
+        signature: JSON.stringify({
+          hasStopControl,
+          responseForPrompt: responseForPrompt ?? "",
+          latestResponse: latestResponse ?? "",
+        }),
       };
     }, {
       op: "grok_extract_state",
       promptText: prompt,
       previousText: previousResponse ?? "",
-    });
+    }).catch(() => undefined);
 
-    if (
-      settledState &&
-      typeof settledState === "object" &&
-      typeof settledState.responseForPrompt === "string" &&
-      settledState.responseForPrompt.length > 0
-    ) {
-      return {
-        confirmed: true,
-        response: settledState.responseForPrompt,
-      };
+    if (state && typeof state === "object") {
+      const signature = typeof state.signature === "string" ? state.signature : "";
+      if (signature && signature !== previousSignature) {
+        previousSignature = signature;
+        idleDeadline = Date.now() + timeoutMs;
+      }
+      if (state.hasStopControl === true) {
+        idleDeadline = Date.now() + timeoutMs;
+      }
+      if (
+        state.hasStopControl !== true &&
+        typeof state.responseForPrompt === "string" &&
+        state.responseForPrompt.length > 0
+      ) {
+        return {
+          confirmed: true,
+          response: state.responseForPrompt,
+        };
+      }
     }
+
+    await page.waitForTimeout(1_000);
   }
 
-  if (state && typeof state === "object" && typeof state.responseForPrompt === "string" && state.responseForPrompt.length > 0) {
-    return {
-      confirmed: true,
-      response: state.responseForPrompt,
-    };
-  }
   return { confirmed: false };
 }
 
@@ -6277,7 +6093,11 @@ async function readLatestGrokResponse(page: Page): Promise<string | undefined> {
         lower === "thinking" ||
         lower === "expert" ||
         lower.startsWith("grok") ||
-        lower.includes("explore ")
+        lower.includes("explore ") ||
+        lower.includes("discuss ") ||
+        lower.includes("create images") ||
+        lower.includes("edit image") ||
+        lower.includes("latest news")
       );
     };
     const scope =
@@ -6290,21 +6110,13 @@ async function readLatestGrokResponse(page: Page): Promise<string | undefined> {
       .split(/\n+/)
       .map((line) => normalize(line))
       .filter((line) => line.length > 0);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      const candidate = lines[index];
-      if (!candidate || isIgnoredResponse(candidate)) {
-        continue;
-      }
-      return { latestResponse: candidate };
-    }
-
     const entries: string[] = [];
     for (const node of Array.from(scope.querySelectorAll<HTMLElement>("div, span, p"))) {
       if (node.closest("button, a, textarea, nav")) {
         continue;
       }
       const text = normalize(node.innerText || node.textContent || "");
-      if (!text || isIgnoredResponse(text)) {
+      if (!text) {
         continue;
       }
       const childWithSameText = Array.from(node.children).some((child) => {
@@ -6322,8 +6134,9 @@ async function readLatestGrokResponse(page: Page): Promise<string | undefined> {
     }
 
     let latestResponse: string | undefined;
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const candidate = entries[index];
+    const responseCandidates = entries.length > 0 ? entries : lines;
+    for (let index = responseCandidates.length - 1; index >= 0; index -= 1) {
+      const candidate = responseCandidates[index];
       if (!candidate || isIgnoredResponse(candidate)) {
         continue;
       }
@@ -6331,7 +6144,9 @@ async function readLatestGrokResponse(page: Page): Promise<string | undefined> {
       break;
     }
 
-    return { latestResponse };
+    return {
+      latestResponse,
+    };
   }, { op: "grok_extract_state" });
 
   if (state && typeof state === "object" && typeof state.latestResponse === "string") {
@@ -6404,8 +6219,6 @@ async function askGrok(
         }
         return output;
       }
-      await grokPage.goto("https://x.com/i/grok", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
-      await waitForGrokSurface(grokPage);
       const previousResponse = await readLatestGrokResponse(grokPage);
       logGrokPhase("previous_response_read", {
         hasPreviousResponse: previousResponse !== undefined,
