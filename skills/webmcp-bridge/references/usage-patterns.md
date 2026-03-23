@@ -3,23 +3,21 @@
 ## URL-backed native site
 
 ```bash
-command -v board-webmcp-cli
-command -v board-webmcp-ui
+command -v board-webmcp
 skills/webmcp-bridge/scripts/ensure-links.sh --name board --url https://board.holon.run
-board-webmcp-cli -h
-board-webmcp-cli nodes.list
+board-webmcp -h
+board-webmcp nodes.list
 ```
 
 ## Built-in adapter site
 
 ```bash
-command -v x-webmcp-cli
-command -v x-webmcp-ui
+command -v x-webmcp
 skills/webmcp-bridge/scripts/ensure-links.sh --name x --site x
-x-webmcp-ui bridge.session.status
-x-webmcp-ui bridge.session.bootstrap
-x-webmcp-cli -h
-x-webmcp-cli timeline.home.list -h
+x-webmcp bridge.session.status
+x-webmcp bridge.session.bootstrap
+x-webmcp -h
+x-webmcp timeline.home.list -h
 ```
 
 For auth-sensitive built-in sites such as `x`, expect the first headed run to require manual
@@ -32,20 +30,22 @@ skills/webmcp-bridge/scripts/ensure-links.sh \
   --name custom-site \
   --adapter-module @your-scope/webmcp-adapter \
   --url https://example.com
-custom-site-webmcp-cli -h
+custom-site-webmcp -h
 ```
 
 ## JSON payload pattern
 
 ```bash
-<site>-webmcp-cli <operation> field=value
-<site>-webmcp-cli <operation> '{"field":"value"}'
+<site>-webmcp <operation> field=value
+<site>-webmcp <operation> '{"field":"value"}'
 ```
 
-## UI collaboration pattern
+## Mode switch pattern
 
 ```bash
-<site>-webmcp-ui bridge.open
-<site>-webmcp-ui <operation>
-<site>-webmcp-ui bridge.close
+<site>-webmcp bridge.session.mode.get
+<site>-webmcp bridge.session.mode.set '{"mode":"headed"}'
+<site>-webmcp bridge.open
+<site>-webmcp <operation>
+<site>-webmcp bridge.close
 ```

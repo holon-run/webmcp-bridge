@@ -65,15 +65,11 @@ if [[ -n "$link_dir" ]]; then
   link_command+=(--dir "$link_dir")
 fi
 read -r -a launcher_parts <<< "$local_mcp_command"
-cli_args=("${launcher_parts[@]}" --url "$url" --headless --no-auto-login-fallback --user-data-dir "$profile")
-ui_args=("${launcher_parts[@]}" --url "$url" --no-headless --user-data-dir "$profile")
+link_args=("${launcher_parts[@]}" --url "$url" --headless --no-auto-login-fallback --user-data-dir "$profile")
 
-cli_command="$(shell_join "${cli_args[@]}")"
-ui_command="$(shell_join "${ui_args[@]}")"
+link_value="$(shell_join "${link_args[@]}")"
 
-"${link_command[@]}" board-webmcp-cli "$cli_command" --daemon-exclusive "$profile" --force >/dev/null
-"${link_command[@]}" board-webmcp-ui "$ui_command" --daemon-exclusive "$profile" --daemon-idle-ttl 0 --force >/dev/null
+"${link_command[@]}" board-webmcp "$link_value" --daemon-exclusive "$profile" --daemon-idle-ttl 0 --force >/dev/null
 
-printf 'linked %s -> %s\n' 'board-webmcp-cli' "$cli_command"
-printf 'linked %s -> %s\n' 'board-webmcp-ui' "$ui_command"
+printf 'linked %s -> %s\n' 'board-webmcp' "$link_value"
 printf 'profile %s\n' "$profile"
