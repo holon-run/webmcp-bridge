@@ -6,7 +6,7 @@
 import type { Readable, Writable } from "node:stream";
 import {
   createLocalMcpStdioServer,
-  type LocalBridgeSessionRestartOptions,
+  type LocalBridgePresentationModeSetOptions,
   type LocalBridgeState,
   type LocalMcpGateway,
   type LocalMcpStdioServer,
@@ -36,6 +36,7 @@ import {
   waitForProcessExit,
   type BridgeAuthState,
   type BridgeControlMode,
+  type BridgePresentationMode,
   type BridgeSessionOwnership,
   type BridgeSessionState,
   type SessionMetadata,
@@ -60,7 +61,7 @@ export type StartLocalMcpBridgeOptions = {
   browserChannel?: BrowserChannel;
   browserUrl?: string;
   chromiumLoginWorkaround?: boolean;
-  headless?: boolean;
+  preferredPresentationMode?: BridgePresentationMode;
   userDataDir?: string;
   preferNative?: boolean;
   serviceVersion: string;
@@ -75,7 +76,8 @@ export type LocalMcpBridgeHandle = {
   targetUrl: string;
   controlMode: BridgeControlMode;
   mode: "native" | "polyfill" | "adapter-shim" | "control-only";
-  headless: boolean;
+  presentationMode: BridgePresentationMode;
+  preferredPresentationMode: BridgePresentationMode;
   close: () => Promise<void>;
 };
 
@@ -87,7 +89,7 @@ type RuntimeStartOptions = {
   browserChannel?: BrowserChannel;
   browserUrl?: string;
   chromiumLoginWorkaround?: boolean;
-  headless?: boolean;
+  preferredPresentationMode?: BridgePresentationMode;
   userDataDir?: string;
   preferNative?: boolean;
   autoLoginFallback?: boolean;
@@ -137,12 +139,12 @@ function buildRuntimeStartOptions(
   baseOptions: StartLocalMcpBridgeOptions,
   siteDefinition: SiteDefinition,
   controlMode: "launch" | "attach",
-  headless: boolean,
+  preferredPresentationMode: BridgePresentationMode,
   browserUrl?: string,
 ): RuntimeStartOptions {
   const nextOptions: RuntimeStartOptions = {
     siteDefinition,
-    headless,
+    preferredPresentationMode,
   };
   if (baseOptions.url !== undefined) {
     nextOptions.url = baseOptions.url;
@@ -203,7 +205,9 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     authPolicy.mode === "bootstrap_then_attach" ? "profile_missing" : "runtime_active";
   let browserUrl = options.browserUrl;
   let browserPid: number | undefined;
-  let headless = options.headless ?? false;
+  let preferredPresentationMode: BridgePresentationMode =
+    options.preferredPresentationMode ?? "headed";
+  let presentationMode: BridgePresentationMode = preferredPresentationMode;
   let lastBackupPath: string | undefined;
   let metadata: SessionMetadata | undefined;
   let server: LocalMcpStdioServer | undefined;
@@ -229,7 +233,8 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       controlMode,
       ...(browserUrl !== undefined ? { browserUrl } : {}),
       mode: runtimeMode,
-      headless,
+      presentationMode,
+      preferredPresentationMode,
       authPolicyMode: authPolicy.mode,
       authState,
       sessionState,
@@ -249,12 +254,14 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     authState = nextMetadata.authState;
     sessionState = nextMetadata.sessionState;
     ownership = nextMetadata.ownership;
+    presentationMode = nextMetadata.presentationMode;
+    preferredPresentationMode = nextMetadata.preferredPresentationMode;
     if (nextMetadata.lastBackupPath !== undefined) {
       lastBackupPath = nextMetadata.lastBackupPath;
     }
     if (runtime === undefined) {
       runtimeMode = "control-only";
-      headless = false;
+      presentationMode = nextMetadata.controlMode === "bootstrap" ? "headed" : nextMetadata.presentationMode;
     }
   };
 
@@ -300,7 +307,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     runtime = nextRuntime;
     runtimeMode = nextRuntime.mode;
     controlMode = nextRuntime.controlMode;
-    headless = nextRuntime.headless;
+    presentationMode = nextRuntime.presentationMode;
     ownership = nextOwnership;
     unsubscribeRuntimeResourceUpdates?.();
     unsubscribeRuntimeResourceUpdates = nextRuntime.gateway.onResourceUpdated((uri) => {
@@ -410,6 +417,8 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     }
     const launchResult = await launchBootstrapBrowser(bootstrapOptions);
     const bootstrapPatch: SessionMetadataPatch = {
+      presentationMode: "headed",
+      preferredPresentationMode,
       sessionState: nextAuthState === "unknown" ? "bootstrap_active" : describeSessionStateFromAuth(nextAuthState),
       authState: nextAuthState,
       controlMode: "bootstrap",
@@ -436,8 +445,11 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     browserPid = nextBrowserPid;
     authState = nextAuthState;
     sessionState = "runtime_active";
+    presentationMode = nextRuntime.presentationMode;
     if (profilePath && metadataFallback) {
       const runtimePatch: SessionMetadataPatch = {
+        presentationMode: nextRuntime.presentationMode,
+        preferredPresentationMode,
         sessionState: "runtime_active",
         authState: nextAuthState,
         controlMode: nextRuntime.controlMode,
@@ -458,7 +470,10 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     return refreshStatus();
   };
 
-  const attachSessionInternal = async (requestedBrowserUrl?: string): Promise<LocalBridgeState> => {
+  const attachSessionInternal = async (
+    requestedBrowserUrl?: string,
+    requestedPresentationMode: BridgePresentationMode = preferredPresentationMode,
+  ): Promise<LocalBridgeState> => {
     const explicitBrowserUrl = requestedBrowserUrl?.trim() || options.browserUrl?.trim();
     const activeBrowserUrl = explicitBrowserUrl || browserUrl;
     const nextOwnership: BridgeSessionOwnership = explicitBrowserUrl ? "external" : "managed";
@@ -495,9 +510,11 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       const attachOptions = {
         targetUrl,
         userDataDir: profilePath,
+        presentationMode: requestedPresentationMode,
       } as {
         targetUrl: string;
         userDataDir: string;
+        presentationMode: BridgePresentationMode;
         browserChannel?: BrowserChannel;
       };
       if (options.browserChannel !== undefined) {
@@ -510,7 +527,13 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
 
     try {
       const nextRuntime = await startRuntime(
-        buildRuntimeStartOptions(options, siteDefinition, "attach", false, attachBrowserUrl),
+        buildRuntimeStartOptions(
+          options,
+          siteDefinition,
+          "attach",
+          requestedPresentationMode,
+          attachBrowserUrl,
+        ),
       );
       const nextAuthState = await probeRuntimeAuthState(nextRuntime);
       if (
@@ -521,6 +544,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         await nextRuntime.close();
         return await bootstrapSessionInternal(nextAuthState);
       }
+      preferredPresentationMode = requestedPresentationMode;
       return await activateRuntime(nextRuntime, nextOwnership, attachBrowserUrl, managedAttachPid ?? browserPid);
     } catch (error) {
       if (managedAttachPid && profilePath && metadataFallback) {
@@ -541,28 +565,44 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     }
   };
 
-  const restartRuntimeInternal = async (
-    restartOptions: LocalBridgeSessionRestartOptions,
+  const setPresentationModeInternal = async (
+    setModeOptions: LocalBridgePresentationModeSetOptions,
   ): Promise<LocalBridgeState> => {
     if (closed) {
       throw new Error("SESSION_NOT_AVAILABLE: local-mcp bridge session is closed");
     }
-    const requestedControlMode = restartOptions.controlMode ?? (controlMode === "attach" ? "attach" : "launch");
-    if (requestedControlMode === "attach") {
-      return await attachSessionInternal(restartOptions.browserUrl);
-    }
-    if (restartOptions.browserUrl !== undefined) {
-      throw new Error("CONFIG_ERROR: bridge.session.restart with controlMode=launch cannot accept browserUrl");
-    }
-    if (authPolicy.mode === "bootstrap_then_attach") {
-      throw new Error(
-        "UNSUPPORTED_SESSION_CONTROL: launch restarts are not supported for bootstrap_then_attach sessions",
-      );
-    }
-
+    const requestedPresentationMode = setModeOptions.presentationMode;
     const previousRuntime = runtime;
     const previousState = refreshStatus();
+    const previousPreferredPresentationMode = preferredPresentationMode;
+
+    if (controlMode === "bootstrap") {
+      throw new Error(
+        "UNSUPPORTED_SESSION_CONTROL: bridge.session.mode.set is unavailable while the bridge is in bootstrap mode",
+      );
+    }
+    if (ownership === "external") {
+      throw new Error(
+        "UNSUPPORTED_SESSION_CONTROL: bridge.session.mode.set is unavailable for external attach sessions",
+      );
+    }
+    if (requestedPresentationMode === presentationMode) {
+      preferredPresentationMode = requestedPresentationMode;
+      if (profilePath && metadataFallback) {
+        await writeMetadata({
+          presentationMode,
+          preferredPresentationMode,
+        });
+      }
+      return refreshStatus();
+    }
+    if (controlMode === "attach") {
+      preferredPresentationMode = requestedPresentationMode;
+      return await attachSessionInternal(undefined, requestedPresentationMode);
+    }
+
     await closeRuntime();
+    preferredPresentationMode = requestedPresentationMode;
 
     try {
       const nextRuntime = await startRuntime(
@@ -570,15 +610,21 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
           options,
           siteDefinition,
           "launch",
-          restartOptions.headless ?? (previousRuntime?.headless ?? (options.headless ?? false)),
+          requestedPresentationMode,
         ),
       );
       return await activateRuntime(nextRuntime, "managed");
     } catch (error) {
+      preferredPresentationMode = previousPreferredPresentationMode;
       if (previousRuntime) {
         try {
           const recoveredRuntime = await startRuntime(
-            buildRuntimeStartOptions(options, siteDefinition, "launch", previousState.headless),
+            buildRuntimeStartOptions(
+              options,
+              siteDefinition,
+              "launch",
+              previousState.presentationMode,
+            ),
           );
           await activateRuntime(recoveredRuntime, previousState.ownership);
         } catch (recoveryError) {
@@ -592,8 +638,10 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     }
   };
 
-  const restartRuntime = async (restartOptions: LocalBridgeSessionRestartOptions): Promise<LocalBridgeState> => {
-    return await runLifecycleTransition(async () => await restartRuntimeInternal(restartOptions));
+  const setPresentationMode = async (
+    setModeOptions: LocalBridgePresentationModeSetOptions,
+  ): Promise<LocalBridgeState> => {
+    return await runLifecycleTransition(async () => await setPresentationModeInternal(setModeOptions));
   };
 
   const resetProfileInternal = async (): Promise<LocalBridgeState> => {
@@ -617,7 +665,13 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     if (authPolicy.mode !== "bootstrap_then_attach") {
       const nextControlMode = options.browserUrl ? "attach" : "launch";
       const nextRuntime = await startRuntime(
-        buildRuntimeStartOptions(options, siteDefinition, nextControlMode, headless, options.browserUrl),
+        buildRuntimeStartOptions(
+          options,
+          siteDefinition,
+          nextControlMode,
+          preferredPresentationMode,
+          options.browserUrl,
+        ),
       );
       await activateRuntime(nextRuntime, nextControlMode === "attach" ? "external" : "managed", options.browserUrl);
       return;
@@ -725,7 +779,9 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         attachSession: async (requestedBrowserUrl?: string) => {
           return await runLifecycleTransition(async () => await attachSessionInternal(requestedBrowserUrl));
         },
-        restartSession: async (restartOptions: LocalBridgeSessionRestartOptions) => await restartRuntime(restartOptions),
+        getPresentationMode: () => refreshStatus().presentationMode,
+        setPresentationMode: async (setModeOptions: LocalBridgePresentationModeSetOptions) =>
+          await setPresentationMode(setModeOptions),
         resetProfile: async () => {
           return await runLifecycleTransition(async () => await resetProfileInternal());
         },
@@ -773,8 +829,11 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     get mode() {
       return runtimeMode;
     },
-    get headless() {
-      return headless;
+    get presentationMode() {
+      return presentationMode;
+    },
+    get preferredPresentationMode() {
+      return preferredPresentationMode;
     },
     close: async (): Promise<void> => {
       input.removeListener("end", handleInputEnded);

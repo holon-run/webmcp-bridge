@@ -45,7 +45,8 @@ Implemented in the current control plane:
 - `bridge.session.status`
 - `bridge.session.bootstrap`
 - `bridge.session.attach`
-- `bridge.session.restart`
+- `bridge.session.mode.get`
+- `bridge.session.mode.set`
 - `bridge.session.stop`
 - `bridge.session.reset_profile`
 - legacy aliases: `bridge.open`, `bridge.close`
@@ -57,7 +58,8 @@ Implemented in the current control plane:
 - `controlMode` (`none` | `bootstrap` | `launch` | `attach`)
 - `browserUrl` (when an attached browser is known)
 - `mode` (`native` | `polyfill` | `adapter-shim` | `control-only`)
-- `headless`
+- `presentationMode` (`headed` | `headless`)
+- `preferredPresentationMode` (`headed` | `headless`)
 - `authPolicyMode` (`none` | `bootstrap_then_attach`)
 - `authState` (`unknown` | `authenticated` | `auth_required` | `challenge_required`)
 - `sessionState`
@@ -73,7 +75,7 @@ Implemented in the current control plane:
 - `browserPid` (for a managed browser when known)
 - `lastBackupPath` (after `bridge.session.reset_profile`)
 
-`bridge.session.bootstrap`, `bridge.session.attach`, `bridge.session.restart`, and
+`bridge.session.bootstrap`, `bridge.session.attach`, `bridge.session.mode.set`, and
 `bridge.session.reset_profile` are the executable lifecycle controls:
 
 - `bridge.session.bootstrap`
@@ -83,10 +85,10 @@ Implemented in the current control plane:
 - `bridge.session.attach`
   - attaches to an explicit external browser when `browserUrl` is provided
   - otherwise, for auth-sensitive managed sessions, launches a managed attach browser and connects over CDP
-- `bridge.session.restart`
-  - restarts the current bridge runtime in place
-  - supported for standard launch/attach sessions
-  - rejected for `bootstrap_then_attach` sessions when the requested mode is `launch`
+- `bridge.session.mode.set`
+  - switches managed runtimes between `headed` and `headless`
+  - rejected while the bridge is in bootstrap mode
+  - rejected for external attach sessions because local-mcp does not own that browser
 - `bridge.session.reset_profile`
   - backs up the managed profile
   - recreates an empty managed profile
@@ -105,6 +107,7 @@ The metadata records:
 
 - site id and target URL
 - auth policy mode and auth probe tool
+- actual `presentationMode` and `preferredPresentationMode`
 - session state and auth state
 - current control mode
 - ownership (`managed` or `external`)
@@ -121,11 +124,13 @@ For auth-sensitive sites, the active lifecycle is:
 
 1. `bootstrap`
    - launch a normal browser pointed at the managed profile
+   - always uses `presentationMode = headed`
    - no Playwright-owned login flow
    - user completes sign-in manually
 2. `attach`
    - attach in CDP mode against the same profile/browser
    - Playwright controls the authenticated browser after sign-in
+   - managed attach may run in `headed` or `headless` mode
 
 This uses the following state machine:
 

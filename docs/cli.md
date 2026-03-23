@@ -24,8 +24,8 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 - `--browser-channel <name>`: Chromium distribution channel override, such as `chrome`, `chrome-beta`, `chrome-dev`, `chrome-canary`, `msedge`, `msedge-beta`, `msedge-dev`, or `msedge-canary`.
 - `--browser-url <url>`: attach to an existing Chromium browser over CDP instead of launching a new browser.
 - `--chromium-login-workaround`: ignore `--enable-automation` for Chromium-based login flows.
-- `--headless`: launch browser in headless mode.
-- `--no-headless`: force headed mode.
+- `--headless`: prefer headless runtime mode for bridge-managed sessions.
+- `--no-headless`: prefer headed runtime mode.
 - `--auto-login-fallback`: auto-switch to headed mode when adapter auth probe reports auth required in headless mode (default: true).
 - `--no-auto-login-fallback`: disable auto login fallback.
 - `--user-data-dir <path>`: Playwright persistent profile directory.
@@ -45,11 +45,12 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
   - `bridge.session.status`: return local-mcp control-plane state for the current site session
   - `bridge.session.bootstrap`: launch a normal browser for manual sign-in on a managed profile
   - `bridge.session.attach`: attach in CDP mode, either to an explicit `browserUrl` or to a managed attach browser for auth-sensitive sessions
-  - `bridge.session.restart`: restart the current bridge session, optionally switching control mode or headless state
+  - `bridge.session.mode.get`: return the current runtime presentation mode
+  - `bridge.session.mode.set`: switch a managed runtime between `headed` and `headless`
   - `bridge.session.stop`: close the current bridge session
   - `bridge.session.reset_profile`: back up and recreate the managed profile for the current session
   - `bridge.open` and `bridge.close` remain available as legacy aliases
-- `bridge.window.open` and `bridge.open` return `UNSUPPORTED_IN_HEADLESS_SESSION` when invoked through a headless link.
+- `bridge.window.open` and `bridge.open` return `UNSUPPORTED_IN_HEADLESS_SESSION` when the current runtime presentation mode is `headless`.
 - If `--browser-channel` is set, `--browser` must remain `chromium`; other engines reject channel overrides.
 - If `--browser-url` is set, local-mcp attaches to an already running Chromium browser and does not launch a new profile itself.
 - Auth-sensitive adapters declare `manifest.authPolicy`. When `authPolicy.mode = "bootstrap_then_attach"`, local-mcp uses a managed profile and follows this flow:
@@ -59,6 +60,8 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 - `bridge.session.status` includes:
   - `controlMode`
   - `mode`
+  - `presentationMode`
+  - `preferredPresentationMode`
   - `authPolicyMode`
   - `authState`
   - `sessionState`

@@ -76,7 +76,7 @@ class McpTestClient {
   async start(): Promise<LocalMcpBridgeHandle> {
     this.bridgeHandle = await startLocalMcpBridge({
       url: this.url,
-      headless: true,
+      preferredPresentationMode: "headless",
       userDataDir: this.userDataDir,
       serviceVersion: "0.1.0-test",
       input: this.input,

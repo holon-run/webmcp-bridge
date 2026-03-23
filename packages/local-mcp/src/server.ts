@@ -21,6 +21,7 @@ import type { McpToolDefinition } from "./mcp-types.js";
 import type {
   BridgeAuthState,
   BridgeControlMode,
+  BridgePresentationMode,
   BridgeSessionOwnership,
   BridgeSessionState,
 } from "./session.js";
@@ -39,7 +40,8 @@ export type LocalBridgeState = {
   controlMode: BridgeControlMode;
   browserUrl?: string;
   mode: "native" | "polyfill" | "adapter-shim" | "control-only";
-  headless: boolean;
+  presentationMode: BridgePresentationMode;
+  preferredPresentationMode: BridgePresentationMode;
   authPolicyMode: "none" | "bootstrap_then_attach";
   authState: BridgeAuthState;
   sessionState: BridgeSessionState;
@@ -49,10 +51,8 @@ export type LocalBridgeState = {
   lastBackupPath?: string;
 };
 
-export type LocalBridgeSessionRestartOptions = {
-  controlMode?: "launch" | "attach";
-  browserUrl?: string;
-  headless?: boolean;
+export type LocalBridgePresentationModeSetOptions = {
+  presentationMode: BridgePresentationMode;
 };
 
 export type LocalBridgeControl = {
@@ -60,7 +60,8 @@ export type LocalBridgeControl = {
   openWindow: () => Promise<"focused" | "opened">;
   bootstrapSession: () => Promise<LocalBridgeState>;
   attachSession: (browserUrl?: string) => Promise<LocalBridgeState>;
-  restartSession: (options: LocalBridgeSessionRestartOptions) => Promise<LocalBridgeState>;
+  getPresentationMode: () => BridgePresentationMode;
+  setPresentationMode: (options: LocalBridgePresentationModeSetOptions) => Promise<LocalBridgeState>;
   resetProfile: () => Promise<LocalBridgeState>;
   closeBridge: () => Promise<void>;
 };
@@ -382,22 +383,25 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         },
       },
       {
-        name: "bridge.session.restart",
-        description: "Restart the current local-mcp bridge session, optionally switching control mode or headless state.",
+        name: "bridge.session.mode.get",
+        description: "Return the current runtime presentation mode for the local-mcp bridge session.",
+        inputSchema: { type: "object", additionalProperties: false },
+        annotations: {
+          readOnlyHint: true,
+        },
+      },
+      {
+        name: "bridge.session.mode.set",
+        description: "Switch the managed local-mcp bridge runtime between headed and headless presentation modes.",
         inputSchema: {
           type: "object",
           properties: {
-            controlMode: {
+            mode: {
               type: "string",
-              enum: ["launch", "attach"],
-            },
-            browserUrl: {
-              type: "string",
-            },
-            headless: {
-              type: "boolean",
+              enum: ["headed", "headless"],
             },
           },
+          required: ["mode"],
           additionalProperties: false,
         },
       },
@@ -435,7 +439,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       name === "bridge.session.status" ||
       name === "bridge.session.bootstrap" ||
       name === "bridge.session.attach" ||
-      name === "bridge.session.restart" ||
+      name === "bridge.session.mode.get" ||
+      name === "bridge.session.mode.set" ||
       name === "bridge.session.stop" ||
       name === "bridge.session.reset_profile" ||
       name === "bridge.open" ||
@@ -454,30 +459,14 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     return browserUrl.trim();
   }
 
-  private parseRestartOptions(input: Record<string, unknown>): LocalBridgeSessionRestartOptions {
-    const output: LocalBridgeSessionRestartOptions = {};
-    const controlMode = input.controlMode;
-    if (controlMode !== undefined) {
-      if (controlMode !== "launch" && controlMode !== "attach") {
-        throw new Error("INVALID_ARGUMENT: controlMode must be launch or attach when provided");
-      }
-      output.controlMode = controlMode;
+  private parsePresentationModeSetOptions(input: Record<string, unknown>): LocalBridgePresentationModeSetOptions {
+    const mode = input.mode;
+    if (mode === "headed" || mode === "headless") {
+      return {
+        presentationMode: mode,
+      };
     }
-    const browserUrl = input.browserUrl;
-    if (browserUrl !== undefined) {
-      if (typeof browserUrl !== "string" || !browserUrl.trim()) {
-        throw new Error("INVALID_ARGUMENT: browserUrl must be a non-empty string when provided");
-      }
-      output.browserUrl = browserUrl.trim();
-    }
-    const headless = input.headless;
-    if (headless !== undefined) {
-      if (typeof headless !== "boolean") {
-        throw new Error("INVALID_ARGUMENT: headless must be a boolean when provided");
-      }
-      output.headless = headless;
-    }
-    return output;
+    throw new Error("INVALID_ARGUMENT: mode must be headed or headless");
   }
 
   private toBridgeErrorResult(error: unknown): JsonValue {
@@ -509,7 +498,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
           controlMode: state.controlMode,
           ...(state.browserUrl !== undefined ? { browserUrl: state.browserUrl } : {}),
           mode: state.mode,
-          headless: state.headless,
+          presentationMode: state.presentationMode,
+          preferredPresentationMode: state.preferredPresentationMode,
           windowState,
         };
       } catch (error) {
@@ -525,7 +515,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
           controlMode: state.controlMode,
           ...(state.browserUrl !== undefined ? { browserUrl: state.browserUrl } : {}),
           mode: state.mode,
-          headless: state.headless,
+          presentationMode: state.presentationMode,
+          preferredPresentationMode: state.preferredPresentationMode,
           authPolicyMode: state.authPolicyMode,
           authState: state.authState,
           sessionState: state.sessionState,
@@ -560,13 +551,22 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         return this.toBridgeErrorResult(error);
       }
     }
-    if (name === "bridge.session.restart") {
+    if (name === "bridge.session.mode.get") {
+      return {
+        ok: true,
+        presentationMode: options.bridgeControl.getPresentationMode(),
+      };
+    }
+    if (name === "bridge.session.mode.set") {
       try {
-        const nextState = await options.bridgeControl.restartSession(this.parseRestartOptions(input));
+        const nextState = await options.bridgeControl.setPresentationMode(
+          this.parsePresentationModeSetOptions(input),
+        );
         return {
           ok: true,
+          updated: true,
+          presentationMode: nextState.presentationMode,
           session: nextState,
-          restarted: true,
         };
       } catch (error) {
         return this.toBridgeErrorResult(error);
@@ -604,7 +604,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       controlMode: state.controlMode,
       ...(state.browserUrl !== undefined ? { browserUrl: state.browserUrl } : {}),
       mode: state.mode,
-      headless: state.headless,
+      presentationMode: state.presentationMode,
+      preferredPresentationMode: state.preferredPresentationMode,
       authPolicyMode: state.authPolicyMode,
       authState: state.authState,
       sessionState: state.sessionState,

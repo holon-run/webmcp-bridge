@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { startLocalMcpBridge } from "./bridge.js";
 import { resolveSiteDefinition, type BuiltinSite } from "./sites.js";
 import type { BrowserChannel, BrowserEngine } from "./runtime.js";
+import type { BridgePresentationMode } from "./session.js";
 
 function readPackageVersion(): string {
   try {
@@ -41,8 +42,8 @@ Optional:
   --browser-channel <name>     chromium channel: chrome | chrome-beta | chrome-dev | chrome-canary | msedge | msedge-beta | msedge-dev | msedge-canary
   --browser-url <url>          Attach to an existing Chromium browser over CDP instead of launching a new browser
   --chromium-login-workaround  ignore --enable-automation for chromium login flows
-  --headless                   Run browser in headless mode (default: false)
-  --no-headless                Force headed mode
+  --headless                   Prefer headless runtime mode for bridge-managed sessions
+  --no-headless                Prefer headed runtime mode
   --auto-login-fallback        Auto-switch to headed mode when auth is required in headless mode (default: true)
   --no-auto-login-fallback     Disable auto-switch login fallback
   --user-data-dir <path>       Playwright persistent profile directory
@@ -58,7 +59,7 @@ export type LocalMcpCliOptions = {
   browserChannel?: BrowserChannel;
   browserUrl?: string;
   chromiumLoginWorkaround?: boolean;
-  headless: boolean;
+  preferredPresentationMode: BridgePresentationMode;
   autoLoginFallback: boolean;
   userDataDir?: string;
   serviceVersion: string;
@@ -80,7 +81,7 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
   let browserChannel: BrowserChannel | undefined;
   let browserUrl: string | undefined;
   let chromiumLoginWorkaround: boolean | undefined;
-  let headless = false;
+  let preferredPresentationMode: BridgePresentationMode = "headed";
   let autoLoginFallback = true;
   let userDataDir: string | undefined;
   let serviceVersion = DEFAULT_SERVICE_VERSION;
@@ -143,7 +144,7 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
     }
 
     if (arg === "--headless") {
-      headless = true;
+      preferredPresentationMode = "headless";
       continue;
     }
 
@@ -153,7 +154,7 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
     }
 
     if (arg === "--no-headless") {
-      headless = false;
+      preferredPresentationMode = "headed";
       continue;
     }
 
@@ -195,7 +196,7 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
 
   const options: LocalMcpCliOptions = {
     browser,
-    headless,
+    preferredPresentationMode,
     autoLoginFallback,
     serviceVersion,
   };
@@ -275,7 +276,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
   }
 
   process.stderr.write(
-    `[local-mcp] site=${handle.site} mode=${handle.mode} headless=${String(handle.headless)} url=${handle.targetUrl} transport=stdio\n`,
+    `[local-mcp] site=${handle.site} mode=${handle.mode} presentationMode=${handle.presentationMode} preferredPresentationMode=${handle.preferredPresentationMode} url=${handle.targetUrl} transport=stdio\n`,
   );
 
   let closing = false;
