@@ -177,7 +177,20 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
 
 type GoogleAuthState = "authenticated" | "auth_required";
 type GeminiMode = "text" | "image";
-type GeminiWaitResult = { status: "ready" } | { status: "pending" } | { status: "error"; message: string };
+type GeminiWaitResult =
+  | {
+      status: "ready";
+      responseText?: string | null;
+      imageCount?: number;
+    }
+  | {
+      status: "pending";
+      active?: boolean;
+      fingerprint?: string;
+      responseText?: string | null;
+      imageCount?: number;
+    }
+  | { status: "error"; message: string };
 
 type GooglePage = {
   evaluate: <T, Arg = void>(pageFunction: (arg: Arg) => T | Promise<T>, arg?: Arg) => Promise<T>;
@@ -593,21 +606,50 @@ async function submitGeminiPrompt(page: GooglePage, prompt: string, mode: Gemini
   await ensureGeminiImageMode(page, mode);
   const textbox = livePage.locator("div[role='textbox'][aria-label*='Enter a prompt']").first();
   await textbox.click();
-  await textbox.fill(prompt);
+  const inserted = await page.evaluate(
+    ({ value }) => {
+      const element = document.querySelector<HTMLElement>("div[role='textbox'][aria-label*='Enter a prompt']");
+      if (!element) {
+        return false;
+      }
+      element.focus();
+      if (
+        element instanceof HTMLTextAreaElement ||
+        element instanceof HTMLInputElement
+      ) {
+        element.value = value;
+        element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+      if (element.isContentEditable) {
+        element.textContent = value;
+        element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+        return true;
+      }
+      return false;
+    },
+    { value: prompt },
+  ).catch(() => false);
+  if (!inserted) {
+    await textbox.fill(prompt);
+  }
   await livePage.waitForTimeout(400);
   await livePage.getByRole("button", { name: /send message/i }).first().click();
 }
 
-async function waitForGeminiResponse(
+async function readGeminiResponseState(
   page: GooglePage,
   mode: GeminiMode,
-  timeoutMs: number,
+  previousSnapshot?: {
+    responseText?: string | null;
+    imageCount?: number;
+  },
 ): Promise<GeminiWaitResult> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const state = await page.evaluate(
-      ({ mode: requestedMode }) => {
+  return await page.evaluate(
+    ({ mode: requestedMode, previousResponseText, previousImageCount }) => {
         const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
+        const normalizedPreviousResponseText = normalize(previousResponseText || "");
         const visible = (element: Element | null): element is HTMLElement => {
           if (!(element instanceof HTMLElement)) {
             return false;
@@ -634,6 +676,15 @@ async function waitForGeminiResponse(
           };
         }
 
+        const hasStopControl = Array.from(document.querySelectorAll("button")).some((node) => {
+          if (!visible(node)) {
+            return false;
+          }
+          const text = normalize(node.textContent || "");
+          const aria = normalize(node.getAttribute("aria-label") || "");
+          return text.includes("stop") || aria.includes("stop");
+        });
+
         if (requestedMode === "image") {
           const hasDownloadButton = Array.from(document.querySelectorAll("button,a")).some((node) => {
             if (!visible(node)) {
@@ -651,8 +702,21 @@ async function waitForGeminiResponse(
             const src = normalize((node as HTMLImageElement).src || "");
             return rect.width > 64 && rect.height > 64 && src.includes("googleusercontent.com");
           }).length;
+          if (!hasStopControl && (hasDownloadButton || imageCount > previousImageCount)) {
+            return {
+              status: "ready" as const,
+              imageCount,
+            };
+          }
           return {
-            status: (hasDownloadButton || imageCount > 0 ? "ready" : "pending") as "ready" | "pending",
+            status: "pending" as const,
+            active: hasStopControl,
+            imageCount,
+            fingerprint: JSON.stringify({
+              hasStopControl,
+              imageCount,
+              hasDownloadButton,
+            }),
           };
         }
 
@@ -663,22 +727,93 @@ async function waitForGeminiResponse(
           const aria = normalize(node.getAttribute("aria-label") || "");
           return aria.includes("good response") || aria.includes("bad response");
         });
+        const responseCandidates = Array.from(
+          document.querySelectorAll("message-content, .model-response-text, .response-container-content, .markdown"),
+        )
+          .filter(visible)
+          .map((node) => normalize(node.textContent || ""))
+          .filter((value, index, values) => value.length > 0 && values.indexOf(value) === index);
+
+        let responseText = responseCandidates[responseCandidates.length - 1] || null;
+        if (!responseText) {
+          const genericText = Array.from(document.querySelectorAll("p, div, span"))
+            .filter(visible)
+            .map((node) => normalize(node.textContent || ""))
+            .filter((value, index, values) => {
+              if (!value) {
+                return false;
+              }
+              if (value.includes("gemini is ai and can make mistakes.")) {
+                return false;
+              }
+              return values.indexOf(value) === index;
+            });
+          responseText = genericText[genericText.length - 1] || null;
+        }
+
+        if (
+          !hasStopControl &&
+          hasResponseFeedback &&
+          responseText &&
+          responseText !== normalizedPreviousResponseText
+        ) {
+          return {
+            status: "ready" as const,
+            responseText,
+          };
+        }
         return {
-          status: (hasResponseFeedback ? "ready" : "pending") as "ready" | "pending",
+          status: "pending" as const,
+          active: hasStopControl,
+          responseText,
+          fingerprint: JSON.stringify({
+            hasStopControl,
+            hasResponseFeedback,
+            responseText: responseText ?? "",
+          }),
         };
       },
-      { mode },
+      {
+        mode,
+        previousResponseText: mode === "text" ? (previousSnapshot?.responseText ?? "") : "",
+        previousImageCount: mode === "image" ? (previousSnapshot?.imageCount ?? 0) : 0,
+      },
     );
+}
 
-    if (state.status === "ready") {
-      await page.waitForTimeout(800);
-      return { status: "ready" };
-    }
+async function waitForGeminiResponse(
+  page: GooglePage,
+  mode: GeminiMode,
+  timeoutMs: number,
+  previousSnapshot?: {
+    responseText?: string | null;
+    imageCount?: number;
+  },
+): Promise<GeminiWaitResult> {
+  const startedAt = Date.now();
+  const hardDeadline = startedAt + Math.max(timeoutMs * 3, timeoutMs + 120_000);
+  let idleDeadline = startedAt + timeoutMs;
+  let previousFingerprint = "";
+
+  while (Date.now() < hardDeadline && Date.now() < idleDeadline) {
+    const state = await readGeminiResponseState(page, mode, previousSnapshot);
     if (state.status === "error") {
       return state;
     }
+    if (state.status === "ready") {
+      await page.waitForTimeout(800);
+      return state;
+    }
+    if (state.fingerprint && state.fingerprint !== previousFingerprint) {
+      previousFingerprint = state.fingerprint;
+      idleDeadline = Date.now() + timeoutMs;
+    }
+    if (state.active) {
+      idleDeadline = Date.now() + timeoutMs;
+    }
     await page.waitForTimeout(1_000);
   }
+
   throw new Error(`timeout waiting for Gemini ${mode} response`);
 }
 
@@ -955,9 +1090,17 @@ export function createAdapter(): SiteAdapter {
           typeof args.downloadImages === "boolean" ? args.downloadImages : mode === "image";
 
         await ensureGeminiPage(livePage);
+        const previousSnapshot = await readGeminiChatResult(livePage, prompt, mode).catch(() => ({
+          conversationUrl: livePage.url(),
+          responseText: null,
+          images: [],
+        }));
         await submitGeminiPrompt(livePage, prompt, mode);
         try {
-          const waitResult = await waitForGeminiResponse(livePage, mode, timeoutMs);
+          const waitResult = await waitForGeminiResponse(livePage, mode, timeoutMs, {
+            responseText: previousSnapshot.responseText,
+            imageCount: previousSnapshot.images.length,
+          });
           if (waitResult.status === "error") {
             return errorResult("UPSTREAM_CHANGED", "Gemini failed to complete the request", {
               mode,

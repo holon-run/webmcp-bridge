@@ -26,6 +26,12 @@ type Behavior = {
   confirmGrok: boolean;
   grokResponse?: string;
   grokRawResponse?: string;
+  grokStateSequence?: Array<{
+    hasStopControl?: boolean;
+    responseForPrompt?: string;
+    latestResponse?: string;
+    signature?: string;
+  }>;
   statusUrl?: string;
   articleEditUrl: string;
   articlePublicUrl: string;
@@ -130,6 +136,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       const command = arg as Record<string, unknown>;
+      if (typeof command.selector === "string" && typeof command.value === "string") {
+        return true;
+      }
       if (command.op === "detect_auth") {
         const nextDetectAuthError = pendingDetectAuthErrors.shift();
         if (nextDetectAuthError) {
@@ -216,14 +225,22 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (command.op === "grok_extract_state") {
+        const nextGrokState = behavior.grokStateSequence?.shift();
+        if (nextGrokState) {
+          return nextGrokState;
+        }
         return grokSubmitted && behavior.confirmGrok
           ? {
+              hasStopControl: false,
               responseForPrompt: behavior.grokResponse,
               latestResponse: behavior.grokResponse,
+              signature: behavior.grokResponse ?? "",
             }
           : {
+              hasStopControl: false,
               responseForPrompt: undefined,
               latestResponse: undefined,
+              signature: "idle",
             };
       }
 
@@ -470,6 +487,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       const command = arg as Record<string, unknown>;
+      if (typeof command.selector === "string" && typeof command.value === "string") {
+        return true;
+      }
       if (command.op === "detect_auth") {
         const nextDetectAuthError = pendingDetectAuthErrors.shift();
         if (nextDetectAuthError) {
@@ -540,14 +560,22 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (command.op === "grok_extract_state") {
+        const nextGrokState = behavior.grokStateSequence?.shift();
+        if (nextGrokState) {
+          return nextGrokState;
+        }
         return grokSubmitted && behavior.confirmGrok
           ? {
+              hasStopControl: false,
               responseForPrompt: behavior.grokResponse,
               latestResponse: behavior.grokResponse,
+              signature: behavior.grokResponse ?? "",
             }
           : {
+              hasStopControl: false,
               responseForPrompt: undefined,
               latestResponse: undefined,
+              signature: "idle",
             };
       }
 
@@ -1047,6 +1075,8 @@ describe("createXAdapter", () => {
     );
 
     expect(readPage.goto).toHaveBeenCalledWith("https://x.com/i/grok", expect.anything());
+    expect(readPage.goto).toHaveBeenCalledTimes(1);
+    expect(readPage.type).not.toHaveBeenCalled();
     expect(result).toEqual({
       ok: true,
       conversationId: "mock-conversation",
@@ -1190,6 +1220,46 @@ describe("createXAdapter", () => {
         code: "ACTION_UNCONFIRMED",
         message: "grok response was not confirmed",
       },
+    });
+  });
+
+  it("keeps waiting while grok is still active and confirms after the response settles", async () => {
+    const adapter = createXAdapter({ grokResponseTimeoutMs: 50 });
+    const { page, readPage } = createMockPage({
+      grokComposeResult: { ok: true },
+      confirmGrok: true,
+      grokResponse: "final settled answer",
+      grokStateSequence: [
+        {
+          hasStopControl: false,
+          latestResponse: "previous answer",
+          signature: "before-submit",
+        },
+        {
+          hasStopControl: true,
+          latestResponse: "previous answer",
+          signature: "thinking-1",
+        },
+        {
+          hasStopControl: false,
+          responseForPrompt: "final settled answer",
+          latestResponse: "final settled answer",
+          signature: "done-1",
+        },
+      ],
+      grokRawResponse: "",
+    });
+
+    const result = await adapter.callTool(
+      { name: "grok.chat", input: { prompt: "say hello", timeoutMs: 50 } },
+      { page: page as never },
+    );
+
+    expect(readPage.waitForTimeout).toHaveBeenCalled();
+    expect(result).toEqual({
+      ok: true,
+      response: "final settled answer",
+      url: "https://x.com/i/grok",
     });
   });
 
