@@ -1325,6 +1325,7 @@ describe("createXAdapter", () => {
           },
         },
       ],
+      articlePublicUrl: "https://x.com/jolestar/article/2034662806444966089",
       articleReadTitle: "Status-linked Article",
       articleReadText: "Full article body",
       articleReadCoverImageUrl: "https://pbs.twimg.com/media/status-article-cover.jpg",

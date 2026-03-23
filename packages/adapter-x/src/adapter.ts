@@ -129,6 +129,7 @@ const GROK_ARTIFACT_DIR_PREFIX = "webmcp-bridge-grok-";
 const TWEET_MEDIA_ARTIFACT_DIR_PREFIX = "webmcp-bridge-x-media-";
 const ARTICLE_INLINE_IMAGE_MARKER_PREFIX = "[[WEBMCP_INLINE_IMAGE_";
 const ALLOWED_TWEET_MEDIA_HOSTS = new Set(["pbs.twimg.com", "video.twimg.com"]);
+const ALLOWED_X_HOSTS = new Set(["x.com", "www.x.com", "twitter.com", "www.twitter.com"]);
 
 const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
   globalKey: "__WEBMCP_X_CAPTURE__",
@@ -1426,6 +1427,9 @@ function canonicalizeArticleUrl(input: string | undefined, fallbackId?: string):
   }
   try {
     const url = new URL(input);
+    if (!ALLOWED_X_HOSTS.has(url.hostname.toLowerCase())) {
+      return input;
+    }
     const segments = url.pathname.split("/").filter(Boolean);
     const articleIndex = segments.findIndex((segment) => segment === "article" || segment === "articles");
     if (articleIndex < 0) {
@@ -4089,10 +4093,41 @@ async function clearArticleBody(page: Page): Promise<boolean> {
 }
 
 function parseArticleIdFromUrl(url: string): string | undefined {
-  const match = url.match(
-    /\/compose\/articles\/edit\/(\d+)(?:[/?#]|$)|\/i\/article\/(\d+)(?:[/?#]|$)|\/i\/articles\/(\d+)(?:[/?#]|$)|\/article\/(\d+)(?:[/?#]|$)|\/articles\/(\d+)(?:[/?#]|$)/,
+  let parsed: URL;
+  try {
+    parsed = new URL(url, "https://x.com");
+  } catch {
+    return undefined;
+  }
+  if (!ALLOWED_X_HOSTS.has(parsed.hostname.toLowerCase())) {
+    return undefined;
+  }
+  const match = parsed.pathname.match(
+    /^\/(?:compose\/articles\/edit|i\/article|i\/articles|[^/]+\/article|articles)\/(\d+)(?:\/|$)/,
   );
-  return match?.[1] ?? match?.[2] ?? match?.[3] ?? match?.[4] ?? match?.[5];
+  return match?.[1];
+}
+
+async function waitForCapturedOperation(page: Page, op: string, timeoutMs = 10_000): Promise<void> {
+  await page.waitForFunction(
+    ({ targetOp }) => {
+      const globalAny = window as unknown as {
+        __WEBMCP_X_CAPTURE__?: {
+          entries?: Array<{
+            op?: string;
+            url?: string;
+            method?: string;
+          }>;
+        };
+      };
+      const entries = Array.isArray(globalAny.__WEBMCP_X_CAPTURE__?.entries)
+        ? globalAny.__WEBMCP_X_CAPTURE__!.entries!
+        : [];
+      return entries.some((entry) => entry && entry.op === targetOp && !!entry.url && !!entry.method);
+    },
+    { targetOp: op },
+    { timeout: timeoutMs },
+  ).catch(() => {});
 }
 
 function normalizeArticleUrl(url?: string, articleId?: string): string | undefined {
@@ -4212,7 +4247,7 @@ function parseArticleReadErrorCode(value: JsonValue): string | undefined {
 
 async function readArticleFromOwnedSlices(page: Page, articleId: string): Promise<JsonValue> {
   return await withEphemeralPage(page, "https://x.com/compose/articles", async (articlePage) => {
-    await articlePage.waitForTimeout(2_000);
+    await waitForCapturedOperation(articlePage, "ArticleEntitiesSlice", 12_000);
     const article = await articlePage.evaluate(async ({ op, articleId: targetArticleId }) => {
       if (op !== "article_collect_owned") {
         return undefined;
@@ -4498,7 +4533,7 @@ async function readArticleFromProfileArticles(
     return errorResult("VALIDATION_ERROR", "authorHandle must be a non-empty string");
   }
   return await withEphemeralPage(page, `https://x.com/${encodeURIComponent(normalizedHandle)}/articles`, async (articlePage) => {
-    await articlePage.waitForTimeout(2_000);
+    await waitForCapturedOperation(articlePage, "UserArticlesTweets", 15_000);
     const article = await articlePage.evaluate(async ({ op, articleId: targetArticleId }) => {
       if (op !== "article_collect_profile") {
         return undefined;
