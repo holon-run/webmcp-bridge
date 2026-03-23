@@ -13,8 +13,8 @@ type Behavior = {
   authState: "authenticated" | "auth_required" | "challenge_required";
   authSignals: string[];
   detectAuthErrors?: string[];
-  timelineItems: Array<{ id: string; text: string; url?: string; media?: Array<Record<string, unknown>> }>;
-  timelineDomBatches?: Array<Array<{ id: string; text: string; url?: string; media?: Array<Record<string, unknown>> }>>;
+  timelineItems: Array<{ id: string; text: string; url?: string; media?: Array<Record<string, unknown>>; article?: { id: string; url?: string } }>;
+  timelineDomBatches?: Array<Array<{ id: string; text: string; url?: string; media?: Array<Record<string, unknown>>; article?: { id: string; url?: string } }>>;
   networkNextCursor?: string;
   requireFallbackTemplate?: boolean;
   composeResult: { ok: boolean; dryRun?: boolean; reason?: string; submitVisible?: boolean };
@@ -33,6 +33,7 @@ type Behavior = {
   articleReadText: string;
   articleReadCoverImageUrl?: string;
   articleReadImages: Array<{ url: string; alt?: string }>;
+  articlePublicUnsupported: boolean;
   articleOpenOk: boolean;
   articlePasteOk: boolean;
   articleCoverTriggerOk: boolean;
@@ -85,6 +86,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     articleReadText: "Mock article body",
     articleReadCoverImageUrl: "https://pbs.twimg.com/media/mock-cover.jpg",
     articleReadImages: [{ url: "https://pbs.twimg.com/media/mock-inline.jpg", alt: "inline" }],
+    articlePublicUnsupported: false,
     articleOpenOk: true,
     articlePasteOk: true,
     articleCoverTriggerOk: true,
@@ -292,6 +294,17 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
 
       if (command.op === "article_collect_public") {
+        if (behavior.articlePublicUnsupported) {
+          return {
+            id: "2035000000000000000",
+            url: "https://x.com/i/article/2035000000000000000",
+            title: "X",
+            text: "",
+            coverImageUrl: undefined,
+            images: [],
+            unsupported: true,
+          };
+        }
         return {
           id: "2035000000000000000",
           url: behavior.articlePublicUrl,
@@ -301,6 +314,34 @@ function createMockPage(partial: Partial<Behavior> = {}) {
           images: behavior.articleReadImages,
           authorName: "Mock Author",
           authorHandle: "@mockauthor",
+        };
+      }
+
+      if (command.op === "article_collect_owned") {
+        return {
+          id: "2035000000000000000",
+          url: "https://x.com/i/article/2035000000000000000",
+          title: behavior.articleReadTitle,
+          text: behavior.articleReadText,
+          coverImageUrl: behavior.articleReadCoverImageUrl,
+          images: behavior.articleReadImages,
+          authorName: "Mock Author",
+          authorHandle: "@mockauthor",
+          source: "owner_slice",
+          published: true,
+        };
+      }
+
+      if (command.op === "article_collect_profile") {
+        return {
+          id: "2035000000000000000",
+          url: "https://x.com/i/article/2035000000000000000",
+          title: behavior.articleReadTitle,
+          text: behavior.articleReadText,
+          coverImageUrl: behavior.articleReadCoverImageUrl,
+          images: behavior.articleReadImages,
+          source: "profile_articles",
+          published: true,
         };
       }
 
@@ -1209,6 +1250,108 @@ describe("createXAdapter", () => {
     });
   });
 
+  it("falls back to owner article slices when public article route is unsupported", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      articlePublicUnsupported: true,
+      articleReadTitle: "Owned Published Article",
+      articleReadText: "Owned published article body",
+      articleReadCoverImageUrl: "https://pbs.twimg.com/media/owned-cover.jpg",
+      articleReadImages: [{ url: "https://pbs.twimg.com/media/owned-inline.jpg", alt: "owned-inline" }],
+    });
+
+    const result = await adapter.callTool(
+      { name: "article.get", input: { url: "https://x.com/i/article/2035000000000000000" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      article: {
+        id: "2035000000000000000",
+        url: "https://x.com/i/article/2035000000000000000",
+        title: "Owned Published Article",
+        text: "Owned published article body",
+        coverImageUrl: "https://pbs.twimg.com/media/owned-cover.jpg",
+        images: [{ url: "https://pbs.twimg.com/media/owned-inline.jpg", alt: "owned-inline" }],
+        authorName: "Mock Author",
+        authorHandle: "@mockauthor",
+        source: "owner_slice",
+        published: true,
+      },
+    });
+  });
+
+  it("falls back to profile articles when authorHandle is provided", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      articlePublicUnsupported: true,
+      articleReadTitle: "Profile Article",
+      articleReadText: "Profile article body",
+      articleReadCoverImageUrl: "https://pbs.twimg.com/media/profile-cover.jpg",
+      articleReadImages: [{ url: "https://pbs.twimg.com/media/profile-inline.jpg", alt: "profile-inline" }],
+    });
+
+    const result = await adapter.callTool(
+      { name: "article.get", input: { url: "https://x.com/i/article/2035000000000000000", authorHandle: "@mockauthor" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      article: {
+        id: "2035000000000000000",
+        url: "https://x.com/i/article/2035000000000000000",
+        title: "Profile Article",
+        text: "Profile article body",
+        coverImageUrl: "https://pbs.twimg.com/media/profile-cover.jpg",
+        images: [{ url: "https://pbs.twimg.com/media/profile-inline.jpg", alt: "profile-inline" }],
+        authorHandle: "@mockauthor",
+        source: "profile_articles",
+        published: true,
+      },
+    });
+  });
+
+  it("resolves status URLs to article reads when tweet carries an article reference", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "2034662806444966089",
+          text: "https://t.co/Oz4zyBO8c6",
+          url: "https://x.com/jolestar/status/2034662806444966089",
+          article: {
+            id: "2034662806444966089",
+            url: "https://x.com/jolestar/article/2034662806444966089",
+          },
+        },
+      ],
+      articleReadTitle: "Status-linked Article",
+      articleReadText: "Full article body",
+      articleReadCoverImageUrl: "https://pbs.twimg.com/media/status-article-cover.jpg",
+      articleReadImages: [{ url: "https://pbs.twimg.com/media/status-inline.jpg", alt: "status-inline" }],
+    });
+
+    const result = await adapter.callTool(
+      { name: "article.get", input: { url: "https://x.com/jolestar/status/2034662806444966089" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      article: {
+        id: "2034662806444966089",
+        url: "https://x.com/jolestar/article/2034662806444966089",
+        title: "Status-linked Article",
+        text: "Full article body",
+        coverImageUrl: "https://pbs.twimg.com/media/status-article-cover.jpg",
+        images: [{ url: "https://pbs.twimg.com/media/status-inline.jpg", alt: "status-inline" }],
+        authorName: "Mock Author",
+        authorHandle: "@mockauthor",
+        source: "public",
+        published: true,
+      },
+    });
+  });
+
   it("reads one cached article draft by id", async () => {
     const adapter = createXAdapter();
     const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-read-draft-"));
@@ -1491,6 +1634,40 @@ describe("createXAdapter", () => {
             previewUrl: "https://pbs.twimg.com/ext_tw_video_thumb/test.jpg",
           },
         ],
+      },
+    });
+  });
+
+  it("returns article reference metadata from tweet.get", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      timelineItems: [
+        {
+          id: "2034662806444966089",
+          text: "https://t.co/Oz4zyBO8c6",
+          url: "https://x.com/jolestar/status/2034662806444966089",
+          article: {
+            id: "2034662806444966089",
+            url: "https://x.com/jolestar/article/2034662806444966089",
+          },
+        },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "tweet.get", input: { id: "2034662806444966089" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      tweet: {
+        id: "2034662806444966089",
+        text: "https://t.co/Oz4zyBO8c6",
+        url: "https://x.com/jolestar/status/2034662806444966089",
+        article: {
+          id: "2034662806444966089",
+          url: "https://x.com/jolestar/article/2034662806444966089",
+        },
       },
     });
   });
