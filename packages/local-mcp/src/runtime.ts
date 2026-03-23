@@ -297,7 +297,7 @@ export function selectPreferredPage<T extends PageLike>(
   return openPages[0];
 }
 
-async function detectExternalPresentationMode(
+export async function detectExternalPresentationMode(
   context: BrowserContext,
   page: Page,
   fallbackMode: BridgePresentationMode,
@@ -736,7 +736,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     const openWindow = async (): Promise<"focused" | "opened"> => {
       if (currentPresentationMode === "headless") {
         throw new Error(
-          "UNSUPPORTED_IN_HEADLESS_SESSION: bridge.open requires a headed local-mcp session. Start the bridge with --no-headless.",
+          "UNSUPPORTED_IN_HEADLESS_SESSION: bridge.open requires a headed browser session. For managed sessions, use bridge.session.mode.set({ mode: \"headed\" }) or start the bridge with --no-headless. For external attach sessions, connect to a headed external browser instead of a headless one.",
         );
       }
       if (!currentPage || currentPage.isClosed()) {
