@@ -45,19 +45,24 @@ If the current session is managed, switch it explicitly:
 
 ## UI window flashes open and closes immediately
 
-With current `uxc` and `@webmcp-bridge/local-mcp` releases, `bridge.open` should keep the headed session alive after the command returns.
-
 If the window still flashes open and disappears, verify that:
 
-- `uxc` is updated to a release that includes daemon detach and per-session idle TTL support
+- `uxc` is updated to a recent release
 - the `<site>-webmcp-cli` link was recreated after updating `uxc`
 - the environment can launch Playwright browsers for the current `HOME`
 - `bridge.session.status` reports `presentationMode = headed`
+- the current daemon idle TTL policy is not immediately reaping the process after the command returns
 
 Then rerun:
 
 ```bash
 <site>-webmcp-cli bridge.open
+```
+
+If your environment needs a more aggressive keepalive policy for interactive sessions, recreate the link with an explicit daemon TTL override:
+
+```bash
+WEBMCP_DAEMON_IDLE_TTL=0 skills/webmcp-bridge/scripts/ensure-links.sh --name <site> ...
 ```
 
 ## The user closed the headed browser window manually

@@ -33,6 +33,7 @@ profile=""
 browser=""
 link_dir=""
 local_mcp_command="${WEBMCP_LOCAL_MCP_COMMAND:-npx -y @webmcp-bridge/local-mcp}"
+daemon_idle_ttl="${WEBMCP_DAEMON_IDLE_TTL:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -122,7 +123,13 @@ link_args=("${launcher_parts[@]}" "${source_args[@]}" --headless --no-auto-login
 
 link_value="$(shell_join "${link_args[@]}")"
 
-"${link_command[@]}" "$link_name" "$link_value" --daemon-exclusive "$profile" --daemon-idle-ttl 0 --force >/dev/null
+link_install_args=("$link_name" "$link_value" --daemon-exclusive "$profile")
+if [[ -n "$daemon_idle_ttl" ]]; then
+  link_install_args+=(--daemon-idle-ttl "$daemon_idle_ttl")
+fi
+link_install_args+=(--force)
+
+"${link_command[@]}" "${link_install_args[@]}" >/dev/null
 
 printf 'linked %s -> %s\n' "$link_name" "$link_value"
 printf 'profile %s\n' "$profile"
