@@ -35,7 +35,7 @@ describe("parseCliArgs", () => {
       site: "x",
       url: "https://example.com",
       browser: "firefox",
-      headless: true,
+      preferredPresentationMode: "headless",
       autoLoginFallback: true,
       serviceVersion: "0.2.0",
     });
@@ -82,7 +82,7 @@ describe("parseCliArgs", () => {
 
   it("allows disabling auto login fallback", () => {
     const parsed = parseCliArgs(["--site", "x", "--headless", "--no-auto-login-fallback"]);
-    expect(parsed.headless).toBe(true);
+    expect(parsed.preferredPresentationMode).toBe("headless");
     expect(parsed.autoLoginFallback).toBe(false);
   });
 

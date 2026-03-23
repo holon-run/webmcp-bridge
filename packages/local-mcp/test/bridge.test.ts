@@ -13,7 +13,7 @@ type MockRuntimeHandle = {
   targetUrl: string;
   controlMode: "launch" | "attach";
   mode: "native" | "polyfill" | "adapter-shim";
-  headless: boolean;
+  presentationMode: "headed" | "headless";
   gateway: {
     listTools: ReturnType<typeof vi.fn>;
     callTool: ReturnType<typeof vi.fn>;
@@ -70,7 +70,7 @@ function createRuntimeHandle(
     targetUrl: "http://127.0.0.1:4173",
     controlMode: "launch",
     mode: "native",
-    headless: false,
+    presentationMode: "headed",
     gateway,
     openWindow: vi.fn(async () => "focused" as const),
     ownerSessionEnded: createOwnerSessionEndedPromise(),
@@ -171,13 +171,15 @@ vi.mock("../src/session.js", async () => {
         return mockSessionMetadata;
       }
       return {
-        version: 1,
+        version: 2,
         site: fallback.site,
         profilePath: "/tmp/mock-profile",
         targetUrl: fallback.targetUrl,
         authPolicyMode: fallback.authPolicy.mode,
         ...(fallback.authPolicy.authProbeTool ? { authProbeTool: fallback.authPolicy.authProbeTool } : {}),
         allowAnonymousTools: fallback.authPolicy.allowAnonymousTools,
+        presentationMode: "headed",
+        preferredPresentationMode: "headed",
         sessionState: "profile_missing",
         authState: "unknown",
         controlMode: "none",
@@ -189,13 +191,15 @@ vi.mock("../src/session.js", async () => {
       const current =
         mockSessionMetadata ??
         ({
-          version: 1,
+          version: 2,
           site: fallback.site,
           profilePath: "/tmp/mock-profile",
           targetUrl: fallback.targetUrl,
           authPolicyMode: fallback.authPolicy.mode,
           ...(fallback.authPolicy.authProbeTool ? { authProbeTool: fallback.authPolicy.authProbeTool } : {}),
           allowAnonymousTools: fallback.authPolicy.allowAnonymousTools,
+          presentationMode: "headed",
+          preferredPresentationMode: "headed",
           sessionState: "profile_missing",
           authState: "unknown",
           controlMode: "none",
@@ -356,7 +360,9 @@ describe("startLocalMcpBridge", () => {
     await vi.waitFor(() => {
       expect(serverHandle.close).toHaveBeenCalledOnce();
     });
-    await expect(capturedServerOptions?.bridgeControl.restartSession({})).rejects.toThrow(
+    await expect(
+      capturedServerOptions?.bridgeControl.setPresentationMode({ presentationMode: "headed" }),
+    ).rejects.toThrow(
       "SESSION_NOT_AVAILABLE: local-mcp bridge session is closed",
     );
   });
@@ -377,13 +383,15 @@ describe("startLocalMcpBridge", () => {
 
   it("keeps auth-sensitive bridges in control-only mode when a bootstrap browser is already running", async () => {
     mockSessionMetadata = {
-      version: 1,
+      version: 2,
       site: "x",
       profilePath: "/tmp/mock-profile",
       targetUrl: "https://x.com/home",
       authPolicyMode: "bootstrap_then_attach",
       authProbeTool: "auth.get",
       allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
       sessionState: "auth_required",
       authState: "auth_required",
       controlMode: "bootstrap",
@@ -415,13 +423,15 @@ describe("startLocalMcpBridge", () => {
 
   it("reuses the running bootstrap browser for bridge.window.open", async () => {
     mockSessionMetadata = {
-      version: 1,
+      version: 2,
       site: "x",
       profilePath: "/tmp/mock-profile",
       targetUrl: "https://x.com/home",
       authPolicyMode: "bootstrap_then_attach",
       authProbeTool: "auth.get",
       allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
       sessionState: "auth_required",
       authState: "auth_required",
       controlMode: "bootstrap",
@@ -447,13 +457,15 @@ describe("startLocalMcpBridge", () => {
 
   it("auto-closes the tracked bootstrap browser before launching managed attach", async () => {
     mockSessionMetadata = {
-      version: 1,
+      version: 2,
       site: "x",
       profilePath: "/tmp/mock-profile",
       targetUrl: "https://x.com/home",
       authPolicyMode: "bootstrap_then_attach",
       authProbeTool: "auth.get",
       allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
       sessionState: "authenticated",
       authState: "authenticated",
       controlMode: "bootstrap",
@@ -499,13 +511,15 @@ describe("startLocalMcpBridge", () => {
 
   it("fails attach when the bootstrap browser does not exit", async () => {
     mockSessionMetadata = {
-      version: 1,
+      version: 2,
       site: "x",
       profilePath: "/tmp/mock-profile",
       targetUrl: "https://x.com/home",
       authPolicyMode: "bootstrap_then_attach",
       authProbeTool: "auth.get",
       allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
       sessionState: "authenticated",
       authState: "authenticated",
       controlMode: "bootstrap",
@@ -533,13 +547,15 @@ describe("startLocalMcpBridge", () => {
 
   it("discovers a live bootstrap browser by profile when the stored pid is stale", async () => {
     mockSessionMetadata = {
-      version: 1,
+      version: 2,
       site: "x",
       profilePath: "/tmp/mock-profile",
       targetUrl: "https://x.com/home",
       authPolicyMode: "bootstrap_then_attach",
       authProbeTool: "auth.get",
       allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
       sessionState: "auth_required",
       authState: "auth_required",
       controlMode: "bootstrap",

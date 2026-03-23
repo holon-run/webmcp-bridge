@@ -3,8 +3,9 @@
  * It depends on pure runtime helpers so adapter default URL and CLI override behavior remain deterministic.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  detectExternalPresentationMode,
   isRecoverableGatewayError,
   isUrlAllowed,
   mapNavigationError,
@@ -110,15 +111,15 @@ describe("resolveRecoveryNavigationUrl", () => {
 
 describe("shouldEndOwnerSessionAfterPageClose", () => {
   it("ends a headed owner session after the last page closes", () => {
-    expect(shouldEndOwnerSessionAfterPageClose(false, 0)).toBe(true);
+    expect(shouldEndOwnerSessionAfterPageClose("headed", 0)).toBe(true);
   });
 
   it("keeps a headed owner session alive while another page is open", () => {
-    expect(shouldEndOwnerSessionAfterPageClose(false, 1)).toBe(false);
+    expect(shouldEndOwnerSessionAfterPageClose("headed", 1)).toBe(false);
   });
 
   it("does not end a headless session from page-close semantics", () => {
-    expect(shouldEndOwnerSessionAfterPageClose(true, 0)).toBe(false);
+    expect(shouldEndOwnerSessionAfterPageClose("headless", 0)).toBe(false);
   });
 });
 
@@ -131,6 +132,61 @@ describe("shouldDeferBridgeForAuthState", () => {
   it("allows bridge initialization after authentication is complete", () => {
     expect(shouldDeferBridgeForAuthState("authenticated")).toBe(false);
     expect(shouldDeferBridgeForAuthState(undefined)).toBe(false);
+  });
+});
+
+describe("detectExternalPresentationMode", () => {
+  it("reports headed when the browser exposes a window target", async () => {
+    const send = vi.fn(async (method: string) => {
+      if (method === "Browser.getWindowForTarget") {
+        return { windowId: 1 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      detectExternalPresentationMode(
+        {
+          newCDPSession: async () => ({
+            send,
+          }),
+        } as never,
+        {} as never,
+        "headless",
+      ),
+    ).resolves.toBe("headed");
+  });
+
+  it("reports headless when window probing fails but Browser.getVersion exposes HeadlessChrome", async () => {
+    const send = vi.fn(async (method: string) => {
+      if (method === "Browser.getWindowForTarget") {
+        throw new Error("window not available");
+      }
+      if (method === "Browser.getVersion") {
+        return {
+          product: "HeadlessChrome/123.0.0.0",
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      detectExternalPresentationMode(
+        {
+          newCDPSession: async () => ({
+            send,
+          }),
+        } as never,
+        {} as never,
+        "headed",
+      ),
+    ).resolves.toBe("headless");
+  });
+
+  it("falls back to the requested mode when CDP probing is unavailable", async () => {
+    await expect(
+      detectExternalPresentationMode({} as never, {} as never, "headless"),
+    ).resolves.toBe("headless");
   });
 });
 

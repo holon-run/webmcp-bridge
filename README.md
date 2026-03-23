@@ -110,6 +110,8 @@ uxc link board-webmcp-ui \
 
 The `cli` and `ui` links above are intended to reuse the same site profile through the same daemon/session, not through two independent browser processes at the same time. If a target site is sensitive to headed/headless switching or browser fingerprint changes, keep separate profiles for the two modes.
 
+`--headless` and `--no-headless` set the preferred runtime presentation mode for bridge-managed sessions. The actual runtime mode is reported by `bridge.session.status` and may differ when local-mcp reattaches to an existing session.
+
 Then:
 
 ```bash

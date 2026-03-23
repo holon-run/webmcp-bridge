@@ -69,6 +69,8 @@ board-webmcp-ui bridge.open
 
 If the user closes that window manually, the headed owner session ends. Run `board-webmcp-ui bridge.open` again to start a new headed session on the same profile.
 
+`--headless` here is a preferred runtime mode for the managed bridge session; use `bridge.session.status` to inspect the actual active presentation mode.
+
 ## Collaborate With AI
 
 This demo is meant to be edited by a human in the browser while an AI edits the same board through `local-mcp`.
@@ -110,6 +112,7 @@ Typical flow in Codex / Claude Code:
 Useful collaboration tools:
 
 - `bridge.open` / `bridge.close`
+- `bridge.session.mode.get` / `bridge.session.mode.set`
 - `diagram.get` / `diagram.loadDemo` / `diagram.setTitle`
 - `selection.get` / `selection.remove`
 - `nodes.*`

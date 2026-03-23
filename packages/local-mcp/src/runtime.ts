@@ -26,7 +26,7 @@ import {
   type Page,
 } from "playwright";
 import type { LocalMcpGateway } from "./server.js";
-import { resolveAuthPolicy } from "./session.js";
+import { resolveAuthPolicy, type BridgePresentationMode } from "./session.js";
 import type { SiteDefinition } from "./sites.js";
 
 const NAVIGATION_TIMEOUT_MS = 5_000;
@@ -62,7 +62,7 @@ export type LocalMcpRuntimeOptions = {
   browserChannel?: BrowserChannel;
   browserUrl?: string;
   chromiumLoginWorkaround?: boolean;
-  headless?: boolean;
+  preferredPresentationMode?: BridgePresentationMode;
   userDataDir?: string;
   preferNative?: boolean;
 };
@@ -73,7 +73,7 @@ export type LocalMcpRuntime = {
   targetUrl: string;
   controlMode: "launch" | "attach";
   mode: "native" | "polyfill" | "adapter-shim";
-  headless: boolean;
+  presentationMode: BridgePresentationMode;
   page: Page;
   gateway: LocalMcpGateway;
   ownerSessionEnded: Promise<void>;
@@ -92,7 +92,7 @@ function isChromiumAutomationWorkaroundEnabled(enabledOverride?: boolean): boole
 }
 
 function createChromiumLaunchOptions(
-  headless: boolean,
+  presentationMode: BridgePresentationMode,
   browserChannel: BrowserChannel | undefined,
   chromiumLoginWorkaround: boolean | undefined,
 ): {
@@ -109,7 +109,7 @@ function createChromiumLaunchOptions(
     channel?: string;
     ignoreDefaultArgs?: string[];
   } = {
-    headless,
+    headless: presentationMode === "headless",
     viewport: null,
   };
   if (isChromiumAutomationWorkaroundEnabled(chromiumLoginWorkaround)) {
@@ -250,8 +250,11 @@ export function shouldDeferBridgeForAuthState(state: AuthState | undefined): boo
   return state === "auth_required" || state === "challenge_required";
 }
 
-export function shouldEndOwnerSessionAfterPageClose(headless: boolean, openPageCount: number): boolean {
-  return !headless && openPageCount === 0;
+export function shouldEndOwnerSessionAfterPageClose(
+  presentationMode: BridgePresentationMode,
+  openPageCount: number,
+): boolean {
+  return presentationMode === "headed" && openPageCount === 0;
 }
 
 type PageLike = Pick<Page, "url" | "isClosed">;
@@ -292,6 +295,48 @@ export function selectPreferredPage<T extends PageLike>(
     return allowedHostPage;
   }
   return openPages[0];
+}
+
+export async function detectExternalPresentationMode(
+  context: BrowserContext,
+  page: Page,
+  fallbackMode: BridgePresentationMode,
+): Promise<BridgePresentationMode> {
+  const chromiumContext = context as BrowserContext & {
+    newCDPSession?: (
+      page: Page,
+    ) => Promise<{
+      send: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+      detach?: () => Promise<void>;
+    }>;
+  };
+  if (typeof chromiumContext.newCDPSession !== "function") {
+    return fallbackMode;
+  }
+
+  const session = await chromiumContext.newCDPSession(page);
+  try {
+    await session.send("Browser.getWindowForTarget");
+    return "headed";
+  } catch {
+    try {
+      const version = (await session.send("Browser.getVersion")) as {
+        product?: unknown;
+        userAgent?: unknown;
+      };
+      const markers = [version.product, version.userAgent].filter((value) => typeof value === "string") as string[];
+      if (markers.some((value) => value.includes("HeadlessChrome"))) {
+        return "headless";
+      }
+    } catch {
+      // Fall back to the requested presentation mode when browser-level detection is unavailable.
+    }
+    return fallbackMode;
+  } finally {
+    await session.detach?.().catch(() => {
+      // Best-effort cleanup for capability probing.
+    });
+  }
 }
 
 function resolveBrowserType(browser: BrowserEngine): BrowserType {
@@ -354,7 +399,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   const browserEngine = options.browser ?? "chromium";
   const browserChannel = options.browserChannel;
   const browserUrl = options.browserUrl;
-  const headless = options.headless ?? false;
+  const preferredPresentationMode = options.preferredPresentationMode ?? "headed";
   if (browserChannel && browserEngine !== "chromium") {
     throw new Error(`CONFIG_ERROR: --browser-channel requires --browser chromium (received ${browserEngine})`);
   }
@@ -391,6 +436,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   let currentPage: Page | undefined;
   let currentGatewaySession: WebMcpPageGateway | undefined;
   let currentMode: "native" | "polyfill" | "adapter-shim" = "native";
+  let currentPresentationMode: BridgePresentationMode = preferredPresentationMode;
   let gatewayStale = false;
   let runtimeClosing = false;
   let pageLifecycleCleanup: (() => void) | undefined;
@@ -527,7 +573,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
           return;
         }
         const openPageCount = context?.pages().filter((entry) => !entry.isClosed()).length ?? 0;
-        if (shouldEndOwnerSessionAfterPageClose(headless, openPageCount)) {
+        if (shouldEndOwnerSessionAfterPageClose(currentPresentationMode, openPageCount)) {
           signalOwnerSessionEnded();
         }
       });
@@ -651,9 +697,13 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     } else {
       const launchOptions =
         browserEngine === "chromium"
-          ? createChromiumLaunchOptions(headless, browserChannel, options.chromiumLoginWorkaround)
+          ? createChromiumLaunchOptions(
+              preferredPresentationMode,
+              browserChannel,
+              options.chromiumLoginWorkaround,
+            )
           : ({
-              headless,
+              headless: preferredPresentationMode === "headless",
               viewport: null,
             } as {
               headless: boolean;
@@ -663,6 +713,15 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       context = await launchPersistentContextWithRetry(browserType, userDataDir as string, launchOptions);
     }
     await initializePageSession();
+    if (browserUrl && context && currentPage) {
+      currentPresentationMode = await detectExternalPresentationMode(
+        context,
+        currentPage,
+        preferredPresentationMode,
+      );
+    } else {
+      currentPresentationMode = preferredPresentationMode;
+    }
 
     let closed = false;
     const close = async (): Promise<void> => {
@@ -675,9 +734,9 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     };
 
     const openWindow = async (): Promise<"focused" | "opened"> => {
-      if (headless) {
+      if (currentPresentationMode === "headless") {
         throw new Error(
-          "UNSUPPORTED_IN_HEADLESS_SESSION: bridge.open requires a headed local-mcp session. Start the bridge with --no-headless.",
+          "UNSUPPORTED_IN_HEADLESS_SESSION: bridge.open requires a headed browser session. For managed sessions, use bridge.session.mode.set({ mode: \"headed\" }) or start the bridge with --no-headless. For external attach sessions, connect to a headed external browser instead of a headless one.",
         );
       }
       if (!currentPage || currentPage.isClosed()) {
@@ -752,7 +811,9 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       get mode() {
         return currentMode;
       },
-      headless,
+      get presentationMode() {
+        return currentPresentationMode;
+      },
       get page() {
         return currentPage as Page;
       },

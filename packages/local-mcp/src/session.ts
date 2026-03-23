@@ -12,6 +12,7 @@ import type { BrowserChannel, BrowserEngine } from "./runtime.js";
 
 export type BridgeAuthState = "unknown" | "authenticated" | "auth_required" | "challenge_required";
 export type BridgeSessionOwnership = "none" | "managed" | "external";
+export type BridgePresentationMode = "headed" | "headless";
 export type BridgeSessionState =
   | "profile_missing"
   | "profile_present_unverified"
@@ -30,13 +31,15 @@ export type ResolvedAuthPolicy = {
 };
 
 export type SessionMetadata = {
-  version: 1;
+  version: 2;
   site: string;
   profilePath: string;
   targetUrl: string;
   authPolicyMode: AuthPolicyMode;
   authProbeTool?: string;
   allowAnonymousTools: boolean;
+  presentationMode: BridgePresentationMode;
+  preferredPresentationMode: BridgePresentationMode;
   sessionState: BridgeSessionState;
   authState: BridgeAuthState;
   controlMode: BridgeControlMode;
@@ -59,9 +62,11 @@ export type BootstrapBrowserOptions = {
   browserChannel?: BrowserChannel;
 };
 
-export type ManagedAttachBrowserOptions = BootstrapBrowserOptions;
+export type ManagedAttachBrowserOptions = BootstrapBrowserOptions & {
+  presentationMode: BridgePresentationMode;
+};
 
-const SESSION_METADATA_VERSION = 1;
+const SESSION_METADATA_VERSION = 2;
 const SESSION_METADATA_PATH = ".webmcp-bridge/session.json";
 const CDP_READY_TIMEOUT_MS = 10_000;
 const CDP_READY_POLL_INTERVAL_MS = 250;
@@ -118,6 +123,14 @@ function isBridgeSessionOwnership(value: unknown): value is BridgeSessionOwnersh
   return value === "none" || value === "managed" || value === "external";
 }
 
+function isBridgePresentationMode(value: unknown): value is BridgePresentationMode {
+  return value === "headed" || value === "headless";
+}
+
+function toPresentationMode(headless: boolean): BridgePresentationMode {
+  return headless ? "headless" : "headed";
+}
+
 function normalizeMetadata(
   value: unknown,
   fallback: {
@@ -136,6 +149,8 @@ function normalizeMetadata(
     authPolicyMode: fallback.authPolicy.mode,
     ...(fallback.authPolicy.authProbeTool !== undefined ? { authProbeTool: fallback.authPolicy.authProbeTool } : {}),
     allowAnonymousTools: fallback.authPolicy.allowAnonymousTools,
+    presentationMode: "headed",
+    preferredPresentationMode: "headed",
     sessionState: fallback.profileExists ? "profile_present_unverified" : "profile_missing",
     authState: "unknown",
     controlMode: "none",
@@ -165,6 +180,16 @@ function normalizeMetadata(
   if (typeof value.allowAnonymousTools === "boolean") {
     metadata.allowAnonymousTools = value.allowAnonymousTools;
   }
+  if (isBridgePresentationMode(value.presentationMode)) {
+    metadata.presentationMode = value.presentationMode;
+  } else if (typeof value.headless === "boolean") {
+    metadata.presentationMode = toPresentationMode(value.headless);
+  }
+  if (isBridgePresentationMode(value.preferredPresentationMode)) {
+    metadata.preferredPresentationMode = value.preferredPresentationMode;
+  } else if (typeof value.headless === "boolean") {
+    metadata.preferredPresentationMode = toPresentationMode(value.headless);
+  }
   if (isBridgeSessionState(value.sessionState)) {
     metadata.sessionState = value.sessionState;
   }
@@ -188,6 +213,9 @@ function normalizeMetadata(
   }
   if (typeof value.updatedAt === "string" && value.updatedAt.trim()) {
     metadata.updatedAt = value.updatedAt;
+  }
+  if (metadata.controlMode === "bootstrap") {
+    metadata.presentationMode = "headed";
   }
   return metadata;
 }
@@ -586,6 +614,7 @@ export async function launchManagedAttachBrowser(
     "--no-first-run",
     "--no-default-browser-check",
     `--remote-debugging-port=${port}`,
+    ...(options.presentationMode === "headless" ? ["--headless=new"] : []),
     "--new-window",
     options.targetUrl,
   ]);

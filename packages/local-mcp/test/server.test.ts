@@ -77,7 +77,8 @@ describe("createLocalMcpStdioServer", () => {
       sessionState: "runtime_active" as const,
       ownership: "managed" as const,
       mode: "native" as const,
-      headless: false,
+      presentationMode: "headed" as const,
+      preferredPresentationMode: "headed" as const,
     })),
     openWindow: vi.fn<() => Promise<"focused" | "opened">>(async () => "focused" as const),
     bootstrapSession: vi.fn(async () => ({
@@ -89,7 +90,8 @@ describe("createLocalMcpStdioServer", () => {
       sessionState: "bootstrap_active" as const,
       ownership: "external" as const,
       mode: "control-only" as const,
-      headless: false,
+      presentationMode: "headed" as const,
+      preferredPresentationMode: "headed" as const,
       profilePath: "/tmp/board-profile",
     })),
     attachSession: vi.fn(async () => ({
@@ -102,9 +104,11 @@ describe("createLocalMcpStdioServer", () => {
       sessionState: "runtime_active" as const,
       ownership: "external" as const,
       mode: "native" as const,
-      headless: false,
+      presentationMode: "headed" as const,
+      preferredPresentationMode: "headed" as const,
     })),
-    restartSession: vi.fn(async () => ({
+    getPresentationMode: vi.fn(() => "headed" as const),
+    setPresentationMode: vi.fn(async () => ({
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
       controlMode: "launch" as const,
@@ -113,7 +117,8 @@ describe("createLocalMcpStdioServer", () => {
       sessionState: "runtime_active" as const,
       ownership: "managed" as const,
       mode: "native" as const,
-      headless: true,
+      presentationMode: "headless" as const,
+      preferredPresentationMode: "headless" as const,
     })),
     resetProfile: vi.fn(async () => ({
       site: "board",
@@ -124,7 +129,8 @@ describe("createLocalMcpStdioServer", () => {
       sessionState: "bootstrap_active" as const,
       ownership: "external" as const,
       mode: "control-only" as const,
-      headless: false,
+      presentationMode: "headed" as const,
+      preferredPresentationMode: "headed" as const,
       profilePath: "/tmp/board-profile",
       lastBackupPath: "/tmp/board-profile-backup",
     })),
@@ -145,7 +151,8 @@ describe("createLocalMcpStdioServer", () => {
     bridgeControl.openWindow.mockClear();
     bridgeControl.bootstrapSession.mockClear();
     bridgeControl.attachSession.mockClear();
-    bridgeControl.restartSession.mockClear();
+    bridgeControl.getPresentationMode.mockClear();
+    bridgeControl.setPresentationMode.mockClear();
     bridgeControl.resetProfile.mockClear();
     bridgeControl.closeBridge.mockClear();
 
@@ -243,7 +250,8 @@ describe("createLocalMcpStdioServer", () => {
         { name: "bridge.session.status" },
         { name: "bridge.session.bootstrap" },
         { name: "bridge.session.attach" },
-        { name: "bridge.session.restart" },
+        { name: "bridge.session.mode.get" },
+        { name: "bridge.session.mode.set" },
         { name: "bridge.session.stop" },
         { name: "bridge.session.reset_profile" },
         { name: "bridge.open" },
@@ -273,7 +281,8 @@ describe("createLocalMcpStdioServer", () => {
         targetUrl: "http://127.0.0.1:4173",
         controlMode: "launch",
         mode: "native",
-        headless: false,
+        presentationMode: "headed",
+        preferredPresentationMode: "headed",
         windowState: "focused",
       },
     });
@@ -299,7 +308,8 @@ describe("createLocalMcpStdioServer", () => {
         targetUrl: "http://127.0.0.1:4173",
         controlMode: "launch",
         mode: "native",
-        headless: false,
+        presentationMode: "headed",
+        preferredPresentationMode: "headed",
         windowState: "focused",
       },
     });
@@ -348,7 +358,8 @@ describe("createLocalMcpStdioServer", () => {
           targetUrl: "http://127.0.0.1:4173",
           controlMode: "launch",
           mode: "native",
-          headless: false,
+          presentationMode: "headed",
+          preferredPresentationMode: "headed",
         },
       },
     });
@@ -457,30 +468,53 @@ describe("createLocalMcpStdioServer", () => {
     });
   });
 
-  it("handles bridge.session.restart locally", async () => {
+  it("returns bridge.session.mode.get locally", async () => {
     const response = await request({
       jsonrpc: "2.0",
       id: "2cf",
       method: "tools/call",
       params: {
-        name: "bridge.session.restart",
+        name: "bridge.session.mode.get",
+        arguments: {},
+      },
+    });
+
+    expect(bridgeControl.getPresentationMode).toHaveBeenCalledOnce();
+    expect(callTool).not.toHaveBeenCalled();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        presentationMode: "headed",
+      },
+    });
+  });
+
+  it("handles bridge.session.mode.set locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2cf-set",
+      method: "tools/call",
+      params: {
+        name: "bridge.session.mode.set",
         arguments: {
-          headless: true,
+          mode: "headless",
         },
       },
     });
 
-    expect(bridgeControl.restartSession).toHaveBeenCalledWith({
-      headless: true,
+    expect(bridgeControl.setPresentationMode).toHaveBeenCalledWith({
+      presentationMode: "headless",
     });
     expect(callTool).not.toHaveBeenCalled();
     expect("result" in response ? response.result : undefined).toMatchObject({
       structuredContent: {
         ok: true,
-        restarted: true,
+        updated: true,
+        presentationMode: "headless",
         session: {
           controlMode: "launch",
-          headless: true,
+          presentationMode: "headless",
+          preferredPresentationMode: "headless",
         },
       },
     });
@@ -510,15 +544,17 @@ describe("createLocalMcpStdioServer", () => {
   });
 
   it("maps non-prefixed bridge control errors to a stable default code", async () => {
-    bridgeControl.restartSession.mockRejectedValueOnce(new Error("plain restart failure"));
+    bridgeControl.setPresentationMode.mockRejectedValueOnce(new Error("plain restart failure"));
 
     const response = await request({
       jsonrpc: "2.0",
       id: "2cg",
       method: "tools/call",
       params: {
-        name: "bridge.session.restart",
-        arguments: {},
+        name: "bridge.session.mode.set",
+        arguments: {
+          mode: "headless",
+        },
       },
     });
 
