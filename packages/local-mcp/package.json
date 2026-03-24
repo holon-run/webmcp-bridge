@@ -16,7 +16,8 @@
   },
   "publishConfig": {
     "access": "public",
-    "tag": "beta"
+    "tag": "beta",
+    "provenance": true
   },
   "files": [
     "dist"

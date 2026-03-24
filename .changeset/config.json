@@ -7,7 +7,9 @@
       "@webmcp-bridge/core",
       "@webmcp-bridge/playwright",
       "@webmcp-bridge/local-mcp",
+      "@webmcp-bridge/adapter-google",
       "@webmcp-bridge/adapter-x",
+      "@webmcp-bridge/adapter-utils",
       "@webmcp-bridge/adapter-fixture",
       "@webmcp-bridge/testkit"
     ]
