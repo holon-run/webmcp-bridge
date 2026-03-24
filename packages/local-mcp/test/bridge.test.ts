@@ -532,6 +532,7 @@ describe("startLocalMcpBridge", () => {
       site: "x",
       targetUrl: "https://x.com/home",
       controlMode: "attach",
+      mode: "adapter-shim",
       presentationMode: "headed",
       gateway: {
         callTool: vi.fn(async () => ({ state: "auth_required" })),
@@ -549,12 +550,10 @@ describe("startLocalMcpBridge", () => {
       input: new PassThrough(),
     });
 
-    const session = await capturedServerOptions?.bridgeControl.attachSession();
-
     expect(launchManagedAttachBrowserMock).toHaveBeenCalledOnce();
     expect(launchBootstrapBrowserMock).not.toHaveBeenCalled();
     expect(attachRuntime.close).toHaveBeenCalledOnce();
-    expect(session).toMatchObject({
+    expect(capturedServerOptions?.bridgeControl.getState()).toMatchObject({
       controlMode: "bootstrap",
       mode: "control-only",
       ownership: "external",
@@ -711,6 +710,7 @@ describe("startLocalMcpBridge", () => {
       site: "x",
       targetUrl: "https://x.com/home",
       controlMode: "attach",
+      mode: "adapter-shim",
       presentationMode: "headless",
       gateway: {
         callTool: vi.fn(async () => ({ state: "authenticated" })),
@@ -849,8 +849,8 @@ describe("startLocalMcpBridge", () => {
 
     expect(stopBrowserProcessMock).toHaveBeenCalledWith(41002);
     expect(waitForProcessExitMock).toHaveBeenCalledWith(41002, 5000);
-    expect(launchManagedAttachBrowserMock).toHaveBeenCalledTimes(2);
-    expect(launchManagedAttachBrowserMock).toHaveBeenLastCalledWith({
+    expect(launchManagedAttachBrowserMock).toHaveBeenCalledOnce();
+    expect(launchManagedAttachBrowserMock).toHaveBeenCalledWith({
       targetUrl: "https://x.com/home",
       userDataDir: "/tmp/mock-profile",
       presentationMode: "headless",
