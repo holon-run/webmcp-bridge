@@ -1,6 +1,6 @@
 {
   "name": "@webmcp-bridge/core",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "description": "Shared WebMCP bridge contracts and shim runtime primitives for webmcp-bridge packages.",
   "main": "dist/index.js",

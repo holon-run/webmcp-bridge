@@ -1,6 +1,6 @@
 {
   "name": "@webmcp-bridge/testkit",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "description": "Shared contract test helpers for webmcp-bridge packages and adapters.",
   "main": "dist/index.js",
