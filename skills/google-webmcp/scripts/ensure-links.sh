@@ -22,4 +22,8 @@ while (($#)); do
   esac
 done
 
-exec "${ROOT_DIR}/skills/webmcp-bridge/scripts/ensure-links.sh" --name google --site google "${filtered_args[@]}"
+if ((${#filtered_args[@]} > 0)); then
+  exec "${ROOT_DIR}/skills/webmcp-bridge/scripts/ensure-links.sh" --name google --site google "${filtered_args[@]}"
+fi
+
+exec "${ROOT_DIR}/skills/webmcp-bridge/scripts/ensure-links.sh" --name google --site google
