@@ -270,16 +270,21 @@ pnpm build
 
 ## Publish to npm
 
-Use `pnpm publish` from this monorepo so workspace protocol dependencies are rewritten to concrete versions in published tarballs.
+Releases are published from GitHub Actions through Changesets plus npm trusted publishing. Do not publish from a local shell.
 
 ```bash
-pnpm -r --filter "@webmcp-bridge/*" publish --access public
+pnpm changeset
 ```
 
-For a dry run:
+After the feature PR with its changeset lands on `main`, the `Release` workflow opens or updates a version PR. Merging that version PR publishes the packages from GitHub Actions with npm provenance. For release details, see [`docs/release.md`](docs/release.md).
+
+To validate the monorepo locally before merging:
 
 ```bash
-pnpm -r --filter "@webmcp-bridge/*" publish --dry-run
+pnpm typecheck
+pnpm test
+pnpm lint
+pnpm build
 ```
 
 ## Constraints
