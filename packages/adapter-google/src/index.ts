@@ -687,7 +687,7 @@ async function readGeminiResponseState(
   },
 ): Promise<GeminiWaitResult> {
   const probe = await page.evaluate(
-    ({ mode: requestedMode, previousResponseText, previousImageCount }) => {
+    ({ mode: requestedMode }) => {
         const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
         const visible = (element: Element | null): element is HTMLElement => {
           if (!(element instanceof HTMLElement)) {
