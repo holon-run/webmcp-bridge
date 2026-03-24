@@ -192,6 +192,20 @@ type GeminiWaitResult =
     }
   | { status: "error"; message: string };
 
+type GeminiWaitProbeResult =
+  | {
+      status: "probe";
+      active: boolean;
+      fingerprint: string;
+      responseText?: string | null;
+      responseCount?: number;
+      imageCount?: number;
+      hasResponseFeedback?: boolean;
+      hasStructuredResponse?: boolean;
+      hasDownloadButton?: boolean;
+    }
+  | { status: "error"; message: string };
+
 type GooglePage = {
   evaluate: <T, Arg = void>(pageFunction: (arg: Arg) => T | Promise<T>, arg?: Arg) => Promise<T>;
   goto: (url: string, options?: { waitUntil?: "domcontentloaded"; timeout?: number }) => Promise<unknown>;
@@ -238,6 +252,31 @@ function toRecord(value: JsonValue): Record<string, unknown> {
 
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function normalizeGeminiComparableText(value: string | null | undefined): string {
+  return normalizeText(value ?? "").toLowerCase();
+}
+
+function shouldTreatGeminiTextResponseAsReady(
+  probe: Extract<GeminiWaitProbeResult, { status: "probe" }>,
+  previousSnapshot?: {
+    responseText?: string | null;
+    responseCount?: number;
+  },
+): boolean {
+  if (probe.active || !probe.responseText) {
+    return false;
+  }
+
+  return (
+    Boolean(probe.hasResponseFeedback || probe.hasStructuredResponse) &&
+    (
+      normalizeGeminiComparableText(probe.responseText) !==
+        normalizeGeminiComparableText(previousSnapshot?.responseText) ||
+      (probe.responseCount ?? 0) > (previousSnapshot?.responseCount ?? 0)
+    )
+  );
 }
 
 function isGoogleOwnedUrl(url: string): boolean {
@@ -643,13 +682,13 @@ async function readGeminiResponseState(
   mode: GeminiMode,
   previousSnapshot?: {
     responseText?: string | null;
+    responseCount?: number;
     imageCount?: number;
   },
 ): Promise<GeminiWaitResult> {
-  return await page.evaluate(
-    ({ mode: requestedMode, previousResponseText, previousImageCount }) => {
+  const probe = await page.evaluate(
+    ({ mode: requestedMode }) => {
         const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
-        const normalizedPreviousResponseText = normalize(previousResponseText || "");
         const visible = (element: Element | null): element is HTMLElement => {
           if (!(element instanceof HTMLElement)) {
             return false;
@@ -702,16 +741,11 @@ async function readGeminiResponseState(
             const src = normalize((node as HTMLImageElement).src || "");
             return rect.width > 64 && rect.height > 64 && src.includes("googleusercontent.com");
           }).length;
-          if (!hasStopControl && (hasDownloadButton || imageCount > previousImageCount)) {
-            return {
-              status: "ready" as const,
-              imageCount,
-            };
-          }
           return {
-            status: "pending" as const,
+            status: "probe" as const,
             active: hasStopControl,
             imageCount,
+            hasDownloadButton,
             fingerprint: JSON.stringify({
               hasStopControl,
               imageCount,
@@ -733,6 +767,10 @@ async function readGeminiResponseState(
           .filter(visible)
           .map((node) => normalize(node.textContent || ""))
           .filter((value, index, values) => value.length > 0 && values.indexOf(value) === index);
+        const hasStructuredResponse = responseCandidates.length > 0;
+        const responseCount = Array.from(
+          document.querySelectorAll("message-content, .model-response-text, .response-container-content, .markdown"),
+        ).filter(visible).length;
 
         let responseText = responseCandidates[responseCandidates.length - 1] || null;
         if (!responseText) {
@@ -751,34 +789,61 @@ async function readGeminiResponseState(
           responseText = genericText[genericText.length - 1] || null;
         }
 
-        if (
-          !hasStopControl &&
-          hasResponseFeedback &&
-          responseText &&
-          responseText !== normalizedPreviousResponseText
-        ) {
-          return {
-            status: "ready" as const,
-            responseText,
-          };
-        }
         return {
-          status: "pending" as const,
+          status: "probe" as const,
           active: hasStopControl,
           responseText,
+          responseCount,
+          hasResponseFeedback,
+          hasStructuredResponse,
           fingerprint: JSON.stringify({
             hasStopControl,
             hasResponseFeedback,
+            hasStructuredResponse,
+            responseCount,
             responseText: responseText ?? "",
           }),
         };
       },
       {
         mode,
-        previousResponseText: mode === "text" ? (previousSnapshot?.responseText ?? "") : "",
+        previousResponseText: mode === "text" ? normalizeGeminiComparableText(previousSnapshot?.responseText) : "",
         previousImageCount: mode === "image" ? (previousSnapshot?.imageCount ?? 0) : 0,
       },
     );
+
+  if (probe.status === "error") {
+    return probe;
+  }
+
+  if (mode === "image") {
+    if (!probe.active && (probe.hasDownloadButton || (probe.imageCount ?? 0) > (previousSnapshot?.imageCount ?? 0))) {
+      return {
+        status: "ready",
+        ...(probe.imageCount !== undefined ? { imageCount: probe.imageCount } : {}),
+      };
+    }
+    return {
+      status: "pending",
+      active: probe.active,
+      fingerprint: probe.fingerprint,
+      ...(probe.imageCount !== undefined ? { imageCount: probe.imageCount } : {}),
+    };
+  }
+
+  if (shouldTreatGeminiTextResponseAsReady(probe, previousSnapshot)) {
+    return {
+      status: "ready",
+      ...(probe.responseText !== undefined ? { responseText: probe.responseText } : {}),
+    };
+  }
+
+  return {
+    status: "pending",
+    active: probe.active,
+    fingerprint: probe.fingerprint,
+    ...(probe.responseText !== undefined ? { responseText: probe.responseText } : {}),
+  };
 }
 
 async function waitForGeminiResponse(
@@ -787,6 +852,7 @@ async function waitForGeminiResponse(
   timeoutMs: number,
   previousSnapshot?: {
     responseText?: string | null;
+    responseCount?: number;
     imageCount?: number;
   },
 ): Promise<GeminiWaitResult> {
@@ -820,6 +886,7 @@ async function waitForGeminiResponse(
 async function readGeminiChatResult(page: GooglePage, prompt: string, mode: GeminiMode): Promise<{
   conversationUrl: string;
   responseText: string | null;
+  responseCount: number;
   images: Array<{ index: number; src: string }>;
 }> {
   return await page.evaluate(
@@ -850,6 +917,9 @@ async function readGeminiChatResult(page: GooglePage, prompt: string, mode: Gemi
         .filter(visible)
         .map((node) => normalize(node.textContent || ""))
         .filter((value, index, values) => value.length > 0 && value !== sentPrompt && values.indexOf(value) === index);
+      const responseCount = Array.from(
+        document.querySelectorAll("message-content, .model-response-text, .response-container-content, .markdown"),
+      ).filter(visible).length;
 
       let responseText = responseCandidates[responseCandidates.length - 1];
       if (!responseText && requestedMode === "text") {
@@ -871,6 +941,7 @@ async function readGeminiChatResult(page: GooglePage, prompt: string, mode: Gemi
       return {
         conversationUrl: window.location.href,
         responseText: responseText || null,
+        responseCount,
         images: imageEntries,
       };
     },
@@ -1093,12 +1164,14 @@ export function createAdapter(): SiteAdapter {
         const previousSnapshot = await readGeminiChatResult(livePage, prompt, mode).catch(() => ({
           conversationUrl: livePage.url(),
           responseText: null,
+          responseCount: 0,
           images: [],
         }));
         await submitGeminiPrompt(livePage, prompt, mode);
         try {
           const waitResult = await waitForGeminiResponse(livePage, mode, timeoutMs, {
             responseText: previousSnapshot.responseText,
+            responseCount: previousSnapshot.responseCount,
             imageCount: previousSnapshot.images.length,
           });
           if (waitResult.status === "error") {
