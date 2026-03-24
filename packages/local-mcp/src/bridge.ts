@@ -433,6 +433,29 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     return refreshStatus();
   };
 
+  const adoptManagedAttachBrowserAsBootstrap = async (
+    nextAuthState: BridgeAuthState,
+    nextBrowserPid?: number,
+  ): Promise<LocalBridgeState> => {
+    await closeRuntime();
+    const bootstrapPatch: SessionMetadataPatch = {
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
+      sessionState: describeSessionStateFromAuth(nextAuthState),
+      authState: nextAuthState,
+      controlMode: "bootstrap",
+      ownership: "external",
+      browserUrl: null,
+      browserPid: null,
+    };
+    if (nextBrowserPid !== undefined) {
+      bootstrapPatch.browserPid = nextBrowserPid;
+    }
+    preferredPresentationMode = "headed";
+    await writeMetadata(bootstrapPatch);
+    return refreshStatus();
+  };
+
   const activateRuntime = async (
     nextRuntime: LocalMcpRuntime,
     nextOwnership: BridgeSessionOwnership,
@@ -541,6 +564,10 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         !explicitBrowserUrl &&
         (nextAuthState === "auth_required" || nextAuthState === "challenge_required")
       ) {
+        if (managedAttachPid && requestedPresentationMode === "headed") {
+          bindRuntime(nextRuntime, "managed");
+          return await adoptManagedAttachBrowserAsBootstrap(nextAuthState, managedAttachPid);
+        }
         await nextRuntime.close();
         return await bootstrapSessionInternal(nextAuthState);
       }
@@ -702,6 +729,11 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     }
 
     if (metadata.authState === "authenticated") {
+      await attachSessionInternal();
+      return;
+    }
+
+    if (metadata.sessionState !== "profile_missing") {
       await attachSessionInternal();
       return;
     }

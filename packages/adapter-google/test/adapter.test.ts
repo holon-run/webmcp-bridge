@@ -166,7 +166,11 @@ describe("createAdapter", () => {
           hasGoogleAccountMarker: false,
         },
         {
-          status: "ready",
+          status: "probe",
+          active: false,
+          imageCount: 1,
+          hasDownloadButton: true,
+          fingerprint: "image-ready",
         },
         [
           {
@@ -242,22 +246,32 @@ describe("createAdapter", () => {
         {
           conversationUrl: "https://gemini.google.com/app/chat",
           responseText: "previous answer",
+          responseCount: 1,
           images: [],
         },
         true,
         {
-          status: "pending",
+          status: "probe",
           active: true,
           responseText: "previous answer",
+          responseCount: 1,
+          hasResponseFeedback: false,
+          hasStructuredResponse: true,
           fingerprint: "thinking-1",
         },
         {
-          status: "ready",
+          status: "probe",
+          active: false,
           responseText: "fresh answer",
+          responseCount: 2,
+          hasResponseFeedback: true,
+          hasStructuredResponse: true,
+          fingerprint: "ready-1",
         },
         {
           conversationUrl: "https://gemini.google.com/app/chat",
           responseText: "fresh answer",
+          responseCount: 2,
           images: [],
         },
       ],
@@ -279,6 +293,108 @@ describe("createAdapter", () => {
     });
   });
 
+  it("accepts a structured Gemini response even when feedback buttons are absent", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      url: "https://gemini.google.com/app/chat",
+      title: "Google Gemini",
+      evalResponses: [
+        {
+          hasSignInText: false,
+          hasGeminiMarker: true,
+          hasGoogleAccountMarker: false,
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: "older answer",
+          responseCount: 1,
+          images: [],
+        },
+        true,
+        {
+          status: "probe",
+          active: false,
+          responseText: "fresh answer without feedback controls",
+          responseCount: 2,
+          hasResponseFeedback: false,
+          hasStructuredResponse: true,
+          fingerprint: "ready-structured",
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: "fresh answer without feedback controls",
+          responseCount: 2,
+          images: [],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "gemini.chat", input: { prompt: "hello", timeoutMs: 1_000 } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      prompt: "hello",
+      mode: "text",
+      conversationUrl: "https://gemini.google.com/app/chat",
+      responseText: "fresh answer without feedback controls",
+      images: [],
+      source: "dom",
+    });
+  });
+
+  it("treats an identical reply text as new when the structured response count grows", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      url: "https://gemini.google.com/app/chat",
+      title: "Google Gemini",
+      evalResponses: [
+        {
+          hasSignInText: false,
+          hasGeminiMarker: true,
+          hasGoogleAccountMarker: false,
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: "same answer",
+          responseCount: 4,
+          images: [],
+        },
+        true,
+        {
+          status: "probe",
+          active: false,
+          responseText: "same answer",
+          responseCount: 5,
+          hasResponseFeedback: false,
+          hasStructuredResponse: true,
+          fingerprint: "same-text-new-turn",
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: "same answer",
+          responseCount: 5,
+          images: [],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      { name: "gemini.chat", input: { prompt: "repeat", timeoutMs: 1_000 } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      prompt: "repeat",
+      mode: "text",
+      conversationUrl: "https://gemini.google.com/app/chat",
+      responseText: "same answer",
+      images: [],
+      source: "dom",
+    });
+  });
+
   it("fails closed when Gemini surfaces an upstream error while waiting", async () => {
     const adapter = createAdapter();
     const page = createMockPage({
@@ -293,6 +409,7 @@ describe("createAdapter", () => {
         {
           conversationUrl: "https://gemini.google.com/app/chat",
           responseText: null,
+          responseCount: 0,
           images: [],
         },
         true,

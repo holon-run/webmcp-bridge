@@ -509,6 +509,61 @@ describe("startLocalMcpBridge", () => {
     });
   });
 
+  it("reuses a headed managed attach browser as bootstrap when auth is still required", async () => {
+    mockSessionMetadata = {
+      version: 2,
+      site: "x",
+      profilePath: "/tmp/mock-profile",
+      targetUrl: "https://x.com/home",
+      authPolicyMode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
+      sessionState: "authenticated",
+      authState: "authenticated",
+      controlMode: "none",
+      ownership: "none",
+      updatedAt: new Date().toISOString(),
+    };
+    const attachRuntime = createRuntimeHandle({
+      site: "x",
+      targetUrl: "https://x.com/home",
+      controlMode: "attach",
+      presentationMode: "headed",
+      gateway: {
+        callTool: vi.fn(async () => ({ state: "auth_required" })),
+      },
+    });
+    runtimeQueue = [attachRuntime];
+    startedRuntimeHandles = [];
+
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    await startLocalMcpBridge({
+      site: "x",
+      browserChannel: "chrome",
+      userDataDir: "/tmp/mock-profile",
+      serviceVersion: "0.1.0-test",
+      input: new PassThrough(),
+    });
+
+    const session = await capturedServerOptions?.bridgeControl.attachSession();
+
+    expect(launchManagedAttachBrowserMock).toHaveBeenCalledOnce();
+    expect(launchBootstrapBrowserMock).not.toHaveBeenCalled();
+    expect(attachRuntime.close).toHaveBeenCalledOnce();
+    expect(session).toMatchObject({
+      controlMode: "bootstrap",
+      mode: "control-only",
+      ownership: "external",
+      browserPid: 41002,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
+      authState: "auth_required",
+      sessionState: "auth_required",
+    });
+  });
+
   it("fails attach when the bootstrap browser does not exit", async () => {
     mockSessionMetadata = {
       version: 2,
@@ -579,6 +634,57 @@ describe("startLocalMcpBridge", () => {
       browserPid: 41002,
       controlMode: "bootstrap",
       mode: "control-only",
+    });
+  });
+
+  it("tries managed attach before bootstrap when an auth-sensitive profile already exists", async () => {
+    mockSessionMetadata = {
+      version: 2,
+      site: "x",
+      profilePath: "/tmp/mock-profile",
+      targetUrl: "https://x.com/home",
+      authPolicyMode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headless",
+      sessionState: "profile_present_unverified",
+      authState: "unknown",
+      controlMode: "none",
+      ownership: "none",
+      updatedAt: new Date().toISOString(),
+    };
+    const attachRuntime = createRuntimeHandle({
+      site: "x",
+      targetUrl: "https://x.com/home",
+      controlMode: "attach",
+      presentationMode: "headless",
+      gateway: {
+        callTool: vi.fn(async () => ({ state: "authenticated" })),
+      },
+    });
+    runtimeQueue = [attachRuntime];
+    startedRuntimeHandles = [];
+
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    await startLocalMcpBridge({
+      site: "x",
+      browserChannel: "chrome",
+      userDataDir: "/tmp/mock-profile",
+      serviceVersion: "0.1.0-test",
+      input: new PassThrough(),
+    });
+
+    expect(launchManagedAttachBrowserMock).toHaveBeenCalledOnce();
+    expect(launchBootstrapBrowserMock).not.toHaveBeenCalled();
+    expect(capturedServerOptions?.bridgeControl.getState()).toMatchObject({
+      controlMode: "attach",
+      mode: "adapter-shim",
+      ownership: "managed",
+      presentationMode: "headless",
+      preferredPresentationMode: "headless",
+      authState: "authenticated",
+      sessionState: "runtime_active",
     });
   });
 });
