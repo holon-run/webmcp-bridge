@@ -1,0 +1,7 @@
+interface:
+  display_name: "Google WebMCP"
+  short_description: "Operate Google Search and Gemini through local-mcp"
+  default_prompt: "Use $google-webmcp to connect to Google through the built-in adapter, verify auth state, and run Google Search or Gemini tools through local-mcp."
+
+policy:
+  allow_implicit_invocation: true

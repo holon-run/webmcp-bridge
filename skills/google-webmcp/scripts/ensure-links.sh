@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+
+filtered_args=()
+while (($#)); do
+  case "$1" in
+    --name|--site|--adapter-module|--url)
+      shift
+      if (($#)) && [[ "$1" != --* ]]; then
+        shift
+      fi
+      ;;
+    --name=*|--site=*|--adapter-module=*|--url=*)
+      shift
+      ;;
+    *)
+      filtered_args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+exec "${ROOT_DIR}/skills/webmcp-bridge/scripts/ensure-links.sh" --name google --site google "${filtered_args[@]}"
