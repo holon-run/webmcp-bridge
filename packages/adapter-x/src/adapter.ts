@@ -105,6 +105,7 @@ type ArticleInlineImage = ArticleAttachment & {
 
 type ArticleDraftAssets = {
   markdown: string;
+  html: string;
   inlineImages: ArticleInlineImage[];
 };
 
@@ -1145,6 +1146,173 @@ function extractArticleTitle(markdown: string, markdownPath: string, explicitTit
   return basename(markdownPath, extname(markdownPath)).trim() || "Untitled";
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function convertMarkdownInlineToHtml(value: string): string {
+  const escaped = escapeHtml(value);
+  return escaped
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, altRaw: string, destinationRaw: string) => {
+      const alt = escapeHtml(altRaw.trim());
+      const destination = escapeHtml(stripMarkdownImageDestination(destinationRaw));
+      return `<img src="${destination}" alt="${alt}">`;
+    })
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, textRaw: string, hrefRaw: string) => {
+      const text = textRaw.trim() || hrefRaw.trim();
+      const href = escapeHtml(hrefRaw.trim());
+      return `<a href="${href}">${escapeHtml(text)}</a>`;
+    })
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
+function convertMarkdownToHtml(markdown: string): string {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const blocks: string[] = [];
+  let index = 0;
+
+  const flushParagraph = (paragraphLines: string[]) => {
+    if (paragraphLines.length === 0) {
+      return;
+    }
+    const text = paragraphLines.join(" ").trim();
+    if (!text) {
+      return;
+    }
+    blocks.push(`<p>${convertMarkdownInlineToHtml(text)}</p>`);
+  };
+
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    const fenceMatch = trimmed.match(/^```([^`]*)$/);
+    if (fenceMatch) {
+      const language = escapeHtml(fenceMatch[1]?.trim() ?? "");
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !lines[index]!.trim().startsWith("```")) {
+        codeLines.push(lines[index]!);
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      const code = escapeHtml(codeLines.join("\n"));
+      blocks.push(language ? `<pre><code class="language-${language}">${code}</code></pre>` : `<pre><code>${code}</code></pre>`);
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      const level = Math.min(6, headingMatch[1]!.length);
+      const content = convertMarkdownInlineToHtml(headingMatch[2]!.trim());
+      blocks.push(`<h${level}>${content}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    const bulletMatch = trimmed.match(/^[-*+]\s+(.+)$/);
+    if (bulletMatch) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const itemLine = lines[index]!.trim();
+        const match = itemLine.match(/^[-*+]\s+(.+)$/);
+        if (!match) {
+          break;
+        }
+        items.push(`<li>${convertMarkdownInlineToHtml(match[1]!.trim())}</li>`);
+        index += 1;
+      }
+      blocks.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (orderedMatch) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const itemLine = lines[index]!.trim();
+        const match = itemLine.match(/^\d+\.\s+(.+)$/);
+        if (!match) {
+          break;
+        }
+        items.push(`<li>${convertMarkdownInlineToHtml(match[1]!.trim())}</li>`);
+        index += 1;
+      }
+      blocks.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+
+    const paragraphLines: string[] = [];
+    while (index < lines.length) {
+      const paragraphLine = lines[index] ?? "";
+      const paragraphTrimmed = paragraphLine.trim();
+      if (!paragraphTrimmed) {
+        break;
+      }
+      if (/^```/.test(paragraphTrimmed) || /^(#{1,6})\s+/.test(paragraphTrimmed) || /^[-*+]\s+/.test(paragraphTrimmed) || /^\d+\.\s+/.test(paragraphTrimmed)) {
+        break;
+      }
+      paragraphLines.push(paragraphLine.trim());
+      index += 1;
+    }
+    flushParagraph(paragraphLines);
+  }
+
+  return blocks.join("\n");
+}
+
+function convertMarkdownLineToPlainText(line: string): string {
+  return line
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .replace(/^>\s+/, "")
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractArticleConfirmationSnippets(markdown: string): string[] {
+  const snippets: string[] = [];
+  let insideFence = false;
+  for (const rawLine of markdown.replace(/\r\n/g, "\n").split("\n")) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (/^```/.test(trimmed)) {
+      insideFence = !insideFence;
+      continue;
+    }
+    const normalized = insideFence ? trimmed : convertMarkdownLineToPlainText(trimmed);
+    if (normalized) {
+      snippets.push(normalized);
+    }
+    if (snippets.length >= 3) {
+      break;
+    }
+  }
+  return snippets;
+}
+
 function prepareArticleMarkdown(markdown: string, markdownPath: string): ArticleDraftAssets {
   const inlineImages: ArticleInlineImage[] = [];
   let nextIndex = 1;
@@ -1170,6 +1338,7 @@ function prepareArticleMarkdown(markdown: string, markdownPath: string): Article
   });
   return {
     markdown: prepared,
+    html: convertMarkdownToHtml(prepared),
     inlineImages,
   };
 }
@@ -3827,20 +3996,33 @@ async function setArticleTitle(page: Page, title: string): Promise<boolean> {
     .catch(() => false);
 }
 
-async function pasteArticleMarkdown(page: Page, markdown: string): Promise<boolean> {
+async function pasteArticleMarkdown(page: Page, markdown: string, html?: string): Promise<boolean> {
   let success = false;
   if (typeof (page as { locator?: unknown }).locator === "function") {
     const composerLocator = page.locator("[data-testid='composer'][role='textbox']").first();
     success = await composerLocator.click().then(() => true).catch(() => false);
     if (success) {
-      const wroteClipboard = await page.evaluate(async ({ value }) => {
+      const wroteClipboard = await page.evaluate(async ({ plainText, htmlText }) => {
         try {
-          await navigator.clipboard.writeText(value);
+          const ClipboardItemCtor = (window as typeof window & { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+          if (typeof navigator.clipboard?.write === "function" && ClipboardItemCtor) {
+            const items: Record<string, Blob> = {
+              "text/plain": new Blob([plainText], { type: "text/plain" }),
+            };
+            if (typeof htmlText === "string" && htmlText.trim().length > 0) {
+              items["text/html"] = new Blob([htmlText], { type: "text/html" });
+            }
+            await navigator.clipboard.write([new ClipboardItemCtor(items)]);
+          } else if (typeof navigator.clipboard?.writeText === "function") {
+            await navigator.clipboard.writeText(plainText);
+          } else {
+            return false;
+          }
           return true;
         } catch {
           return false;
         }
-      }, { value: markdown }).catch(() => false);
+      }, { plainText: markdown, htmlText: html }).catch(() => false);
       if (wroteClipboard) {
         success = await page.keyboard.press("Meta+V").then(() => true).catch(() => false);
       }
@@ -3855,7 +4037,7 @@ async function pasteArticleMarkdown(page: Page, markdown: string): Promise<boole
     }
   }
   if (!success) {
-    success = await page.evaluate(({ op, markdownText }) => {
+    success = await page.evaluate(({ op, markdownText, htmlText }) => {
       if (op !== "article_paste_markdown") {
         return false;
       }
@@ -3867,6 +4049,9 @@ async function pasteArticleMarkdown(page: Page, markdown: string): Promise<boole
       const data = new DataTransfer();
       data.setData("text/plain", markdownText);
       data.setData("text/markdown", markdownText);
+      if (typeof htmlText === "string" && htmlText.trim().length > 0) {
+        data.setData("text/html", htmlText);
+      }
       const event = new ClipboardEvent("paste", {
         bubbles: true,
         cancelable: true,
@@ -3874,16 +4059,12 @@ async function pasteArticleMarkdown(page: Page, markdown: string): Promise<boole
       });
       composer.dispatchEvent(event);
       return true;
-    }, { op: "article_paste_markdown", markdownText: markdown }).catch(() => false);
+    }, { op: "article_paste_markdown", markdownText: markdown, htmlText: html }).catch(() => false);
   }
   if (!success) {
     return false;
   }
-  const requiredSnippets = markdown
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .slice(0, 3);
+  const requiredSnippets = extractArticleConfirmationSnippets(markdown);
   if (requiredSnippets.length === 0) {
     return true;
   }
@@ -5362,7 +5543,7 @@ async function draftArticleMarkdown(
       }
     }
 
-    const pasted = await pasteArticleMarkdown(articlePage, draftAssets.markdown);
+    const pasted = await pasteArticleMarkdown(articlePage, draftAssets.markdown, draftAssets.html);
     if (!pasted) {
       return errorResult("UPSTREAM_CHANGED", "article markdown paste failed");
     }
@@ -5584,7 +5765,7 @@ async function updateArticleMarkdown(
     if (!cleared) {
       return errorResult("UPSTREAM_CHANGED", "article body controls not found");
     }
-    const pasted = await pasteArticleMarkdown(articlePage, draftAssets.markdown);
+    const pasted = await pasteArticleMarkdown(articlePage, draftAssets.markdown, draftAssets.html);
     if (!pasted) {
       return errorResult("UPSTREAM_CHANGED", "article markdown paste failed");
     }
