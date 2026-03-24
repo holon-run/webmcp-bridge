@@ -25,6 +25,7 @@ rg -q 'command -v google-webmcp-cli' "$SKILL_FILE" || fail 'missing link-first c
 rg -q 'google-webmcp-cli -h' "$SKILL_FILE" || fail 'missing help-first usage'
 rg -q 'gemini.chat -h' "$SKILL_FILE" || fail 'missing Gemini help example'
 rg -q 'bridge.session.bootstrap' "$SKILL_FILE" || fail 'missing bootstrap guidance'
+rg -q 'bridge.session.mode.set' "$SKILL_FILE" || fail 'missing session mode guidance'
 rg -q '~/.uxc/webmcp-profile/google' "$SKILL_FILE" || fail 'missing profile convention'
 
 if rg -q -- '(^|[[:space:]])(list|describe|call)([[:space:]]|$)|--input-json|--args .*[{]' "$SKILL_FILE" "${SKILL_DIR}/references"; then

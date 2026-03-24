@@ -25,6 +25,7 @@ rg -q 'command -v x-webmcp-cli' "$SKILL_FILE" || fail 'missing link-first check'
 rg -q 'x-webmcp-cli -h' "$SKILL_FILE" || fail 'missing help-first usage'
 rg -q 'grok.chat -h' "$SKILL_FILE" || fail 'missing Grok help example'
 rg -q 'bridge.session.bootstrap' "$SKILL_FILE" || fail 'missing bootstrap guidance'
+rg -q 'bridge.session.mode.set' "$SKILL_FILE" || fail 'missing headed-mode guidance'
 rg -q '~/.uxc/webmcp-profile/x' "$SKILL_FILE" || fail 'missing profile convention'
 
 if rg -q -- '(^|[[:space:]])(list|describe|call)([[:space:]]|$)|--input-json|--args .*[{]' "$SKILL_FILE" "${SKILL_DIR}/references"; then
