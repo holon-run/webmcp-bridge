@@ -61,6 +61,7 @@ export type LocalMcpRuntimeOptions = {
   browser?: BrowserEngine;
   browserChannel?: BrowserChannel;
   browserUrl?: string;
+  browserUrlOrigin?: "external" | "managed";
   chromiumLoginWorkaround?: boolean;
   preferredPresentationMode?: BridgePresentationMode;
   userDataDir?: string;
@@ -713,7 +714,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       context = await launchPersistentContextWithRetry(browserType, userDataDir as string, launchOptions);
     }
     await initializePageSession();
-    if (browserUrl && context && currentPage) {
+    if (browserUrl && context && currentPage && options.browserUrlOrigin !== "managed") {
       currentPresentationMode = await detectExternalPresentationMode(
         context,
         currentPage,

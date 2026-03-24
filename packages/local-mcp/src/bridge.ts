@@ -88,6 +88,7 @@ type RuntimeStartOptions = {
   browser?: BrowserEngine;
   browserChannel?: BrowserChannel;
   browserUrl?: string;
+  browserUrlOrigin?: "external" | "managed";
   chromiumLoginWorkaround?: boolean;
   preferredPresentationMode?: BridgePresentationMode;
   userDataDir?: string;
@@ -173,6 +174,7 @@ function buildRuntimeStartOptions(
       throw new Error("CONFIG_ERROR: --browser-url cannot be combined with --chromium-login-workaround");
     }
     nextOptions.browserUrl = browserUrl;
+    nextOptions.browserUrlOrigin = explicitAttach ? "external" : "managed";
     return nextOptions;
   }
   if (baseOptions.browserChannel !== undefined) {
@@ -498,11 +500,41 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     requestedPresentationMode: BridgePresentationMode = preferredPresentationMode,
   ): Promise<LocalBridgeState> => {
     const explicitBrowserUrl = requestedBrowserUrl?.trim() || options.browserUrl?.trim();
-    const activeBrowserUrl = explicitBrowserUrl || browserUrl;
+    const relaunchManagedAttachBrowser =
+      !explicitBrowserUrl &&
+      controlMode === "attach" &&
+      ownership === "managed" &&
+      requestedPresentationMode !== presentationMode;
+    const activeBrowserUrl = explicitBrowserUrl || (relaunchManagedAttachBrowser ? undefined : browserUrl);
     const nextOwnership: BridgeSessionOwnership = explicitBrowserUrl ? "external" : "managed";
 
     if (runtime) {
       await closeRuntime();
+    }
+
+    if (relaunchManagedAttachBrowser) {
+      const managedBrowserPid =
+        browserPid ?? (profilePath ? await findBrowserProcessForProfile(profilePath) : undefined);
+      if (profilePath && metadataFallback) {
+        await updateSessionMetadata(profilePath, metadataFallback, {
+          controlMode: "none",
+          ownership: "none",
+          browserUrl: null,
+          browserPid: null,
+        });
+      }
+      await stopBrowserProcess(managedBrowserPid);
+      if (managedBrowserPid) {
+        const didExit = await waitForProcessExit(managedBrowserPid, BOOTSTRAP_BROWSER_CLOSE_TIMEOUT_MS);
+        if (!didExit) {
+          throw new Error(
+            `BROWSER_CLOSE_TIMEOUT: timed out waiting for managed browser ${String(managedBrowserPid)} to exit`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, BOOTSTRAP_PROFILE_RELEASE_DELAY_MS));
+      }
+      browserUrl = undefined;
+      browserPid = undefined;
     }
 
     let managedAttachPid: number | undefined;
@@ -527,6 +559,17 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
           browserUrl: null,
           browserPid: null,
         });
+        await new Promise((resolve) => setTimeout(resolve, BOOTSTRAP_PROFILE_RELEASE_DELAY_MS));
+      }
+      const existingProfileBrowserPid = await findBrowserProcessForProfile(profilePath);
+      if (existingProfileBrowserPid) {
+        await stopBrowserProcess(existingProfileBrowserPid);
+        const didExit = await waitForProcessExit(existingProfileBrowserPid, BOOTSTRAP_BROWSER_CLOSE_TIMEOUT_MS);
+        if (!didExit) {
+          throw new Error(
+            `BROWSER_CLOSE_TIMEOUT: timed out waiting for existing browser ${String(existingProfileBrowserPid)} to exit`,
+          );
+        }
         await new Promise((resolve) => setTimeout(resolve, BOOTSTRAP_PROFILE_RELEASE_DELAY_MS));
       }
       await ensureManagedProfile(profilePath);
@@ -724,7 +767,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       metadata.ownership === "managed" &&
       (await isProcessRunning(metadata.browserPid));
     if (hasRunningManagedAttach) {
-      await attachSessionInternal(metadata.browserUrl);
+      await attachSessionInternal();
       return;
     }
 
