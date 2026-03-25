@@ -489,7 +489,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   };
   const fallbackAdapterFactory = site.createFallbackAdapter;
   if (fallbackAdapterFactory) {
-    gatewayOptions.fallbackAdapter = fallbackAdapterFactory();
+    gatewayOptions.fallbackAdapter = await fallbackAdapterFactory();
   }
   const authPolicy = resolveAuthPolicy(site.manifest);
   const authProbeTool = authPolicy.authProbeTool;
@@ -507,7 +507,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       return undefined;
     }
     if (!deferredAdapter && fallbackAdapterFactory) {
-      deferredAdapter = fallbackAdapterFactory();
+      deferredAdapter = await fallbackAdapterFactory();
     }
     if (!deferredAdapter) {
       return undefined;
