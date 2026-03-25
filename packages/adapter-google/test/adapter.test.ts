@@ -514,4 +514,80 @@ describe("createAdapter", () => {
       },
     });
   });
+
+  it("uses the current Gemini create-image tool flow and returns visible generated images", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      url: "https://gemini.google.com/app",
+      title: "Google Gemini",
+      evalResponses: [
+        {
+          hasSignInText: false,
+          hasGeminiMarker: true,
+          hasGoogleAccountMarker: false,
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app",
+          responseText: null,
+          responseCount: 0,
+          images: [],
+        },
+        true,
+        {
+          status: "selected",
+        },
+        true,
+        {
+          status: "probe",
+          active: false,
+          responseText: "here is your generated image",
+          responseCount: 1,
+          imageCount: 1,
+          hasDownloadButton: false,
+          hasResponseFeedback: false,
+          hasStructuredResponse: true,
+          fingerprint: "image-ready-current-ui",
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: "here is your generated image",
+          responseCount: 1,
+          images: [
+            {
+              index: 0,
+              src: "https://lh3.googleusercontent.com/generated-image",
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      {
+        name: "gemini.chat",
+        input: {
+          prompt: "draw a blue square",
+          mode: "image",
+          downloadImages: false,
+          timeoutMs: 1_000,
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      prompt: "draw a blue square",
+      mode: "image",
+      conversationUrl: "https://gemini.google.com/app/chat",
+      responseText: "here is your generated image",
+      images: [
+        {
+          index: 0,
+          src: "https://lh3.googleusercontent.com/generated-image",
+          artifact: null,
+        },
+      ],
+      source: "dom",
+    });
+  });
 });
