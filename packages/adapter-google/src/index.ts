@@ -1617,9 +1617,16 @@ export function createAdapter(): SiteAdapter {
         } catch (error) {
           const surface = await inspectGeminiImageSurface(livePage).catch(() => null);
           const message = error instanceof Error ? error.message : String(error);
-          if (surface) {
+          if (surface && surface.images.length > 0) {
             return buildGeminiImageCaptureError(
               "Gemini images are visible, but the adapter could not download them",
+              surface,
+              message,
+            );
+          }
+          if (surface) {
+            return buildGeminiImageCaptureError(
+              "Gemini image download failed before any visible images were confirmed",
               surface,
               message,
             );
