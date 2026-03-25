@@ -10,6 +10,7 @@ import {
   type RequestTemplate,
   TemplateCache,
 } from "@webmcp-bridge/adapter-utils";
+import type { Page } from "playwright";
 
 type WeiboAuthState = "authenticated" | "auth_required" | "challenge_required";
 
@@ -58,6 +59,7 @@ const MAX_HOME_SCROLL_PASSES = 4;
 const LEGACY_DOM_CURSOR_PREFIX = "dom:";
 const WEIBO_ALLOWED_HOSTS = new Set(["weibo.com", "www.weibo.com", "m.weibo.cn"]);
 const TEMPLATE_HEADER_ALLOWLIST = ["x-xsrf-token", "client-version", "x-requested-with", "content-type"] as const;
+const HOME_TIMELINE_URL = "https://weibo.com/";
 
 type WeiboTemplateBucket =
   | "timeline.home.list"
@@ -68,6 +70,7 @@ type WeiboTemplateBucket =
   | "user.posts.list";
 
 const PROCESS_TEMPLATE_CACHE = new TemplateCache<WeiboTemplateBucket, RequestTemplate>();
+const READ_PAGE_CACHE = new WeakMap<Page, Page>();
 
 const CAPTURE_INJECT_SCRIPT = buildRequestCaptureInitScript({
   globalKey: "__WEBMCP_WEIBO_CAPTURE__",
@@ -422,18 +425,43 @@ async function ensureCaptureInstalled(page: Parameters<SiteAdapter["callTool"]>[
   await page.evaluate(CAPTURE_INJECT_SCRIPT).catch(() => {});
 }
 
-async function withEphemeralPage<T>(
-  ownerPage: Parameters<SiteAdapter["callTool"]>[1]["page"],
-  url: string,
-  run: (ephemeralPage: Parameters<SiteAdapter["callTool"]>[1]["page"]) => Promise<T>,
-): Promise<T> {
-  const ephemeralPage = await ownerPage.context().newPage();
+function isSameLocation(currentUrl: string, targetUrl: string): boolean {
   try {
-    await ensureCaptureInstalled(ephemeralPage);
-    await ephemeralPage.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    return await run(ephemeralPage);
-  } finally {
-    await ephemeralPage.close().catch(() => {});
+    const current = new URL(currentUrl);
+    const target = new URL(targetUrl);
+    return current.origin === target.origin && current.pathname === target.pathname && current.search === target.search;
+  } catch {
+    return false;
+  }
+}
+
+async function getOrCreateCachedReadPage(ownerPage: Page, url: string): Promise<Page> {
+  const existing = READ_PAGE_CACHE.get(ownerPage);
+  if (existing && !existing.isClosed()) {
+    if (!isSameLocation(existing.url(), url)) {
+      await ensureCaptureInstalled(existing);
+      await existing.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    }
+    return existing;
+  }
+
+  const readPage = await ownerPage.context().newPage();
+  await ensureCaptureInstalled(readPage);
+  await readPage.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  READ_PAGE_CACHE.set(ownerPage, readPage);
+  return readPage;
+}
+
+async function withCachedReadPage<T>(ownerPage: Page, url: string, run: (readPage: Page) => Promise<T>): Promise<T> {
+  const readPage = await getOrCreateCachedReadPage(ownerPage, url);
+  return await run(readPage);
+}
+
+async function closeCachedReadPages(ownerPage: Page): Promise<void> {
+  const readPage = READ_PAGE_CACHE.get(ownerPage);
+  READ_PAGE_CACHE.delete(ownerPage);
+  if (readPage && !readPage.isClosed()) {
+    await readPage.close().catch(() => {});
   }
 }
 
@@ -1671,7 +1699,9 @@ export function createWeiboAdapter(): SiteAdapter {
     start: async ({ page }) => {
       await ensureCaptureInstalled(page);
     },
-    stop: async () => {},
+    stop: async ({ page }) => {
+      await closeCachedReadPages(page);
+    },
     listTools: async () => TOOL_DEFINITIONS,
     callTool: async ({ name, input }, { page }) => {
       const args = toRecord(input);
@@ -1709,9 +1739,9 @@ export function createWeiboAdapter(): SiteAdapter {
         const networkCursor = parsedCursor?.kind === "network" ? parsedCursor.value : undefined;
         let networkResult = await readTimelineViaNetwork(page, limit, networkCursor);
         if (networkResult.source !== "network" && parsedCursor?.kind !== "dom") {
-          networkResult = await withEphemeralPage(page, "https://weibo.com/", async (ephemeralPage) => {
-            await ephemeralPage.waitForTimeout(800);
-            return await readTimelineViaNetwork(ephemeralPage, limit, networkCursor);
+          networkResult = await withCachedReadPage(page, HOME_TIMELINE_URL, async (readPage) => {
+            await readPage.waitForTimeout(800);
+            return await readTimelineViaNetwork(readPage, limit, networkCursor);
           });
         }
         if (networkResult.source === "network" && networkResult.items.length > 0) {

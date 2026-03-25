@@ -28,7 +28,10 @@ function createMockPage(options?: {
     __childPage?: {
       goto: ReturnType<typeof vi.fn>;
       close: ReturnType<typeof vi.fn>;
+      url: ReturnType<typeof vi.fn>;
+      isClosed: ReturnType<typeof vi.fn>;
     };
+    __newPageMock?: ReturnType<typeof vi.fn>;
   } = {
     addInitScript: vi.fn(async () => {}),
     goto: vi.fn(async () => {}),
@@ -98,12 +101,14 @@ function createMockPage(options?: {
     title: vi.fn(async () => options?.title ?? "微博"),
     waitForTimeout: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
+    isClosed: vi.fn(() => false),
     evaluate: page.evaluate,
   };
+  const newPageMock = vi.fn(async () => childPage);
   page.context = vi.fn(() => ({
-    newPage: vi.fn(async () => childPage),
+    newPage: newPageMock,
   }));
-  return Object.assign(page, { __childPage: childPage });
+  return Object.assign(page, { __childPage: childPage, __newPageMock: newPageMock });
 }
 
 describe("adapter-weibo manifest", () => {
@@ -168,6 +173,18 @@ describe("createAdapter", () => {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
+  });
+
+  it("reuses one cached read page across repeated timeline warmups", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      timelineBatches: [[{ id: "m1", text: "第一条微博" }]],
+    });
+
+    await adapter.callTool({ name: "timeline.home.list", input: { limit: 1 } }, { page: page as never });
+    await adapter.callTool({ name: "timeline.home.list", input: { limit: 1 } }, { page: page as never });
+
+    expect((page as typeof page & { __newPageMock: ReturnType<typeof vi.fn> }).__newPageMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects malformed timeline cursors", async () => {
