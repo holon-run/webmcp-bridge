@@ -206,6 +206,14 @@ type GeminiWaitProbeResult =
     }
   | { status: "error"; message: string };
 
+type GeminiImageModeSelection =
+  | { status: "selected" | "already_selected" | "not_needed" }
+  | {
+      status: "unsupported";
+      currentMode?: string;
+      availableModes?: string[];
+    };
+
 type GooglePage = {
   evaluate: <T, Arg = void>(pageFunction: (arg: Arg) => T | Promise<T>, arg?: Arg) => Promise<T>;
   goto: (url: string, options?: { waitUntil?: "domcontentloaded"; timeout?: number }) => Promise<unknown>;
@@ -600,10 +608,6 @@ async function runGoogleSearch(page: GooglePage, query: string, limit: number, h
 async function ensureGeminiImageMode(page: GooglePage, mode: GeminiMode): Promise<void> {
   const livePage = page as unknown as {
     locator: (selector: string) => { count: () => Promise<number>; first: () => { click: () => Promise<void> } };
-    getByRole: (
-      role: string,
-      options?: { name?: string | RegExp },
-    ) => { first: () => { click: () => Promise<void> } };
     waitForTimeout: (timeout: number) => Promise<void>;
   };
 
@@ -616,8 +620,6 @@ async function ensureGeminiImageMode(page: GooglePage, mode: GeminiMode): Promis
     if (deselectButtonCount > 0) {
       return;
     }
-    await livePage.getByRole("button", { name: /create image/i }).first().click();
-    await livePage.waitForTimeout(800);
     return;
   }
 
@@ -625,6 +627,175 @@ async function ensureGeminiImageMode(page: GooglePage, mode: GeminiMode): Promis
     await livePage.locator("button[aria-label*='Deselect Create image']").first().click();
     await livePage.waitForTimeout(600);
   }
+}
+
+async function dismissGeminiBlockingPopup(page: GooglePage): Promise<boolean> {
+  const dismissed = await page.evaluate(() => {
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const visible = (element: Element | null): element is HTMLElement => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+    const click = (element: Element | null): boolean => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      element.click();
+      return true;
+    };
+
+    const actions = Array.from(document.querySelectorAll<HTMLElement>("button, [role='button']"))
+      .filter(visible);
+    const dismissButton = actions.find((node) => {
+      const combined = normalize(
+        `${node.textContent || ""} ${node.getAttribute("aria-label") || ""}`,
+      );
+      return combined === "dismiss" || combined.startsWith("dismiss ");
+    });
+    if (click(dismissButton ?? null)) {
+      return true;
+    }
+
+    const overlayOptions = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".cdk-overlay-container [role='menuitem'], .cdk-overlay-container [role='option'], .cdk-overlay-container button",
+      ),
+    ).filter(visible);
+    if (overlayOptions.length > 0) {
+      const backdrop = document.querySelector<HTMLElement>(
+        ".cdk-overlay-backdrop.cdk-overlay-backdrop-showing, .cdk-overlay-backdrop",
+      );
+      if (click(backdrop)) {
+        return true;
+      }
+      const escapeEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
+      document.activeElement?.dispatchEvent(escapeEvent);
+      document.dispatchEvent(escapeEvent);
+      document.dispatchEvent(new KeyboardEvent("keyup", { key: "Escape", bubbles: true }));
+      return true;
+    }
+
+    return false;
+  }).catch(() => false);
+
+  if (dismissed) {
+    await page.waitForTimeout(600);
+  }
+  return dismissed;
+}
+
+async function selectGeminiImageMode(page: GooglePage): Promise<GeminiImageModeSelection> {
+  const livePage = page as unknown as {
+    locator: (selector: string) => {
+      count: () => Promise<number>;
+    };
+    waitForTimeout: (timeout: number) => Promise<void>;
+  };
+
+  const deselectButtonCount = await livePage
+    .locator("button[aria-label*='Deselect Create image']")
+    .count()
+    .catch(() => 0);
+  if (deselectButtonCount > 0) {
+    return { status: "already_selected" };
+  }
+
+  await dismissGeminiBlockingPopup(page);
+
+  const selection = await page.evaluate(() => {
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const lower = (value: string): string => normalize(value).toLowerCase();
+    const visible = (element: Element | null): element is HTMLElement => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+    const click = (element: Element | null): boolean => {
+    if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      element.click();
+      return true;
+    };
+
+    const directTriggers = Array.from(
+      document.querySelectorAll<HTMLElement>("button, [role='button'], [role='menuitem'], [role='option']"),
+    ).filter(visible);
+    const directImageTrigger = directTriggers.find((node) => {
+      const combined = lower(
+        `${node.textContent || ""} ${node.getAttribute("aria-label") || ""} ${node.getAttribute("data-test-id") || ""}`,
+      );
+      if (combined.includes("deselect create image")) {
+        return false;
+      }
+      return /create image|create images|generate image|generate images|image generation/.test(combined);
+    });
+    if (click(directImageTrigger ?? null)) {
+      return {
+        status: "selected" as const,
+      };
+    }
+
+    const modeButton = document.querySelector<HTMLElement>(
+      "[data-test-id='bard-mode-menu-button'], button[aria-label*='Open mode picker']",
+    );
+    const currentMode = normalize(modeButton?.textContent || "");
+    if (!click(modeButton)) {
+      return {
+        status: "unsupported" as const,
+        currentMode,
+        availableModes: [],
+      };
+    }
+
+    const optionNodes = Array.from(
+      document.querySelectorAll<HTMLElement>("button, [role='menuitem'], [role='option']"),
+    ).filter(visible);
+    const availableModes = optionNodes
+      .map((node) => normalize(node.textContent || node.getAttribute("aria-label") || ""))
+      .filter((value, index, values) => value.length > 0 && values.indexOf(value) === index)
+      .slice(0, 20);
+
+    const imageOption = optionNodes.find((node) => {
+      const combined = lower(
+        `${node.textContent || ""} ${node.getAttribute("aria-label") || ""} ${node.getAttribute("data-test-id") || ""}`,
+      );
+      return /create image|create images|generate image|generate images|image generation/.test(combined);
+    });
+
+    if (click(imageOption ?? null)) {
+      return {
+        status: "selected" as const,
+      };
+    }
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent("keyup", { key: "Escape", bubbles: true }));
+
+    return {
+      status: "unsupported" as const,
+      currentMode,
+      availableModes,
+    };
+  });
+
+  if (selection.status === "selected") {
+    await livePage.waitForTimeout(800);
+  }
+  return selection;
 }
 
 async function submitGeminiPrompt(page: GooglePage, prompt: string, mode: GeminiMode): Promise<void> {
@@ -643,8 +814,9 @@ async function submitGeminiPrompt(page: GooglePage, prompt: string, mode: Gemini
   };
 
   await ensureGeminiImageMode(page, mode);
-  const textbox = livePage.locator("div[role='textbox'][aria-label*='Enter a prompt']").first();
-  await textbox.click();
+  if (mode === "image") {
+    await dismissGeminiBlockingPopup(page);
+  }
   const inserted = await page.evaluate(
     ({ value }) => {
       const element = document.querySelector<HTMLElement>("div[role='textbox'][aria-label*='Enter a prompt']");
@@ -671,10 +843,42 @@ async function submitGeminiPrompt(page: GooglePage, prompt: string, mode: Gemini
     { value: prompt },
   ).catch(() => false);
   if (!inserted) {
+    const textbox = livePage.locator("div[role='textbox'][aria-label*='Enter a prompt']").first();
+    await textbox.click();
     await textbox.fill(prompt);
   }
   await livePage.waitForTimeout(400);
-  await livePage.getByRole("button", { name: /send message/i }).first().click();
+  if (mode === "image") {
+    await dismissGeminiBlockingPopup(page);
+  }
+  const sent = await page.evaluate(() => {
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const visible = (element: Element | null): element is HTMLElement => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+    const sendButton = Array.from(document.querySelectorAll<HTMLElement>("button"))
+      .filter(visible)
+      .find((node) => {
+        const combined = normalize(`${node.textContent || ""} ${node.getAttribute("aria-label") || ""}`);
+        return combined.includes("send message");
+      });
+    if (!(sendButton instanceof HTMLElement)) {
+      return false;
+    }
+    sendButton.click();
+    return true;
+  }).catch(() => false);
+  if (!sent) {
+    await livePage.getByRole("button", { name: /send message/i }).first().click();
+  }
 }
 
 async function readGeminiResponseState(
@@ -687,7 +891,7 @@ async function readGeminiResponseState(
   },
 ): Promise<GeminiWaitResult> {
   const probe = await page.evaluate(
-    ({ mode: requestedMode }) => {
+    () => {
         const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
         const visible = (element: Element | null): element is HTMLElement => {
           if (!(element instanceof HTMLElement)) {
@@ -724,36 +928,6 @@ async function readGeminiResponseState(
           return text.includes("stop") || aria.includes("stop");
         });
 
-        if (requestedMode === "image") {
-          const hasDownloadButton = Array.from(document.querySelectorAll("button,a")).some((node) => {
-            if (!visible(node)) {
-              return false;
-            }
-            const text = normalize(node.textContent || "");
-            const aria = normalize(node.getAttribute("aria-label") || "");
-            return text.includes("download") || aria.includes("download full size image");
-          });
-          const imageCount = Array.from(document.querySelectorAll("img")).filter((node) => {
-            if (!visible(node)) {
-              return false;
-            }
-            const rect = node.getBoundingClientRect();
-            const src = normalize((node as HTMLImageElement).src || "");
-            return rect.width > 64 && rect.height > 64 && src.includes("googleusercontent.com");
-          }).length;
-          return {
-            status: "probe" as const,
-            active: hasStopControl,
-            imageCount,
-            hasDownloadButton,
-            fingerprint: JSON.stringify({
-              hasStopControl,
-              imageCount,
-              hasDownloadButton,
-            }),
-          };
-        }
-
         const hasResponseFeedback = Array.from(document.querySelectorAll("button")).some((node) => {
           if (!visible(node)) {
             return false;
@@ -789,15 +963,36 @@ async function readGeminiResponseState(
           responseText = genericText[genericText.length - 1] || null;
         }
 
+        const hasDownloadButton = Array.from(document.querySelectorAll("button,a")).some((node) => {
+          if (!visible(node)) {
+            return false;
+          }
+          const text = normalize(node.textContent || "");
+          const aria = normalize(node.getAttribute("aria-label") || "");
+          return text.includes("download") || aria.includes("download full size image");
+        });
+        const imageCount = Array.from(document.querySelectorAll("img")).filter((node) => {
+          if (!visible(node)) {
+            return false;
+          }
+          const rect = node.getBoundingClientRect();
+          const src = normalize((node as HTMLImageElement).src || "");
+          return rect.width > 64 && rect.height > 64 && src.includes("googleusercontent.com");
+        }).length;
+
         return {
           status: "probe" as const,
           active: hasStopControl,
+          imageCount,
+          hasDownloadButton,
           responseText,
           responseCount,
           hasResponseFeedback,
           hasStructuredResponse,
           fingerprint: JSON.stringify({
             hasStopControl,
+            hasDownloadButton,
+            imageCount,
             hasResponseFeedback,
             hasStructuredResponse,
             responseCount,
@@ -820,6 +1015,14 @@ async function readGeminiResponseState(
     if (!probe.active && (probe.hasDownloadButton || (probe.imageCount ?? 0) > (previousSnapshot?.imageCount ?? 0))) {
       return {
         status: "ready",
+        ...(probe.responseText !== undefined ? { responseText: probe.responseText } : {}),
+        ...(probe.imageCount !== undefined ? { imageCount: probe.imageCount } : {}),
+      };
+    }
+    if (shouldTreatGeminiTextResponseAsReady(probe, previousSnapshot)) {
+      return {
+        status: "ready",
+        ...(probe.responseText !== undefined ? { responseText: probe.responseText } : {}),
         ...(probe.imageCount !== undefined ? { imageCount: probe.imageCount } : {}),
       };
     }
@@ -827,6 +1030,7 @@ async function readGeminiResponseState(
       status: "pending",
       active: probe.active,
       fingerprint: probe.fingerprint,
+      ...(probe.responseText !== undefined ? { responseText: probe.responseText } : {}),
       ...(probe.imageCount !== undefined ? { imageCount: probe.imageCount } : {}),
     };
   }
@@ -903,9 +1107,14 @@ async function readGeminiChatResult(page: GooglePage, prompt: string, mode: Gemi
         const rect = element.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
       };
+      const isGeneratedGeminiImage = (node: HTMLImageElement): boolean => {
+        const rect = node.getBoundingClientRect();
+        const src = normalize(node.src);
+        return rect.width > 64 && rect.height > 64 && src.includes("googleusercontent.com");
+      };
 
       const imageEntries = Array.from(document.querySelectorAll<HTMLImageElement>("img"))
-        .filter((node) => visible(node) && node.classList.contains("image") && normalize(node.src).length > 0)
+        .filter((node) => visible(node) && isGeneratedGeminiImage(node))
         .map((node, index) => ({
           index,
           src: normalize(node.src),
@@ -966,9 +1175,14 @@ async function readVisibleGeminiImages(page: GooglePage): Promise<Array<{ index:
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
     };
+    const isGeneratedGeminiImage = (node: HTMLImageElement): boolean => {
+      const rect = node.getBoundingClientRect();
+      const src = normalize(node.src);
+      return rect.width > 64 && rect.height > 64 && src.includes("googleusercontent.com");
+    };
 
     return Array.from(document.querySelectorAll<HTMLImageElement>("img"))
-      .filter((node) => visible(node) && node.classList.contains("image") && normalize(node.src).length > 0)
+      .filter((node) => visible(node) && isGeneratedGeminiImage(node))
       .map((node, index) => ({
         index,
         src: normalize(node.src),
@@ -1159,6 +1373,7 @@ export function createAdapter(): SiteAdapter {
         const timeoutMs = normalizePositiveInteger(args.timeoutMs, DEFAULT_GEMINI_TIMEOUT_MS, 1_000, MAX_GEMINI_TIMEOUT_MS);
         const downloadImages =
           typeof args.downloadImages === "boolean" ? args.downloadImages : mode === "image";
+        let imageModeSelection: GeminiImageModeSelection = { status: "not_needed" };
 
         await ensureGeminiPage(livePage);
         const previousSnapshot = await readGeminiChatResult(livePage, prompt, mode).catch(() => ({
@@ -1167,6 +1382,9 @@ export function createAdapter(): SiteAdapter {
           responseCount: 0,
           images: [],
         }));
+        if (mode === "image") {
+          imageModeSelection = await selectGeminiImageMode(livePage);
+        }
         await submitGeminiPrompt(livePage, prompt, mode);
         try {
           const waitResult = await waitForGeminiResponse(livePage, mode, timeoutMs, {
@@ -1191,6 +1409,25 @@ export function createAdapter(): SiteAdapter {
           mode === "image" && downloadImages
             ? await downloadGeminiImages(livePage, Math.max(1, result.images.length || 1), timeoutMs).catch(() => [])
             : [];
+
+        if (mode === "image" && result.images.length === 0 && downloads.length === 0) {
+          if (imageModeSelection.status === "unsupported") {
+            return errorResult(
+              "UNSUPPORTED_IN_CURRENT_UI",
+              "Gemini image generation mode is not available in the current UI or account",
+              {
+                currentMode: imageModeSelection.currentMode ?? "",
+                availableModes: (imageModeSelection.availableModes ?? []) as unknown as JsonValue,
+                responseText: result.responseText ?? "",
+                url: result.conversationUrl,
+              },
+            );
+          }
+          return errorResult("NO_IMAGES_GENERATED", "Gemini did not return any downloadable images", {
+            responseText: result.responseText ?? "",
+            url: result.conversationUrl,
+          });
+        }
 
         return {
           prompt,

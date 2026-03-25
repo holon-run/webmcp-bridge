@@ -22,6 +22,13 @@ shell_join() {
   printf '%s\n' "$out"
 }
 
+remove_file_if_exists() {
+  local path="$1"
+  if [[ -n "$path" && ( -e "$path" || -L "$path" ) && -L "$path" ]]; then
+    rm -f "$path"
+  fi
+}
+
 need_cmd uxc
 need_cmd npx
 
@@ -112,6 +119,7 @@ if [[ -n "$browser" ]]; then
 fi
 
 link_name="${name}-webmcp-cli"
+legacy_ui_link_name="${name}-webmcp-ui"
 link_command=(uxc link)
 if [[ -n "$link_dir" ]]; then
   mkdir -p "$link_dir"
@@ -130,6 +138,12 @@ fi
 link_install_args+=(--force)
 
 "${link_command[@]}" "${link_install_args[@]}" >/dev/null
+
+if [[ -n "$link_dir" ]]; then
+  remove_file_if_exists "$link_dir/$legacy_ui_link_name"
+else
+  remove_file_if_exists "$HOME/.local/bin/$legacy_ui_link_name"
+fi
 
 printf 'linked %s -> %s\n' "$link_name" "$link_value"
 printf 'profile %s\n' "$profile"

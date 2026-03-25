@@ -311,6 +311,7 @@ describe("createAdapter", () => {
           images: [],
         },
         true,
+        true,
         {
           status: "probe",
           active: false,
@@ -361,6 +362,7 @@ describe("createAdapter", () => {
           responseCount: 4,
           images: [],
         },
+        true,
         true,
         {
           status: "probe",
@@ -413,6 +415,7 @@ describe("createAdapter", () => {
           images: [],
         },
         true,
+        true,
         {
           status: "error",
           message: "Something went wrong",
@@ -435,6 +438,167 @@ describe("createAdapter", () => {
           url: "https://gemini.google.com/app/chat",
         },
       },
+    });
+  });
+
+  it("returns a structured unsupported error when image mode is unavailable in the current UI", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      url: "https://gemini.google.com/app/chat",
+      title: "Google Gemini",
+      evalResponses: [
+        {
+          hasSignInText: false,
+          hasGeminiMarker: true,
+          hasGoogleAccountMarker: false,
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: "older answer",
+          responseCount: 1,
+          images: [],
+        },
+        false,
+        {
+          status: "unsupported",
+          currentMode: "Thinking",
+          availableModes: [
+            "Fast Answers quickly",
+            "Thinking Solves complex problems",
+            "Pro Advanced math and code with 3.1 Pro",
+          ],
+        },
+        false,
+        true,
+        false,
+        true,
+        {
+          status: "probe",
+          active: false,
+          responseText: "Image generation is unavailable in this mode.",
+          responseCount: 2,
+          imageCount: 0,
+          hasDownloadButton: false,
+          hasResponseFeedback: false,
+          hasStructuredResponse: true,
+          fingerprint: "text-only-image-request",
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: "Image generation is unavailable in this mode.",
+          responseCount: 2,
+          images: [],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      {
+        name: "gemini.chat",
+        input: {
+          prompt: "draw a red square",
+          mode: "image",
+          timeoutMs: 1_000,
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "UNSUPPORTED_IN_CURRENT_UI",
+        message: "Gemini image generation mode is not available in the current UI or account",
+        details: {
+          currentMode: "Thinking",
+          availableModes: [
+            "Fast Answers quickly",
+            "Thinking Solves complex problems",
+            "Pro Advanced math and code with 3.1 Pro",
+          ],
+          responseText: "Image generation is unavailable in this mode.",
+          url: "https://gemini.google.com/app/chat",
+        },
+      },
+    });
+  });
+
+  it("uses the current Gemini create-image tool flow and returns visible generated images", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      url: "https://gemini.google.com/app",
+      title: "Google Gemini",
+      evalResponses: [
+        {
+          hasSignInText: false,
+          hasGeminiMarker: true,
+          hasGoogleAccountMarker: false,
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app",
+          responseText: null,
+          responseCount: 0,
+          images: [],
+        },
+        false,
+        true,
+        {
+          status: "selected",
+        },
+        false,
+        true,
+        false,
+        true,
+        {
+          status: "probe",
+          active: false,
+          responseText: "here is your generated image",
+          responseCount: 1,
+          imageCount: 1,
+          hasDownloadButton: false,
+          hasResponseFeedback: false,
+          hasStructuredResponse: true,
+          fingerprint: "image-ready-current-ui",
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: "here is your generated image",
+          responseCount: 1,
+          images: [
+            {
+              index: 0,
+              src: "https://lh3.googleusercontent.com/generated-image",
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      {
+        name: "gemini.chat",
+        input: {
+          prompt: "draw a blue square",
+          mode: "image",
+          downloadImages: false,
+          timeoutMs: 1_000,
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      prompt: "draw a blue square",
+      mode: "image",
+      conversationUrl: "https://gemini.google.com/app/chat",
+      responseText: "here is your generated image",
+      images: [
+        {
+          index: 0,
+          src: "https://lh3.googleusercontent.com/generated-image",
+          artifact: null,
+        },
+      ],
+      source: "dom",
     });
   });
 });
