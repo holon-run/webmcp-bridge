@@ -214,6 +214,19 @@ type GeminiImageModeSelection =
       availableModes?: string[];
     };
 
+type GeminiVisibleImage = {
+  index: number;
+  src: string;
+};
+
+type GeminiImageSurfaceState = {
+  conversationUrl: string;
+  responseText: string | null;
+  images: GeminiVisibleImage[];
+  hasDownloadButton: boolean;
+  currentMode: string;
+};
+
 type GooglePage = {
   evaluate: <T, Arg = void>(pageFunction: (arg: Arg) => T | Promise<T>, arg?: Arg) => Promise<T>;
   goto: (url: string, options?: { waitUntil?: "domcontentloaded"; timeout?: number }) => Promise<unknown>;
@@ -1190,6 +1203,91 @@ async function readVisibleGeminiImages(page: GooglePage): Promise<Array<{ index:
   });
 }
 
+async function inspectGeminiImageSurface(page: GooglePage): Promise<GeminiImageSurfaceState> {
+  const images = await readVisibleGeminiImages(page).catch(() => []);
+  const meta = await page
+    .evaluate(() => {
+      const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+      const visible = (element: Element | null): element is HTMLElement => {
+        if (!(element instanceof HTMLElement)) {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        if (style.display === "none" || style.visibility === "hidden") {
+          return false;
+        }
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+
+      const hasDownloadButton = Array.from(document.querySelectorAll("button,a")).some((node) => {
+        if (!visible(node)) {
+          return false;
+        }
+        const text = normalize(node.textContent || "").toLowerCase();
+        const aria = normalize(node.getAttribute("aria-label") || "").toLowerCase();
+        return text.includes("download") || aria.includes("download full size image");
+      });
+
+      const responseCandidates = Array.from(
+        document.querySelectorAll("message-content, .model-response-text, .response-container-content, .markdown"),
+      )
+        .filter(visible)
+        .map((node) => normalize(node.textContent || ""))
+        .filter((value, index, values) => value.length > 0 && values.indexOf(value) === index);
+
+      const modeButton = document.querySelector<HTMLElement>(
+        "[data-test-id='bard-mode-menu-button'], button[aria-label*='Open mode picker']",
+      );
+
+      return {
+        hasDownloadButton,
+        responseText: responseCandidates[responseCandidates.length - 1] || null,
+        currentMode: normalize(modeButton?.textContent || ""),
+      };
+    })
+    .catch(() => ({
+      hasDownloadButton: false,
+      responseText: null,
+      currentMode: "",
+    }));
+
+  return {
+    conversationUrl: page.url(),
+    responseText: meta.responseText,
+    images,
+    hasDownloadButton: meta.hasDownloadButton,
+    currentMode: meta.currentMode,
+  };
+}
+
+function buildGeminiImageRecoveryWarning(message: string): { code: string; message: string } {
+  return {
+    code: "PARTIAL_IMAGE_CAPTURE",
+    message,
+  };
+}
+
+function buildGeminiImageCaptureError(
+  message: string,
+  surface: GeminiImageSurfaceState,
+  cause: string,
+): JsonValue {
+  return errorResult(
+    surface.images.length > 0 ? "PARTIAL_RESULT_AVAILABLE" : "RESULT_CAPTURE_FAILED",
+    message,
+    {
+      url: surface.conversationUrl,
+      responseText: surface.responseText ?? "",
+      currentMode: surface.currentMode,
+      hasDownloadButton: surface.hasDownloadButton,
+      visibleImageCount: surface.images.length,
+      visibleImages: surface.images as unknown as JsonValue,
+      cause,
+    },
+  );
+}
+
 function inferImageExtension(src: string, contentType: string | null): { extension: string; mimeType?: string } {
   const normalizedType = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
   if (normalizedType === "image/png") {
@@ -1401,10 +1499,57 @@ export function createAdapter(): SiteAdapter {
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          if (mode === "image") {
+            const surface = await inspectGeminiImageSurface(livePage).catch(() => null);
+            if (surface && surface.images.length > 0) {
+              return {
+                prompt,
+                mode,
+                conversationUrl: surface.conversationUrl,
+                responseText: surface.responseText,
+                images: surface.images.map((image) => ({
+                  ...image,
+                  artifact: null,
+                })),
+                warning: buildGeminiImageRecoveryWarning(
+                  `Gemini generated images, but the adapter could not confirm completion: ${message}`,
+                ),
+                source: "dom",
+              };
+            }
+          }
           return errorResult("ACTION_UNCONFIRMED", `Gemini response did not finish: ${message}`);
         }
 
-        const result = await readGeminiChatResult(livePage, prompt, mode);
+        let result: Awaited<ReturnType<typeof readGeminiChatResult>>;
+        try {
+          result = await readGeminiChatResult(livePage, prompt, mode);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (mode === "image") {
+            const surface = await inspectGeminiImageSurface(livePage).catch(() => null);
+            if (surface && surface.images.length > 0) {
+              return {
+                prompt,
+                mode,
+                conversationUrl: surface.conversationUrl,
+                responseText: surface.responseText,
+                images: surface.images.map((image) => ({
+                  ...image,
+                  artifact: null,
+                })),
+                warning: buildGeminiImageRecoveryWarning(
+                  `Gemini generated images, but the adapter could not fully read the result: ${message}`,
+                ),
+                source: "dom",
+              };
+            }
+          }
+          return errorResult("RESULT_CAPTURE_FAILED", `Gemini completed, but the adapter could not read the result: ${message}`, {
+            mode,
+            url: livePage.url(),
+          });
+        }
         const downloads =
           mode === "image" && downloadImages
             ? await downloadGeminiImages(livePage, Math.max(1, result.images.length || 1), timeoutMs).catch(() => [])
@@ -1466,8 +1611,32 @@ export function createAdapter(): SiteAdapter {
         } catch {
           // The page may already be settled; downloads below remain authoritative.
         }
-        const items = await downloadGeminiImages(livePage, limit, timeoutMs);
+        let items: Awaited<ReturnType<typeof downloadGeminiImages>>;
+        try {
+          items = await downloadGeminiImages(livePage, limit, timeoutMs);
+        } catch (error) {
+          const surface = await inspectGeminiImageSurface(livePage).catch(() => null);
+          const message = error instanceof Error ? error.message : String(error);
+          if (surface) {
+            return buildGeminiImageCaptureError(
+              "Gemini images are visible, but the adapter could not download them",
+              surface,
+              message,
+            );
+          }
+          return errorResult("RESULT_CAPTURE_FAILED", `Gemini image download failed: ${message}`, {
+            url: livePage.url(),
+          });
+        }
         if (items.length === 0) {
+          const surface = await inspectGeminiImageSurface(livePage).catch(() => null);
+          if (surface && surface.images.length > 0) {
+            return buildGeminiImageCaptureError(
+              "Gemini images are visible, but no download artifacts were captured",
+              surface,
+              "download returned zero items",
+            );
+          }
           return errorResult("NO_IMAGES", "no downloadable Gemini images are visible");
         }
         return {

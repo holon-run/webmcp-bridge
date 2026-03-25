@@ -17,15 +17,19 @@ function createMockPage(options?: {
   const evalResponses = options?.evalResponses ? [...options.evalResponses] : undefined;
   const textboxFill = vi.fn(async () => {});
   const evaluate = vi.fn(async (_fn: unknown, arg?: unknown) => {
+    const next = evalResponses ? evalResponses.shift() : options?.evalResponse;
+    if (next instanceof Error) {
+      throw next;
+    }
     if (
       arg &&
       typeof arg === "object" &&
       !Array.isArray(arg) &&
       "value" in (arg as Record<string, unknown>)
     ) {
-      return evalResponses ? (evalResponses.shift() ?? true) : true;
+      return next ?? true;
     }
-    return evalResponses ? evalResponses.shift() : options?.evalResponse;
+    return next;
   });
   return {
     goto: vi.fn(async () => {}),
@@ -600,5 +604,199 @@ describe("createAdapter", () => {
       ],
       source: "dom",
     });
+  });
+
+  it("returns visible Gemini images with a warning when final image result parsing fails", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      url: "https://gemini.google.com/app/chat",
+      title: "Google Gemini",
+      evalResponses: [
+        {
+          hasSignInText: false,
+          hasGeminiMarker: true,
+          hasGoogleAccountMarker: false,
+        },
+        {
+          conversationUrl: "https://gemini.google.com/app/chat",
+          responseText: null,
+          responseCount: 0,
+          images: [],
+        },
+        false,
+        true,
+        {
+          status: "selected",
+        },
+        false,
+        true,
+        false,
+        true,
+        {
+          status: "probe",
+          active: false,
+          responseText: "here is your generated image",
+          responseCount: 1,
+          imageCount: 2,
+          hasDownloadButton: true,
+          hasResponseFeedback: false,
+          hasStructuredResponse: true,
+          fingerprint: "image-ready-current-ui",
+        },
+        new Error("DOM changed while reading final image result"),
+        [
+          {
+            index: 0,
+            src: "https://lh3.googleusercontent.com/generated-image-1",
+          },
+          {
+            index: 1,
+            src: "https://lh3.googleusercontent.com/generated-image-2",
+          },
+        ],
+        {
+          hasDownloadButton: true,
+          responseText: "here is your generated image",
+          currentMode: "Thinking",
+        },
+      ],
+    });
+
+    const result = await adapter.callTool(
+      {
+        name: "gemini.chat",
+        input: {
+          prompt: "draw a blue square",
+          mode: "image",
+          downloadImages: false,
+          timeoutMs: 1_000,
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      prompt: "draw a blue square",
+      mode: "image",
+      conversationUrl: "https://gemini.google.com/app/chat",
+      responseText: "here is your generated image",
+      images: [
+        {
+          index: 0,
+          src: "https://lh3.googleusercontent.com/generated-image-1",
+          artifact: null,
+        },
+        {
+          index: 1,
+          src: "https://lh3.googleusercontent.com/generated-image-2",
+          artifact: null,
+        },
+      ],
+      warning: {
+        code: "PARTIAL_IMAGE_CAPTURE",
+        message:
+          "Gemini generated images, but the adapter could not fully read the result: DOM changed while reading final image result",
+      },
+      source: "dom",
+    });
+  });
+
+  it("returns a structured error when Gemini images are visible but downloads are not captured", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      url: "https://gemini.google.com/app/chat",
+      title: "Google Gemini",
+      evalResponses: [
+        {
+          hasSignInText: false,
+          hasGeminiMarker: true,
+          hasGoogleAccountMarker: false,
+        },
+        {
+          status: "probe",
+          active: false,
+          responseText: "here is your generated image",
+          responseCount: 1,
+          imageCount: 2,
+          hasDownloadButton: true,
+          hasResponseFeedback: false,
+          hasStructuredResponse: true,
+          fingerprint: "image-ready-current-ui",
+        },
+        [
+          {
+            index: 0,
+            src: "https://lh3.googleusercontent.com/generated-image-1",
+          },
+          {
+            index: 1,
+            src: "https://lh3.googleusercontent.com/generated-image-2",
+          },
+        ],
+        [
+          {
+            index: 0,
+            src: "https://lh3.googleusercontent.com/generated-image-1",
+          },
+          {
+            index: 1,
+            src: "https://lh3.googleusercontent.com/generated-image-2",
+          },
+        ],
+        {
+          hasDownloadButton: true,
+          responseText: "here is your generated image",
+          currentMode: "Thinking",
+        },
+      ],
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      headers: new Headers(),
+      arrayBuffer: async () => new ArrayBuffer(0),
+    })) as typeof fetch;
+
+    try {
+      const result = await adapter.callTool(
+        {
+          name: "gemini.image.download",
+          input: {
+            limit: 2,
+            timeoutMs: 1_000,
+          },
+        },
+        { page: page as never },
+      );
+
+      expect(result).toEqual({
+        error: {
+          code: "PARTIAL_RESULT_AVAILABLE",
+          message: "Gemini images are visible, but the adapter could not download them",
+          details: {
+            url: "https://gemini.google.com/app/chat",
+            responseText: "here is your generated image",
+            currentMode: "Thinking",
+            hasDownloadButton: true,
+            visibleImageCount: 2,
+            visibleImages: [
+              {
+                index: 0,
+                src: "https://lh3.googleusercontent.com/generated-image-1",
+              },
+              {
+                index: 1,
+                src: "https://lh3.googleusercontent.com/generated-image-2",
+              },
+            ],
+            cause: "image fetch failed with status 403",
+          },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
