@@ -1,5 +1,21 @@
 # @webmcp-bridge/local-mcp
 
+## 0.5.2
+
+### Patch Changes
+
+- 1174fd5: Patch release for the latest bridge and adapter stabilization work.
+  - stabilize Google/Gemini image generation and long-running session recovery
+  - improve X Articles support with draft lifecycle tools and stable preview/edit readback
+  - clarify bridge-only recovery guidance for attached browser sessions
+
+- Updated dependencies [1174fd5]
+  - @webmcp-bridge/adapter-google@0.5.2
+  - @webmcp-bridge/adapter-x@0.5.2
+  - @webmcp-bridge/core@0.5.2
+  - @webmcp-bridge/playwright@0.5.2
+  - @webmcp-bridge/adapter-fixture@0.5.2
+
 ## 0.5.1
 
 ### Patch Changes
