@@ -53,6 +53,40 @@ Feature PR expectations:
 - Do not run `pnpm changeset version` locally on feature branches.
 - Merge the generated release PR to publish.
 
+## Skill publishing
+
+Repository skills are released separately from npm packages through ClawHub.
+
+Current published skills:
+
+- `webmcp-bridge`
+- `board-webmcp`
+- `x-webmcp`
+- `google-webmcp`
+- `webmcp-adapter-creator`
+
+Release flow:
+
+1. Validate any changed skills locally:
+   - `bash skills/webmcp-bridge/scripts/validate.sh`
+   - `bash skills/board-webmcp/scripts/validate.sh`
+   - `bash skills/x-webmcp/scripts/validate.sh`
+   - `bash skills/google-webmcp/scripts/validate.sh`
+   - `bash skills/webmcp-adapter-creator/scripts/validate.sh`
+2. Preview the registry changes:
+
+```bash
+clawhub sync --all --bump patch --dry-run --changelog "<release note>"
+```
+
+3. Publish the changed skills:
+
+```bash
+clawhub sync --all --bump patch --changelog "<release note>"
+```
+
+Use `--bump minor` or `--bump major` only when the skill contract or workflow changes materially.
+
 ## Current release prep
 
 The next `@webmcp-bridge/local-mcp` release includes:
@@ -64,3 +98,5 @@ The next `@webmcp-bridge/local-mcp` release includes:
 - stabilized Grok and Gemini long prompt input and long-running wait handling
 - Google bootstrap convergence improvements that avoid extra windows
 - managed attach mode switching fixes for headed and headless transitions
+- X Articles draft lifecycle support: list drafts, read drafts by preview URL, update drafts in place, and confirm cover-image application
+- bridge skill guidance for recovering from bridge-only sessions through `bridge.session.status`, `bridge.session.bootstrap`, and `bridge.session.attach`
