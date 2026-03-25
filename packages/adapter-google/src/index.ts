@@ -814,7 +814,9 @@ async function submitGeminiPrompt(page: GooglePage, prompt: string, mode: Gemini
   };
 
   await ensureGeminiImageMode(page, mode);
-  await dismissGeminiBlockingPopup(page);
+  if (mode === "image") {
+    await dismissGeminiBlockingPopup(page);
+  }
   const inserted = await page.evaluate(
     ({ value }) => {
       const element = document.querySelector<HTMLElement>("div[role='textbox'][aria-label*='Enter a prompt']");
@@ -846,7 +848,9 @@ async function submitGeminiPrompt(page: GooglePage, prompt: string, mode: Gemini
     await textbox.fill(prompt);
   }
   await livePage.waitForTimeout(400);
-  await dismissGeminiBlockingPopup(page);
+  if (mode === "image") {
+    await dismissGeminiBlockingPopup(page);
+  }
   const sent = await page.evaluate(() => {
     const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
     const visible = (element: Element | null): element is HTMLElement => {
