@@ -1,5 +1,12 @@
 # @webmcp-bridge/adapter-fixture
 
+## 0.5.2
+
+### Patch Changes
+
+- @webmcp-bridge/core@0.5.2
+- @webmcp-bridge/playwright@0.5.2
+
 ## 0.5.1
 
 ### Patch Changes
