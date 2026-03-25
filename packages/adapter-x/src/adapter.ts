@@ -4795,8 +4795,8 @@ async function listArticleDrafts(page: Page): Promise<JsonValue> {
             title: typeof articleResult.title === "string" ? normalizeInline(articleResult.title) : "",
             updatedAt: extractUpdatedAt(articleResult),
             hasCoverImage: Boolean(hasCoverImage),
-            editUrl: `https://x.com/compose/articles/edit/${restId}`,
-            previewUrl: `https://x.com/i/articles/${restId}/preview`,
+            editUrl: buildArticleEditUrl(restId),
+            previewUrl: buildArticlePreviewUrl(restId),
           });
         }
         cursor = extractNextCursor(result?.slice_info);
@@ -4813,16 +4813,29 @@ async function listArticleDrafts(page: Page): Promise<JsonValue> {
     const drafts = Array.isArray((result as Record<string, unknown>).drafts)
       ? ((result as Record<string, unknown>).drafts as unknown[])
       : [];
-    const normalizedDrafts = drafts.filter((draft): draft is ArticleDraftSummary => {
-        return Boolean(
-          draft &&
-          typeof draft === "object" &&
-          !Array.isArray(draft) &&
-          typeof (draft as Record<string, unknown>).id === "string" &&
-          typeof (draft as Record<string, unknown>).editUrl === "string" &&
-          typeof (draft as Record<string, unknown>).previewUrl === "string",
-        );
-      });
+    const normalizedDrafts = drafts
+      .map((draft): ArticleDraftSummary | undefined => {
+        if (!draft || typeof draft !== "object" || Array.isArray(draft)) {
+          return undefined;
+        }
+        const entry = draft as Record<string, unknown>;
+        if (
+          typeof entry.id !== "string" ||
+          typeof entry.editUrl !== "string" ||
+          typeof entry.previewUrl !== "string"
+        ) {
+          return undefined;
+        }
+        return {
+          id: entry.id,
+          editUrl: entry.editUrl,
+          previewUrl: entry.previewUrl,
+          title: typeof entry.title === "string" ? entry.title : "",
+          hasCoverImage: entry.hasCoverImage === true,
+          ...(typeof entry.updatedAt === "string" ? { updatedAt: entry.updatedAt } : {}),
+        };
+      })
+      .filter((draft): draft is ArticleDraftSummary => draft !== undefined);
 
     for (const draft of normalizedDrafts) {
       if (draft.hasCoverImage) {
@@ -7416,15 +7429,20 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         }
         const url = typeof args.url === "string" ? args.url.trim() : "";
         const id = typeof args.id === "string" ? args.id.trim() : "";
-        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
-        if (!articleId && !url) {
+        if (!id && !url) {
           return errorResult("VALIDATION_ERROR", "url or id is required");
         }
-        const targetUrl = articleId ? buildArticleEditUrl(articleId) : url;
-        if (!targetUrl) {
+        let articleId = id || undefined;
+        if (!articleId && url) {
+          articleId = parseArticleIdFromUrl(url);
+          if (!articleId) {
+            return errorResult("VALIDATION_ERROR", "could not parse article id from url");
+          }
+        }
+        if (!articleId) {
           return errorResult("VALIDATION_ERROR", "url or id is required");
         }
-        return await getArticleDraft(page, targetUrl);
+        return await getArticleDraft(page, buildArticleEditUrl(articleId));
       }
 
       if (name === "article.draftMarkdown") {
@@ -7460,11 +7478,17 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         }
         const explicitTitle = typeof args.title === "string" ? args.title.trim() : "";
         const coverImagePath = typeof args.coverImagePath === "string" ? args.coverImagePath.trim() : "";
-        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
-        const targetUrl = articleId ? buildArticleEditUrl(articleId) : "";
+        let articleId = id || undefined;
+        if (!articleId && url) {
+          articleId = parseArticleIdFromUrl(url);
+          if (!articleId) {
+            return errorResult("VALIDATION_ERROR", "url is invalid or unsupported");
+          }
+        }
+        const targetUrl = articleId ? buildArticleEditUrl(articleId) : undefined;
         return await upsertArticleDraftMarkdown(
           page,
-          targetUrl || undefined,
+          targetUrl,
           markdownPath,
           explicitTitle || undefined,
           coverImagePath || undefined,

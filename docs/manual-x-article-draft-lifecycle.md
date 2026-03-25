@@ -12,31 +12,39 @@ This document records the manual regression flow used for issue #35:
 
 ## Preconditions
 
+- Define reusable local variables:
+  - `REPO_ROOT`: path to this repository checkout
+  - `PROFILE_DIR`: X browser profile directory with a valid login
+  - `WORK_DIR`: temp directory holding the markdown inputs for this test
+  - `COVER_IMAGE_PATH`: local image file used as the article cover
 - Local worktree is built:
   - `pnpm --filter @webmcp-bridge/adapter-x build`
   - `pnpm --filter @webmcp-bridge/local-mcp build`
-- X login is already valid in:
-  - `~/.uxc/webmcp-profile/x`
+- X login is already valid in `PROFILE_DIR`
 - Use the adapter-backed compose endpoint so X stays in `adapter-shim` mode:
 
 ```bash
-export ISSUE35_ENDPOINT="node /private/tmp/webmcp-bridge-issue35/packages/local-mcp/dist/cli.js \
-  --adapter-module /private/tmp/webmcp-bridge-issue35/packages/adapter-x/dist/index.js \
+export REPO_ROOT=/path/to/webmcp-bridge
+export PROFILE_DIR="$HOME/.uxc/webmcp-profile/x"
+export WORK_DIR=/tmp/issue35-x-flow
+export COVER_IMAGE_PATH=/path/to/cover.png
+export ISSUE35_ENDPOINT="node $REPO_ROOT/packages/local-mcp/dist/cli.js \
+  --adapter-module $REPO_ROOT/packages/adapter-x/dist/index.js \
   --url https://x.com/compose/articles \
   --headless \
   --no-auto-login-fallback \
-  --user-data-dir /Users/jolestar/.uxc/webmcp-profile/x \
+  --user-data-dir $PROFILE_DIR \
   --service-version issue35-v6"
 ```
 
 ## Test Inputs
 
 - Markdown create file:
-  - `/tmp/issue35-x-fresh2.7ZlzTZ/post.md`
+  - `$WORK_DIR/post.md`
 - Markdown update file:
-  - `/tmp/issue35-x-fresh2.7ZlzTZ/post-updated.md`
+  - `$WORK_DIR/post-updated.md`
 - Cover image:
-  - `/Users/jolestar/.uxc/daemon/blog-public-nav.png`
+  - `$COVER_IMAGE_PATH`
 
 ## Expected Behavior
 
@@ -53,10 +61,10 @@ export ISSUE35_ENDPOINT="node /private/tmp/webmcp-bridge-issue35/packages/local-
 ### 1. Create the draft
 
 ```bash
-UXC_DAEMON_EXCLUSIVE='/Users/jolestar/.uxc/webmcp-profile/x' \
+UXC_DAEMON_EXCLUSIVE="$PROFILE_DIR" \
 UXC_LINK_NAME='x-webmcp-issue35-compose-v6' \
 uxc "$ISSUE35_ENDPOINT" article.draftMarkdown \
-  '{"markdownPath":"/tmp/issue35-x-fresh2.7ZlzTZ/post.md"}'
+  "{\"markdownPath\":\"$WORK_DIR/post.md\"}"
 ```
 
 Observed result:
@@ -70,10 +78,10 @@ Observed result:
 ### 2. Add a cover image
 
 ```bash
-UXC_DAEMON_EXCLUSIVE='/Users/jolestar/.uxc/webmcp-profile/x' \
+UXC_DAEMON_EXCLUSIVE="$PROFILE_DIR" \
 UXC_LINK_NAME='x-webmcp-issue35-compose-v6' \
 uxc "$ISSUE35_ENDPOINT" article.setCoverImage \
-  '{"id":"2036666046220791808","coverImagePath":"/Users/jolestar/.uxc/daemon/blog-public-nav.png"}'
+  "{\"id\":\"2036666046220791808\",\"coverImagePath\":\"$COVER_IMAGE_PATH\"}"
 ```
 
 Observed result:
@@ -84,7 +92,7 @@ Observed result:
 ### 3. Read the draft by id
 
 ```bash
-UXC_DAEMON_EXCLUSIVE='/Users/jolestar/.uxc/webmcp-profile/x' \
+UXC_DAEMON_EXCLUSIVE="$PROFILE_DIR" \
 UXC_LINK_NAME='x-webmcp-issue35-compose-v6' \
 uxc "$ISSUE35_ENDPOINT" article.getDraft \
   '{"id":"2036666046220791808"}'
@@ -100,7 +108,7 @@ Observed result:
 ### 4. Confirm the draft appears in list results
 
 ```bash
-UXC_DAEMON_EXCLUSIVE='/Users/jolestar/.uxc/webmcp-profile/x' \
+UXC_DAEMON_EXCLUSIVE="$PROFILE_DIR" \
 UXC_LINK_NAME='x-webmcp-issue35-compose-v6' \
 uxc "$ISSUE35_ENDPOINT" article.listDrafts '{}'
 ```
@@ -114,7 +122,7 @@ Observed result:
 ### 5. Read the same draft by preview URL
 
 ```bash
-UXC_DAEMON_EXCLUSIVE='/Users/jolestar/.uxc/webmcp-profile/x' \
+UXC_DAEMON_EXCLUSIVE="$PROFILE_DIR" \
 UXC_LINK_NAME='x-webmcp-issue35-compose-v6' \
 uxc "$ISSUE35_ENDPOINT" article.get \
   '{"url":"https://x.com/i/articles/2036666046220791808/preview"}'
@@ -129,10 +137,10 @@ Observed result:
 ### 6. Update the existing draft in place
 
 ```bash
-UXC_DAEMON_EXCLUSIVE='/Users/jolestar/.uxc/webmcp-profile/x' \
+UXC_DAEMON_EXCLUSIVE="$PROFILE_DIR" \
 UXC_LINK_NAME='x-webmcp-issue35-compose-v6' \
 uxc "$ISSUE35_ENDPOINT" article.upsertDraftMarkdown \
-  '{"id":"2036666046220791808","markdownPath":"/tmp/issue35-x-fresh2.7ZlzTZ/post-updated.md"}'
+  "{\"id\":\"2036666046220791808\",\"markdownPath\":\"$WORK_DIR/post-updated.md\"}"
 ```
 
 Observed result:
@@ -144,7 +152,7 @@ Observed result:
 ### 7. Read back after update
 
 ```bash
-UXC_DAEMON_EXCLUSIVE='/Users/jolestar/.uxc/webmcp-profile/x' \
+UXC_DAEMON_EXCLUSIVE="$PROFILE_DIR" \
 UXC_LINK_NAME='x-webmcp-issue35-compose-v6' \
 uxc "$ISSUE35_ENDPOINT" article.getDraft \
   '{"id":"2036666046220791808"}'
@@ -163,7 +171,7 @@ Observed result:
 ### 8. Clean up the temporary draft
 
 ```bash
-UXC_DAEMON_EXCLUSIVE='/Users/jolestar/.uxc/webmcp-profile/x' \
+UXC_DAEMON_EXCLUSIVE="$PROFILE_DIR" \
 UXC_LINK_NAME='x-webmcp-issue35-compose-v6' \
 uxc "$ISSUE35_ENDPOINT" article.delete \
   '{"id":"2036666046220791808"}'

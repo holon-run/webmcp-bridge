@@ -1607,6 +1607,23 @@ describe("createXAdapter", () => {
     });
   });
 
+  it("returns validation error for article.getDraft when url cannot be parsed", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "article.getDraft", input: { url: "https://x.com/compose/articles/not-a-draft-url" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "could not parse article id from url",
+      },
+    });
+  });
+
   it("publishes one article from markdown with cover and inline images", async () => {
     const adapter = createXAdapter();
     const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-publish-"));
@@ -1915,6 +1932,33 @@ describe("createXAdapter", () => {
     });
     expect(getArticleDraftState().html).toContain("<h2>Nested title</h2>");
     expect(getArticleDraftState().html).not.toContain("<h1>Same title</h1>");
+  });
+
+  it("returns validation error for article.upsertDraftMarkdown when url is invalid", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-upsert-invalid-url-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    await writeFile(markdownPath, "# Same title\n\nUpdated body.\n");
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      {
+        name: "article.upsertDraftMarkdown",
+        input: {
+          url: "https://x.com/compose/articles/not-a-draft-url",
+          markdownPath,
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "url is invalid or unsupported",
+      },
+    });
   });
 
   it("supports dryRun for article.delete", async () => {
