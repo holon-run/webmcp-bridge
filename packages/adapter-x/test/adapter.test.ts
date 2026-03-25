@@ -39,6 +39,7 @@ type Behavior = {
   articleReadText: string;
   articleReadCoverImageUrl?: string;
   articleReadImages: Array<{ url: string; alt?: string }>;
+  articleDrafts: Array<{ id: string; title: string; updatedAt?: string; hasCoverImage: boolean; editUrl: string; previewUrl: string }>;
   articlePublicUnsupported: boolean;
   articleOpenOk: boolean;
   articlePasteOk: boolean;
@@ -103,6 +104,16 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     articleReadText: "Mock article body",
     articleReadCoverImageUrl: "https://pbs.twimg.com/media/mock-cover.jpg",
     articleReadImages: [{ url: "https://pbs.twimg.com/media/mock-inline.jpg", alt: "inline" }],
+    articleDrafts: [
+      {
+        id: "2035000000000000000",
+        title: "Mock Article Title",
+        updatedAt: "2026-03-25T00:00:00.000Z",
+        hasCoverImage: true,
+        editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+        previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
+      },
+    ],
     articlePublicUnsupported: false,
     articleOpenOk: true,
     articlePasteOk: true,
@@ -321,6 +332,12 @@ function createMockPage(partial: Partial<Behavior> = {}) {
           text: articleMarkdown || behavior.articleReadText,
           images: behavior.articleReadImages,
           editUrl: currentUrl,
+        };
+      }
+
+      if (command.op === "article_list_drafts") {
+        return {
+          drafts: behavior.articleDrafts,
         };
       }
 
@@ -777,6 +794,11 @@ describe("createXAdapter", () => {
         "tweet.delete",
         "grok.chat",
         "article.get",
+        "article.listDrafts",
+        "article.getDraft",
+        "article.draftMarkdown",
+        "article.upsertDraftMarkdown",
+        "article.publishMarkdown",
       ]),
     );
   });
@@ -1318,6 +1340,74 @@ describe("createXAdapter", () => {
     });
   });
 
+  it("lists owned article drafts", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      articleDrafts: [
+        {
+          id: "2035000000000000000",
+          title: "Draft One",
+          updatedAt: "2026-03-25T01:02:03.000Z",
+          hasCoverImage: true,
+          editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+          previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
+        },
+      ],
+    });
+
+    const result = await adapter.callTool({ name: "article.listDrafts", input: {} }, { page: page as never });
+
+    expect(result).toEqual({
+      drafts: [
+        {
+          id: "2035000000000000000",
+          title: "Draft One",
+          updatedAt: "2026-03-25T01:02:03.000Z",
+          hasCoverImage: true,
+          editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+          previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
+        },
+      ],
+    });
+  });
+
+  it("fills draft cover state from a cached editor page when slice data omits it", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-list-cache-cover-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "draft.md");
+    await writeFile(markdownPath, "# Draft with cover\n\nBody");
+    const { page } = createMockPage({
+      articleDrafts: [
+        {
+          id: "2035000000000000000",
+          title: "Draft with cover",
+          updatedAt: "2026-03-25T01:02:03.000Z",
+          hasCoverImage: false,
+          editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+          previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
+        },
+      ],
+      articleReadImages: [{ url: "https://pbs.twimg.com/media/draft-cover.jpg", alt: "cover" }],
+    });
+
+    await adapter.callTool({ name: "article.draftMarkdown", input: { markdownPath } }, { page: page as never });
+    const result = await adapter.callTool({ name: "article.listDrafts", input: {} }, { page: page as never });
+
+    expect(result).toEqual({
+      drafts: [
+        {
+          id: "2035000000000000000",
+          title: "Draft with cover",
+          updatedAt: "2026-03-25T01:02:03.000Z",
+          hasCoverImage: true,
+          editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+          previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
+        },
+      ],
+    });
+  });
+
   it("reads one published article by public url", async () => {
     const adapter = createXAdapter();
     const { page } = createMockPage({
@@ -1477,10 +1567,59 @@ describe("createXAdapter", () => {
         title: "Draft Title",
         text: "Draft body",
         editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+        previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
         images: [],
         source: "editor",
         published: false,
+        hasCoverImage: false,
         sessionScoped: true,
+      },
+    });
+  });
+
+  it("reads one draft by preview url through article.getDraft", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage({
+      articleReadTitle: "Preview Draft",
+      articleReadText: "Preview draft body",
+      articleReadImages: [{ url: "https://pbs.twimg.com/media/draft-cover.jpg", alt: "cover" }],
+    });
+
+    const result = await adapter.callTool(
+      { name: "article.getDraft", input: { url: "https://x.com/i/articles/2035000000000000000/preview" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      article: {
+        id: "2035000000000000000",
+        title: "Preview Draft",
+        text: "Preview draft body",
+        editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+        previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
+        images: [],
+        source: "editor",
+        published: false,
+        hasCoverImage: true,
+        coverImageUrl: "https://pbs.twimg.com/media/draft-cover.jpg",
+        sessionScoped: false,
+      },
+    });
+  });
+
+  it("returns validation error for article.getDraft when url cannot be parsed", async () => {
+    const adapter = createXAdapter();
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "article.getDraft", input: { url: "https://x.com/compose/articles/not-a-draft-url" } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "could not parse article id from url",
       },
     });
   });
@@ -1516,8 +1655,10 @@ describe("createXAdapter", () => {
       confirmed: true,
       title: "Mock title",
       articleId: "2035000000000000000",
+      draftId: "2035000000000000000",
       articleUrl: "https://x.com/i/articles/2035000000000000000",
       editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+      previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
       persisted: true,
       sessionScoped: false,
       inlineImageCount: 1,
@@ -1529,7 +1670,7 @@ describe("createXAdapter", () => {
       title: "Mock title",
       markdown: expect.stringContaining("[[WEBMCP_INLINE_IMAGE_1]]"),
     });
-    expect(draftState.html).toContain("<h1>Mock title</h1>");
+    expect(draftState.html).not.toContain("<h1>Mock title</h1>");
     expect(draftState.html).toContain("<p>Body text before image.</p>");
     expect(draftState.html).toContain("<p>[[WEBMCP_INLINE_IMAGE_1]]</p>");
   });
@@ -1564,7 +1705,9 @@ describe("createXAdapter", () => {
       ok: true,
       title: "Mock title",
       articleId: "2035000000000000000",
+      draftId: "2035000000000000000",
       editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+      previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
       inlineImageCount: 1,
       hasCoverImage: true,
       persisted: true,
@@ -1576,7 +1719,7 @@ describe("createXAdapter", () => {
       title: "Mock title",
       markdown: expect.stringContaining("[[WEBMCP_INLINE_IMAGE_1]]"),
     });
-    expect(draftState.html).toContain("<h1>Mock title</h1>");
+    expect(draftState.html).not.toContain("<h1>Mock title</h1>");
     expect(draftState.html).toContain("<p>Body text before image.</p>");
     expect(draftState.html).toContain("<p>[[WEBMCP_INLINE_IMAGE_1]]</p>");
   });
@@ -1605,7 +1748,7 @@ describe("createXAdapter", () => {
       editUrl: expect.any(String),
     });
     const draftState = getArticleDraftState();
-    expect(draftState.html).toContain("<h1>Title</h1>");
+    expect(draftState.html).not.toContain("<h1>Title</h1>");
     expect(draftState.html).toContain("<h2>Section</h2>");
     expect(draftState.html).toContain("<ul><li>first item</li><li>second item</li></ul>");
     expect(draftState.html).toContain('<pre><code class="language-bash">npm install demo</code></pre>');
@@ -1638,6 +1781,28 @@ describe("createXAdapter", () => {
     expect(draftState.html).toContain('<a href="https://example.com?a=1&amp;b=2">R&amp;D</a>');
     expect(draftState.html).toContain("&lt;unsafe&gt;");
     expect(draftState.html).not.toContain("&amp;amp;");
+    expect(draftState.html).not.toContain("<h1>Title</h1>");
+  });
+
+  it("drops a matching first h1 when an explicit article title is provided", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-title-normalize-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    await writeFile(markdownPath, "# Explicit Title\n\nBody.\n\n# Later Heading\n");
+    const { page, getArticleDraftState } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "article.draftMarkdown", input: { markdownPath, title: "Explicit Title" } },
+      { page: page as never },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      title: "Explicit Title",
+    });
+    expect(getArticleDraftState().html).not.toContain("<h1>Explicit Title</h1>");
+    expect(getArticleDraftState().html).toContain("<h2>Later Heading</h2>");
   });
 
   it("publishes one existing article draft by id", async () => {
@@ -1699,7 +1864,9 @@ describe("createXAdapter", () => {
     expect(result).toEqual({
       ok: true,
       articleId: "2035000000000000000",
+      draftId: "2035000000000000000",
       editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+      previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
       inlineImageCount: 1,
       persisted: true,
       sessionScoped: false,
@@ -1709,6 +1876,88 @@ describe("createXAdapter", () => {
     expect(getArticleDraftState()).toMatchObject({
       title: "Updated title",
       markdown: expect.stringContaining("[[WEBMCP_INLINE_IMAGE_1]]"),
+    });
+  });
+
+  it("upserts a new draft when no target is provided", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-upsert-create-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    await writeFile(markdownPath, "# Upsert title\n\nUpsert body.\n");
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "article.upsertDraftMarkdown", input: { markdownPath } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      title: "Upsert title",
+      articleId: "2035000000000000000",
+      draftId: "2035000000000000000",
+      editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+      previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
+      inlineImageCount: 0,
+      hasCoverImage: false,
+      persisted: true,
+      sessionScoped: false,
+    });
+  });
+
+  it("upserts an existing draft when id is provided", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-upsert-update-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    await writeFile(markdownPath, "# Same title\n\n# Nested title\n\nUpdated body.\n");
+    const { page, getArticleDraftState } = createMockPage();
+
+    const result = await adapter.callTool(
+      { name: "article.upsertDraftMarkdown", input: { id: "2035000000000000000", markdownPath } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      articleId: "2035000000000000000",
+      draftId: "2035000000000000000",
+      editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+      previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
+      inlineImageCount: 0,
+      persisted: true,
+      sessionScoped: false,
+      title: "Same title",
+    });
+    expect(getArticleDraftState().html).toContain("<h2>Nested title</h2>");
+    expect(getArticleDraftState().html).not.toContain("<h1>Same title</h1>");
+  });
+
+  it("returns validation error for article.upsertDraftMarkdown when url is invalid", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-upsert-invalid-url-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    await writeFile(markdownPath, "# Same title\n\nUpdated body.\n");
+    const { page } = createMockPage();
+
+    const result = await adapter.callTool(
+      {
+        name: "article.upsertDraftMarkdown",
+        input: {
+          url: "https://x.com/compose/articles/not-a-draft-url",
+          markdownPath,
+        },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "url is invalid or unsupported",
+      },
     });
   });
 
