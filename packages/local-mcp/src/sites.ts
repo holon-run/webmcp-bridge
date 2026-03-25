@@ -14,6 +14,10 @@ import {
   manifest as googleManifest,
 } from "@webmcp-bridge/adapter-google";
 import {
+  createAdapter as createWeiboAdapter,
+  manifest as weiboManifest,
+} from "@webmcp-bridge/adapter-weibo";
+import {
   createAdapter as createXAdapter,
   manifest as xManifest,
 } from "@webmcp-bridge/adapter-x";
@@ -23,7 +27,7 @@ import type {
   SiteAdapterModule,
 } from "@webmcp-bridge/playwright";
 
-export type BuiltinSite = "x" | "google" | "fixture";
+export type BuiltinSite = "x" | "google" | "weibo" | "fixture";
 
 export type SiteDefinition = {
   id: string;
@@ -51,6 +55,12 @@ const BUILTIN_SITE_DEFINITIONS: Record<BuiltinSite, SiteDefinition> = {
     source: "builtin",
     manifest: googleManifest,
     createFallbackAdapter: () => createGoogleAdapter(),
+  },
+  weibo: {
+    id: "weibo",
+    source: "builtin",
+    manifest: weiboManifest,
+    createFallbackAdapter: () => createWeiboAdapter(),
   },
   fixture: {
     id: "fixture",

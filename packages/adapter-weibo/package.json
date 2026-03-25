@@ -1,8 +1,8 @@
 {
-  "name": "@webmcp-bridge/local-mcp",
+  "name": "@webmcp-bridge/adapter-weibo",
   "version": "0.5.1",
   "type": "module",
-  "description": "Local stdio MCP server that bridges local agents to browser WebMCP through Playwright.",
+  "description": "Fallback WebMCP adapter for Weibo when native WebMCP is unavailable.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -11,22 +11,18 @@
       "import": "./dist/index.js"
     }
   },
-  "bin": {
-    "webmcp-local-mcp": "dist/cli.js"
-  },
-  "publishConfig": {
-    "access": "public",
-    "tag": "beta",
-    "provenance": true
-  },
   "files": [
     "dist"
   ],
-  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/local-mcp",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/adapter-weibo",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/holon-run/webmcp-bridge.git",
-    "directory": "packages/local-mcp"
+    "directory": "packages/adapter-weibo"
   },
   "bugs": {
     "url": "https://github.com/holon-run/webmcp-bridge/issues"
@@ -34,26 +30,19 @@
   "keywords": [
     "webmcp",
     "mcp",
-    "model-context-protocol",
-    "playwright",
-    "stdio",
-    "browser",
-    "ai-agent"
+    "adapter",
+    "weibo",
+    "playwright"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1",
-    "@webmcp-bridge/adapter-fixture": "workspace:*",
-    "@webmcp-bridge/adapter-google": "workspace:*",
-    "@webmcp-bridge/adapter-weibo": "workspace:*",
-    "@webmcp-bridge/adapter-x": "workspace:*",
+    "@webmcp-bridge/adapter-utils": "workspace:*",
     "@webmcp-bridge/core": "workspace:*",
     "@webmcp-bridge/playwright": "workspace:*",
-    "playwright": "^1.58.2",
-    "zod": "^4.3.6"
+    "playwright": "^1.58.2"
   },
   "license": "MIT"
 }

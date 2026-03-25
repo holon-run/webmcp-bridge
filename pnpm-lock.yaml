@@ -110,6 +110,18 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.13)
 
+  packages/adapter-weibo:
+    dependencies:
+      '@webmcp-bridge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@webmcp-bridge/playwright':
+        specifier: workspace:*
+        version: link:../playwright
+      playwright:
+        specifier: ^1.58.2
+        version: 1.58.2
+
   packages/adapter-x:
     dependencies:
       '@webmcp-bridge/adapter-utils':
@@ -138,6 +150,9 @@ importers:
       '@webmcp-bridge/adapter-google':
         specifier: workspace:*
         version: link:../adapter-google
+      '@webmcp-bridge/adapter-weibo':
+        specifier: workspace:*
+        version: link:../adapter-weibo
       '@webmcp-bridge/adapter-x':
         specifier: workspace:*
         version: link:../adapter-x

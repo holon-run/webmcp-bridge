@@ -32,7 +32,7 @@ const USAGE = `Usage:
   webmcp-local-mcp [--site <site> | --adapter-module <specifier>] [options]
 
 Source:
-  --site <site>                Built-in site id (currently: x, google, fixture)
+  --site <site>                Built-in site id (currently: x, google, weibo, fixture)
   --adapter-module <specifier> External adapter module (npm package, file path, or file:// URL)
   If neither source is provided, --url runs in native/polyfill mode without adapter fallback.
 

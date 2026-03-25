@@ -80,6 +80,11 @@ describe("parseCliArgs", () => {
     expect(parsed.site).toBe("google");
   });
 
+  it("parses weibo site id", () => {
+    const parsed = parseCliArgs(["--site", "weibo"]);
+    expect(parsed.site).toBe("weibo");
+  });
+
   it("allows disabling auto login fallback", () => {
     const parsed = parseCliArgs(["--site", "x", "--headless", "--no-auto-login-fallback"]);
     expect(parsed.preferredPresentationMode).toBe("headless");
@@ -145,6 +150,17 @@ describe("resolveSiteDefinition", () => {
     const site = resolveSiteDefinition("google");
     expect(site.manifest.defaultUrl).toContain("gemini.google.com");
     expect(site.manifest.hostPatterns).toContain("google.com");
+  });
+
+  it("resolves weibo site preset", () => {
+    const site = resolveSiteDefinition("weibo");
+    expect(site.manifest.defaultUrl).toBe("https://weibo.com");
+    expect(site.manifest.hostPatterns).toContain("weibo.com");
+    expect(site.manifest.authPolicy).toEqual({
+      mode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+    });
   });
 
   it("throws on unsupported site", () => {
