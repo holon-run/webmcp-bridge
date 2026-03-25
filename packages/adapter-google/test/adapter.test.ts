@@ -311,6 +311,7 @@ describe("createAdapter", () => {
           images: [],
         },
         true,
+        true,
         {
           status: "probe",
           active: false,
@@ -362,6 +363,7 @@ describe("createAdapter", () => {
           images: [],
         },
         true,
+        true,
         {
           status: "probe",
           active: false,
@@ -412,6 +414,7 @@ describe("createAdapter", () => {
           responseCount: 0,
           images: [],
         },
+        true,
         true,
         {
           status: "error",
@@ -465,6 +468,9 @@ describe("createAdapter", () => {
             "Pro Advanced math and code with 3.1 Pro",
           ],
         },
+        false,
+        true,
+        false,
         true,
         {
           status: "probe",
@@ -538,6 +544,9 @@ describe("createAdapter", () => {
         {
           status: "selected",
         },
+        false,
+        true,
+        false,
         true,
         {
           status: "probe",
