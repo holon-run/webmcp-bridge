@@ -24,7 +24,7 @@ shell_join() {
 
 remove_file_if_exists() {
   local path="$1"
-  if [[ -n "$path" && -e "$path" ]]; then
+  if [[ -n "$path" && ( -e "$path" || -L "$path" ) && -L "$path" ]]; then
     rm -f "$path"
   fi
 }
@@ -139,12 +139,9 @@ link_install_args+=(--force)
 
 "${link_command[@]}" "${link_install_args[@]}" >/dev/null
 
-resolved_legacy_ui_path="$(command -v "$legacy_ui_link_name" 2>/dev/null || true)"
-remove_file_if_exists "$resolved_legacy_ui_path"
-
 if [[ -n "$link_dir" ]]; then
   remove_file_if_exists "$link_dir/$legacy_ui_link_name"
-elif [[ -e "$HOME/.local/bin/$legacy_ui_link_name" ]]; then
+else
   remove_file_if_exists "$HOME/.local/bin/$legacy_ui_link_name"
 fi
 

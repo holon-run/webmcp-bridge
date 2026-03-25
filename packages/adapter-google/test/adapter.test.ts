@@ -455,6 +455,7 @@ describe("createAdapter", () => {
           responseCount: 1,
           images: [],
         },
+        false,
         {
           status: "unsupported",
           currentMode: "Thinking",
@@ -532,6 +533,7 @@ describe("createAdapter", () => {
           responseCount: 0,
           images: [],
         },
+        false,
         true,
         {
           status: "selected",

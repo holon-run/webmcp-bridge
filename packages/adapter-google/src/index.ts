@@ -1385,7 +1385,7 @@ export function createAdapter(): SiteAdapter {
         if (mode === "image") {
           imageModeSelection = await selectGeminiImageMode(livePage);
         }
-        await submitGeminiPrompt(livePage, prompt, mode === "image" ? "text" : mode);
+        await submitGeminiPrompt(livePage, prompt, mode);
         try {
           const waitResult = await waitForGeminiResponse(livePage, mode, timeoutMs, {
             responseText: previousSnapshot.responseText,
