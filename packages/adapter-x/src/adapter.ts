@@ -1156,21 +1156,33 @@ function escapeHtml(value: string): string {
 }
 
 function convertMarkdownInlineToHtml(value: string): string {
-  const escaped = escapeHtml(value);
-  return escaped
+  const placeholders: string[] = [];
+  const reserve = (html: string): string => {
+    const token = `__WEBMCP_HTML_${placeholders.length}__`;
+    placeholders.push(html);
+    return token;
+  };
+
+  let rendered = value
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, altRaw: string, destinationRaw: string) => {
       const alt = escapeHtml(altRaw.trim());
       const destination = escapeHtml(stripMarkdownImageDestination(destinationRaw));
-      return `<img src="${destination}" alt="${alt}">`;
+      return reserve(`<img src="${destination}" alt="${alt}">`);
     })
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, textRaw: string, hrefRaw: string) => {
-      const text = textRaw.trim() || hrefRaw.trim();
+      const text = escapeHtml(textRaw.trim() || hrefRaw.trim());
       const href = escapeHtml(hrefRaw.trim());
-      return `<a href="${href}">${escapeHtml(text)}</a>`;
+      return reserve(`<a href="${href}">${text}</a>`);
     })
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>");
+    .replace(/`([^`]+)`/g, (_match, codeRaw: string) => reserve(`<code>${escapeHtml(codeRaw)}</code>`))
+    .replace(/\*\*([^*]+)\*\*/g, (_match, textRaw: string) => reserve(`<strong>${escapeHtml(textRaw)}</strong>`))
+    .replace(/\*([^*]+)\*/g, (_match, textRaw: string) => reserve(`<em>${escapeHtml(textRaw)}</em>`));
+
+  rendered = escapeHtml(rendered);
+  return rendered.replace(/__WEBMCP_HTML_(\d+)__/g, (_match, indexRaw: string) => {
+    const index = Number.parseInt(indexRaw, 10);
+    return placeholders[index] ?? "";
+  });
 }
 
 function convertMarkdownToHtml(markdown: string): string {
@@ -3997,11 +4009,11 @@ async function setArticleTitle(page: Page, title: string): Promise<boolean> {
 }
 
 async function pasteArticleMarkdown(page: Page, markdown: string, html?: string): Promise<boolean> {
-  let success = false;
+  let pasted = false;
   if (typeof (page as { locator?: unknown }).locator === "function") {
     const composerLocator = page.locator("[data-testid='composer'][role='textbox']").first();
-    success = await composerLocator.click().then(() => true).catch(() => false);
-    if (success) {
+    const clicked = await composerLocator.click().then(() => true).catch(() => false);
+    if (clicked) {
       const wroteClipboard = await page.evaluate(async ({ plainText, htmlText }) => {
         try {
           const ClipboardItemCtor = (window as typeof window & { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
@@ -4024,20 +4036,21 @@ async function pasteArticleMarkdown(page: Page, markdown: string, html?: string)
         }
       }, { plainText: markdown, htmlText: html }).catch(() => false);
       if (wroteClipboard) {
-        success = await page.keyboard.press("Meta+V").then(() => true).catch(() => false);
+        const pasteShortcut = process.platform === "darwin" ? "Meta+V" : "Control+V";
+        pasted = await page.keyboard.press(pasteShortcut).then(() => true).catch(() => false);
       }
-      if (!success) {
+      if (!pasted) {
         const keyboard = page.keyboard as { insertText?: (value: string) => Promise<void>; type?: (value: string) => Promise<void> };
         if (typeof keyboard.insertText === "function") {
-          success = await keyboard.insertText(markdown).then(() => true).catch(() => false);
+          pasted = await keyboard.insertText(markdown).then(() => true).catch(() => false);
         } else if (typeof keyboard.type === "function") {
-          success = await keyboard.type(markdown).then(() => true).catch(() => false);
+          pasted = await keyboard.type(markdown).then(() => true).catch(() => false);
         }
       }
     }
   }
-  if (!success) {
-    success = await page.evaluate(({ op, markdownText, htmlText }) => {
+  if (!pasted) {
+    pasted = await page.evaluate(({ op, markdownText, htmlText }) => {
       if (op !== "article_paste_markdown") {
         return false;
       }
@@ -4061,7 +4074,7 @@ async function pasteArticleMarkdown(page: Page, markdown: string, html?: string)
       return true;
     }, { op: "article_paste_markdown", markdownText: markdown, htmlText: html }).catch(() => false);
   }
-  if (!success) {
+  if (!pasted) {
     return false;
   }
   const requiredSnippets = extractArticleConfirmationSnippets(markdown);

@@ -54,6 +54,11 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   const articleRenderedText = () =>
     (articleHtml || articleMarkdown)
       .replace(/<[^>]+>/g, " ")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, "&")
       .replace(/\s+/g, " ")
       .trim();
   let replyConfirmAttempts = 0;
@@ -1604,6 +1609,35 @@ describe("createXAdapter", () => {
     expect(draftState.html).toContain("<h2>Section</h2>");
     expect(draftState.html).toContain("<ul><li>first item</li><li>second item</li></ul>");
     expect(draftState.html).toContain('<pre><code class="language-bash">npm install demo</code></pre>');
+  });
+
+  it("escapes rich html content without double-escaping link entities", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-escape-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    await writeFile(
+      markdownPath,
+      "# Title\n\nVisit [R&D](https://example.com?a=1&b=2) and keep <unsafe> text.\n",
+    );
+    const { page, getArticleDraftState } = createMockPage();
+
+    const result = await adapter.callTool(
+      {
+        name: "article.draftMarkdown",
+        input: { markdownPath },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      editUrl: expect.any(String),
+    });
+    const draftState = getArticleDraftState();
+    expect(draftState.html).toContain('<a href="https://example.com?a=1&amp;b=2">R&amp;D</a>');
+    expect(draftState.html).toContain("&lt;unsafe&gt;");
+    expect(draftState.html).not.toContain("&amp;amp;");
   });
 
   it("publishes one existing article draft by id", async () => {
