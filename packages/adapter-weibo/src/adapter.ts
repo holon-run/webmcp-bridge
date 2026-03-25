@@ -422,10 +422,19 @@ async function ensureCaptureInstalled(page: Parameters<SiteAdapter["callTool"]>[
   await page.evaluate(CAPTURE_INJECT_SCRIPT).catch(() => {});
 }
 
-async function warmHomeTimelinePage(page: Parameters<SiteAdapter["callTool"]>[1]["page"]): Promise<void> {
-  await page.goto("https://weibo.com/", { waitUntil: "domcontentloaded", timeout: 30_000 });
-  await ensureCaptureInstalled(page);
-  await page.waitForTimeout(800);
+async function withEphemeralPage<T>(
+  ownerPage: Parameters<SiteAdapter["callTool"]>[1]["page"],
+  url: string,
+  run: (ephemeralPage: Parameters<SiteAdapter["callTool"]>[1]["page"]) => Promise<T>,
+): Promise<T> {
+  const ephemeralPage = await ownerPage.context().newPage();
+  try {
+    await ensureCaptureInstalled(ephemeralPage);
+    await ephemeralPage.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    return await run(ephemeralPage);
+  } finally {
+    await ephemeralPage.close().catch(() => {});
+  }
 }
 
 async function detectAuthState(page: {
@@ -1700,8 +1709,10 @@ export function createWeiboAdapter(): SiteAdapter {
         const networkCursor = parsedCursor?.kind === "network" ? parsedCursor.value : undefined;
         let networkResult = await readTimelineViaNetwork(page, limit, networkCursor);
         if (networkResult.source !== "network" && parsedCursor?.kind !== "dom") {
-          await warmHomeTimelinePage(page);
-          networkResult = await readTimelineViaNetwork(page, limit, networkCursor);
+          networkResult = await withEphemeralPage(page, "https://weibo.com/", async (ephemeralPage) => {
+            await ephemeralPage.waitForTimeout(800);
+            return await readTimelineViaNetwork(ephemeralPage, limit, networkCursor);
+          });
         }
         if (networkResult.source === "network" && networkResult.items.length > 0) {
           return {

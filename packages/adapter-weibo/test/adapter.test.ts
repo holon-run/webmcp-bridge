@@ -17,7 +17,19 @@ function createMockPage(options?: {
   aiSummary?: Record<string, unknown>;
 }) {
   let timelinePass = 0;
-  const page = {
+  const page: {
+    addInitScript: ReturnType<typeof vi.fn>;
+    goto: ReturnType<typeof vi.fn>;
+    url: ReturnType<typeof vi.fn>;
+    title: ReturnType<typeof vi.fn>;
+    waitForTimeout: ReturnType<typeof vi.fn>;
+    evaluate: ReturnType<typeof vi.fn>;
+    context?: ReturnType<typeof vi.fn>;
+    __childPage?: {
+      goto: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+    };
+  } = {
     addInitScript: vi.fn(async () => {}),
     goto: vi.fn(async () => {}),
     url: vi.fn(() => options?.url ?? "https://weibo.com"),
@@ -79,8 +91,19 @@ function createMockPage(options?: {
       return undefined;
     }),
   };
-
-  return page;
+  const childPage = {
+    addInitScript: vi.fn(async () => {}),
+    goto: vi.fn(async () => {}),
+    url: vi.fn(() => options?.url ?? "https://weibo.com"),
+    title: vi.fn(async () => options?.title ?? "微博"),
+    waitForTimeout: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    evaluate: page.evaluate,
+  };
+  page.context = vi.fn(() => ({
+    newPage: vi.fn(async () => childPage),
+  }));
+  return Object.assign(page, { __childPage: childPage });
 }
 
 describe("adapter-weibo manifest", () => {
@@ -137,7 +160,11 @@ describe("createAdapter", () => {
       nextCursor: "dom:2",
       source: "dom",
     });
-    expect(page.goto).toHaveBeenCalledWith("https://weibo.com/", {
+    expect(page.goto).not.toHaveBeenCalledWith("https://weibo.com/", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    expect((page as typeof page & { __childPage: { goto: ReturnType<typeof vi.fn> } }).__childPage.goto).toHaveBeenCalledWith("https://weibo.com/", {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
