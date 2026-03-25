@@ -1,3 +1,5 @@
+/* global process, fetch, document, location, HTMLAnchorElement, URL, console */
+
 import { chromium } from "playwright";
 
 const browserUrl = process.env.BROWSER_URL ?? "http://127.0.0.1:9222";
@@ -5,17 +7,6 @@ const query = process.env.WEIBO_QUERY ?? "OpenAI";
 const uid = process.env.WEIBO_UID ?? "1648815335";
 const postId = process.env.WEIBO_POST_ID ?? "5279584255214211";
 const authorUid = process.env.WEIBO_POST_AUTHOR_UID ?? "2155926845";
-
-function summarizeTimelineItem(item) {
-  return {
-    id: item?.idstr || item?.mid || item?.id || null,
-    text: typeof item?.text_raw === "string"
-      ? item.text_raw.slice(0, 80)
-      : typeof item?.text === "string"
-        ? item.text.slice(0, 80)
-        : "",
-  };
-}
 
 const browser = await chromium.connectOverCDP(browserUrl);
 const context = browser.contexts()[0];
