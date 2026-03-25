@@ -5,7 +5,7 @@
   "description": "Monorepo for bridging local MCP clients to browser WebMCP through Playwright, adapters, and native example apps.",
   "license": "MIT",
   "type": "module",
-  "homepage": "https://github.com/holon-run/webmcp-bridge#readme",
+  "homepage": "https://webmcp-bridge.holon.run",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/holon-run/webmcp-bridge.git"
