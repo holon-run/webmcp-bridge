@@ -1,0 +1,23 @@
+{
+  "siteTitle": "webmcp-bridge",
+  "siteDescription": "Bridge local MCP clients to browser WebMCP tools through native-first browser runtimes and thin fallback adapters.",
+  "siteUrl": "https://webmcp-bridge.holon.run",
+  "theme": "atlas",
+  "template": "document",
+  "showHomeIndex": true,
+  "topNav": [
+    { "label": "Start", "href": "/getting-started/" },
+    { "label": "Reference", "href": "/reference/" },
+    { "label": "Adapters", "href": "/adapters/" },
+    { "label": "Skills", "href": "/skills/" },
+    { "label": "Ops", "href": "/operations/" }
+  ],
+  "footerNav": [
+    { "label": "GitHub", "href": "https://github.com/holon-run/webmcp-bridge" },
+    { "label": "npm", "href": "https://www.npmjs.com/search?q=%40webmcp-bridge" }
+  ],
+  "footerText": "webmcp-bridge docs",
+  "editLink": {
+    "baseUrl": "https://github.com/holon-run/webmcp-bridge/blob/main/docs/site/"
+  }
+}
