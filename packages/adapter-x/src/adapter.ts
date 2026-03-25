@@ -109,6 +109,20 @@ type ArticleDraftAssets = {
   inlineImages: ArticleInlineImage[];
 };
 
+type ArticleDraftSummary = {
+  id: string;
+  title: string;
+  updatedAt?: string;
+  hasCoverImage: boolean;
+  editUrl: string;
+  previewUrl: string;
+};
+
+type NormalizedArticleMarkdown = {
+  title: string;
+  bodyMarkdown: string;
+};
+
 export type CreateXAdapterOptions = {
   composeConfirmTimeoutMs?: number;
   grokResponseTimeoutMs?: number;
@@ -594,6 +608,43 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
+    name: "article.listDrafts",
+    description: "List existing X article drafts from the authenticated account",
+    inputSchema: {
+      type: "object",
+      description: "List article drafts owned by the authenticated X account.",
+      properties: {},
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
+    name: "article.getDraft",
+    description: "Read one X article draft by id, preview url, or edit url",
+    inputSchema: {
+      type: "object",
+      description: "Fetch one draft from the X article editor using article id, preview URL, or edit URL.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Draft preview URL or edit URL.",
+          minLength: 1,
+        },
+        id: {
+          type: "string",
+          description: "Draft article id. Used when url is not provided.",
+          minLength: 1,
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+  {
     name: "article.draftMarkdown",
     description: "Create one X article draft from a local markdown file",
     inputSchema: {
@@ -615,6 +666,46 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         coverImagePath: {
           type: "string",
           description: "Optional absolute local image path for the article cover image.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+      },
+      required: ["markdownPath"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.upsertDraftMarkdown",
+    description: "Create or update one X article draft from a local markdown file",
+    inputSchema: {
+      type: "object",
+      description:
+        "Create a new draft when id/url is omitted, or update the existing draft identified by id, preview URL, or edit URL.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Draft preview URL or edit URL.",
+          minLength: 1,
+        },
+        id: {
+          type: "string",
+          description: "Draft article id. Used when url is not provided.",
+          minLength: 1,
+        },
+        markdownPath: {
+          type: "string",
+          description: "Absolute local file path to the markdown file to apply.",
+          minLength: 1,
+          "x-uxc-kind": "file-path",
+        },
+        title: {
+          type: "string",
+          description: "Optional title override. When omitted, the first markdown heading becomes the article title.",
+          minLength: 1,
+        },
+        coverImagePath: {
+          type: "string",
+          description: "Optional absolute local image path for the article cover image when creating a new draft.",
           minLength: 1,
           "x-uxc-kind": "file-path",
         },
@@ -1144,6 +1235,57 @@ function extractArticleTitle(markdown: string, markdownPath: string, explicitTit
     return headingMatch[1].trim();
   }
   return basename(markdownPath, extname(markdownPath)).trim() || "Untitled";
+}
+
+function normalizeArticleTitleForComparison(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function normalizeArticleMarkdown(markdown: string, markdownPath: string, explicitTitle?: string): NormalizedArticleMarkdown {
+  const normalized = markdown.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  const explicit = typeof explicitTitle === "string" ? explicitTitle.trim() : "";
+  const derivedTitle = extractArticleTitle(normalized, markdownPath, explicitTitle);
+  const comparisonTitle = normalizeArticleTitleForComparison(derivedTitle);
+  const output: string[] = [];
+  let insideFence = false;
+  let firstH1Handled = false;
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      insideFence = !insideFence;
+      output.push(line);
+      continue;
+    }
+    if (insideFence) {
+      output.push(line);
+      continue;
+    }
+    const match = line.match(/^(\s*)#\s+(.+?)\s*$/);
+    if (!match) {
+      output.push(line);
+      continue;
+    }
+
+    const headingText = (match[2] ?? "").trim();
+    if (!firstH1Handled) {
+      firstH1Handled = true;
+      if (!explicit || normalizeArticleTitleForComparison(headingText) === comparisonTitle) {
+        continue;
+      }
+    }
+    output.push(`${match[1]}## ${headingText}`);
+  }
+
+  const bodyMarkdown = output.join("\n").replace(/^\s*\n/, "").trim();
+  return {
+    title: derivedTitle,
+    bodyMarkdown,
+  };
 }
 
 function escapeHtml(value: string): string {
@@ -4194,6 +4336,30 @@ async function uploadArticleFile(page: Page, filePath: string): Promise<boolean>
   }
 }
 
+async function waitForArticleCoverApplied(page: Page): Promise<boolean> {
+  return await page
+    .waitForFunction(() => {
+      const hasRemoveControl = Array.from(document.querySelectorAll<HTMLElement>("button, div[role='button']")).some((element) => {
+        const aria = (element.getAttribute("aria-label") || "").toLowerCase();
+        const text = (element.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        return aria.includes("remove photo") || text === "remove photo";
+      });
+      const coverImages = Array.from((document.querySelector("main") ?? document.body).querySelectorAll<HTMLImageElement>("img[src]"))
+        .filter((img) => !img.closest("nav, header, aside"))
+        .map((img) => ({
+          url: img.currentSrc || img.src,
+          width: img.naturalWidth || 0,
+          height: img.naturalHeight || 0,
+        }))
+        .filter((item) => /^https?:\/\//.test(item.url))
+        .filter((item) => !/\/profile_images\/|\/emoji\/|\/hashflags\//.test(item.url))
+        .filter((item) => item.width >= 200 || item.height >= 120);
+      return hasRemoveControl && coverImages.length > 0;
+    }, undefined, { timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+}
+
 async function placeArticleCursorAtMarker(page: Page, marker: string): Promise<boolean> {
   return (
     (await page.evaluate(({ op, markerText }) => {
@@ -4297,9 +4463,26 @@ function parseArticleIdFromUrl(url: string): string | undefined {
     return undefined;
   }
   const match = parsed.pathname.match(
-    /^\/(?:compose\/articles\/edit|i\/article|i\/articles|[^/]+\/article|articles)\/(\d+)(?:\/|$)/,
+    /^\/(?:compose\/articles\/edit|i\/article|i\/articles|[^/]+\/article|articles)\/(\d+)(?:\/preview)?(?:\/|$)/,
   );
   return match?.[1];
+}
+
+function buildArticleEditUrl(articleId: string): string {
+  return `https://x.com/compose/articles/edit/${encodeURIComponent(articleId)}`;
+}
+
+function buildArticlePreviewUrl(articleId: string): string {
+  return `https://x.com/i/articles/${encodeURIComponent(articleId)}/preview`;
+}
+
+function isArticlePreviewUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url, "https://x.com");
+    return /\/preview(?:\/|$)/.test(parsed.pathname) && parseArticleIdFromUrl(parsed.toString()) !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 async function waitForCapturedOperation(page: Page, op: string, timeoutMs = 10_000): Promise<void> {
@@ -4367,7 +4550,9 @@ async function readArticleFromEditorPage(
       normalize(document.querySelector<HTMLElement>("h1")?.innerText || "");
     const composer = document.querySelector<HTMLElement>("[data-testid='composer'][role='textbox']");
     const rawText = (composer?.innerText || composer?.textContent || "").trim();
-    const images = Array.from(document.querySelectorAll<HTMLImageElement>("img[src]"))
+    const editorRoot = document.querySelector("main") ?? document.body;
+    const images = Array.from(editorRoot.querySelectorAll<HTMLImageElement>("img[src]"))
+      .filter((img) => !img.closest("nav, header, aside, [data-testid='SideNav_AccountSwitcher_Button']"))
       .map((img) => ({
         url: img.currentSrc || img.src,
         alt: normalize(img.alt || ""),
@@ -4375,7 +4560,8 @@ async function readArticleFromEditorPage(
         height: img.naturalHeight || 0,
       }))
       .filter((item) => /^https?:\/\//.test(item.url))
-      .filter((item) => item.width > 64 || item.height > 64);
+      .filter((item) => item.width > 64 || item.height > 64)
+      .filter((item) => !/\/profile_images\/|\/emoji\/|\/hashflags\//.test(item.url));
     const deduped = new Map<string, { url: string; alt?: string }>();
     for (const image of images) {
       if (!deduped.has(image.url)) {
@@ -4412,18 +4598,286 @@ async function readArticleFromEditorPage(
       editUrl: typeof article.editUrl === "string" ? article.editUrl : page.url(),
       images: inlineImages,
       source: "editor",
+      published: false,
     },
   };
+  if (articleId) {
+    (output.article as Record<string, JsonValue>).previewUrl = buildArticlePreviewUrl(articleId);
+  }
   if (coverImage && typeof coverImage === "object" && coverImage !== null && "url" in coverImage) {
     (output.article as Record<string, JsonValue>).coverImageUrl = (coverImage as { url: string }).url;
+    (output.article as Record<string, JsonValue>).hasCoverImage = true;
+  } else {
+    (output.article as Record<string, JsonValue>).hasCoverImage = false;
   }
   if (articleId) {
     (output.article as Record<string, JsonValue>).sessionScoped = sessionScoped === true;
   }
-  if (sessionScoped === true) {
-    (output.article as Record<string, JsonValue>).published = false;
-  }
   return output;
+}
+
+async function listArticleDrafts(page: Page): Promise<JsonValue> {
+  return await withEphemeralPage(page, "https://x.com/compose/articles", async (articlePage) => {
+    await articlePage.waitForTimeout(1_000);
+    await waitForCapturedOperation(articlePage, "ArticleEntitiesSlice", 12_000);
+    const result = await articlePage.evaluate(async ({ op }) => {
+      if (op !== "article_list_drafts") {
+        return undefined;
+      }
+
+      const normalizeInline = (value: string): string => value.replace(/\s+/g, " ").trim();
+      const parseJsonSafely = (value: string | null): Record<string, unknown> => {
+        if (!value) {
+          return {};
+        }
+        try {
+          const parsed = JSON.parse(value);
+          return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+        } catch {
+          return {};
+        }
+      };
+      const toHttpsImage = (value: unknown): string | undefined =>
+        typeof value === "string" && /^https?:\/\//.test(value) ? value : undefined;
+      const sanitizeHeaders = (headers?: Record<string, string>): Record<string, string> => {
+        const blockedPrefixes = ["sec-", ":"];
+        const blockedExact = new Set(["host", "content-length", "cookie", "origin", "referer", "connection"]);
+        const output: Record<string, string> = {};
+        if (!headers) {
+          return output;
+        }
+        for (const [key, value] of Object.entries(headers)) {
+          const normalized = key.toLowerCase();
+          if (blockedExact.has(normalized) || blockedPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+            continue;
+          }
+          output[normalized] = value;
+        }
+        return output;
+      };
+      const extractUpdatedAt = (record: Record<string, unknown>): string | undefined => {
+        const metadata = (record.metadata as Record<string, unknown> | undefined) ?? {};
+        const candidates = [
+          metadata.updated_at_secs,
+          metadata.last_edited_at_secs,
+          metadata.last_updated_at_secs,
+          metadata.created_at_secs,
+          metadata.first_published_at_secs,
+        ];
+        for (const candidate of candidates) {
+          if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+            return new Date(candidate * 1000).toISOString();
+          }
+        }
+        return undefined;
+      };
+      const extractNextCursor = (sliceInfo: unknown): string | undefined => {
+        if (!sliceInfo || typeof sliceInfo !== "object" || Array.isArray(sliceInfo)) {
+          return undefined;
+        }
+        const record = sliceInfo as Record<string, unknown>;
+        const keys = ["next_cursor", "nextCursor", "cursor", "bottom_cursor"];
+        for (const key of keys) {
+          if (typeof record[key] === "string" && record[key]) {
+            return record[key] as string;
+          }
+        }
+        return undefined;
+      };
+
+      const globalAny = window as unknown as {
+        __WEBMCP_X_CAPTURE__?: {
+          entries?: Array<{
+            op?: string;
+            url?: string;
+            method?: string;
+            headers?: Record<string, string>;
+          }>;
+        };
+      };
+      const entries = Array.isArray(globalAny.__WEBMCP_X_CAPTURE__?.entries)
+        ? globalAny.__WEBMCP_X_CAPTURE__?.entries ?? []
+        : [];
+      const template = (() => {
+        for (let i = entries.length - 1; i >= 0; i -= 1) {
+          const entry = entries[i];
+          if (!entry || entry.op !== "ArticleEntitiesSlice" || !entry.url || !entry.method) {
+            continue;
+          }
+          return {
+            url: entry.url,
+            method: entry.method,
+            headers: entry.headers ?? {},
+          };
+        }
+        return null;
+      })();
+      if (!template) {
+        return { drafts: [] };
+      }
+
+      const templateUrl = new URL(template.url, location.origin);
+      const templateVariables = parseJsonSafely(templateUrl.searchParams.get("variables"));
+      const templateFeatures = parseJsonSafely(templateUrl.searchParams.get("features"));
+      const headers = sanitizeHeaders(template.headers);
+      const userId = typeof templateVariables.userId === "string" ? templateVariables.userId : "";
+      if (!userId) {
+        return { drafts: [] };
+      }
+
+      const fetchSlice = async (cursor?: string): Promise<unknown> => {
+        const vars: Record<string, unknown> = {
+          ...templateVariables,
+          userId,
+          lifecycle: "Draft",
+          count: 20,
+        };
+        if (cursor) {
+          vars.cursor = cursor;
+        } else {
+          delete vars.cursor;
+        }
+        const requestUrl = new URL(template.url, location.origin);
+        requestUrl.searchParams.set("variables", JSON.stringify(vars));
+        if (Object.keys(templateFeatures).length > 0) {
+          requestUrl.searchParams.set("features", JSON.stringify(templateFeatures));
+        }
+        const response = await fetch(requestUrl.toString(), {
+          method: template.method,
+          headers,
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error(`http_${response.status}`);
+        }
+        return await response.json();
+      };
+
+      const drafts: Array<Record<string, unknown>> = [];
+      let cursor: string | undefined;
+      for (let pageIndex = 0; pageIndex < 8; pageIndex += 1) {
+        let responseJson: unknown;
+        try {
+          responseJson = await fetchSlice(cursor);
+        } catch {
+          break;
+        }
+        const slice =
+          ((responseJson as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined)?.user as
+            | Record<string, unknown>
+            | undefined;
+        const result = (slice?.result as Record<string, unknown> | undefined)?.articles_article_mixer_slice as
+          | Record<string, unknown>
+          | undefined;
+        const items = Array.isArray(result?.items) ? result.items : [];
+        for (const rawItem of items) {
+          if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+            continue;
+          }
+          const item = rawItem as Record<string, unknown>;
+          const articleResult = (item.article_entity_results as Record<string, unknown> | undefined)?.result as
+            | Record<string, unknown>
+            | undefined;
+          if (!articleResult) {
+            continue;
+          }
+          const restId = typeof articleResult.rest_id === "string" ? articleResult.rest_id : "";
+          if (!restId) {
+            continue;
+          }
+          const coverMedia = articleResult.cover_media as Record<string, unknown> | undefined;
+          const hasCoverImage =
+            toHttpsImage(coverMedia?.original_img_url) ??
+            toHttpsImage(coverMedia?.media_url_https) ??
+            toHttpsImage(coverMedia?.media_url);
+          drafts.push({
+            id: restId,
+            title: typeof articleResult.title === "string" ? normalizeInline(articleResult.title) : "",
+            updatedAt: extractUpdatedAt(articleResult),
+            hasCoverImage: Boolean(hasCoverImage),
+            editUrl: `https://x.com/compose/articles/edit/${restId}`,
+            previewUrl: `https://x.com/i/articles/${restId}/preview`,
+          });
+        }
+        cursor = extractNextCursor(result?.slice_info);
+        if (!cursor) {
+          break;
+        }
+      }
+      return { drafts };
+    }, { op: "article_list_drafts" }).catch(() => undefined);
+
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      return errorResult("UPSTREAM_CHANGED", "article drafts could not be listed");
+    }
+    const drafts = Array.isArray((result as Record<string, unknown>).drafts)
+      ? ((result as Record<string, unknown>).drafts as unknown[])
+      : [];
+    const normalizedDrafts = drafts.filter((draft): draft is ArticleDraftSummary => {
+        return Boolean(
+          draft &&
+          typeof draft === "object" &&
+          !Array.isArray(draft) &&
+          typeof (draft as Record<string, unknown>).id === "string" &&
+          typeof (draft as Record<string, unknown>).editUrl === "string" &&
+          typeof (draft as Record<string, unknown>).previewUrl === "string",
+        );
+      });
+
+    for (const draft of normalizedDrafts) {
+      if (draft.hasCoverImage) {
+        continue;
+      }
+      const cachedPage = getCachedArticleDraftPage(page, draft.id);
+      if (cachedPage) {
+        const cachedRead = await readArticleFromEditorPage(cachedPage, draft.id, true);
+        if (
+          cachedRead &&
+          typeof cachedRead === "object" &&
+          !Array.isArray(cachedRead) &&
+          "article" in cachedRead &&
+          cachedRead.article &&
+          typeof cachedRead.article === "object" &&
+          !Array.isArray(cachedRead.article) &&
+          (cachedRead.article as Record<string, unknown>).hasCoverImage === true
+        ) {
+          draft.hasCoverImage = true;
+          continue;
+        }
+      }
+      const liveRead = await withEphemeralPage(page, buildArticleEditUrl(draft.id), async (draftPage) => {
+        await waitForArticleEditorSurface(draftPage);
+        await ensureArticleDraftLoaded(draftPage, draft.id);
+        return await readArticleFromEditorPage(draftPage, draft.id, false);
+      }).catch(() => undefined);
+      if (
+        liveRead &&
+        typeof liveRead === "object" &&
+        !Array.isArray(liveRead) &&
+        "article" in liveRead &&
+        liveRead.article &&
+        typeof liveRead.article === "object" &&
+        !Array.isArray(liveRead.article) &&
+        (liveRead.article as Record<string, unknown>).hasCoverImage === true
+      ) {
+        draft.hasCoverImage = true;
+      }
+    }
+
+    return {
+      drafts: normalizedDrafts,
+    };
+  });
+}
+
+async function getArticleDraft(page: Page, targetUrl: string): Promise<JsonValue> {
+  const articleId = parseArticleIdFromUrl(targetUrl);
+  if (!articleId) {
+    return errorResult("VALIDATION_ERROR", "url or id is required");
+  }
+  return await withArticleDraftPage(page, buildArticleEditUrl(articleId), async (articlePage, resolvedId, sessionScoped) => {
+    return await readArticleFromEditorPage(articlePage, resolvedId ?? articleId, sessionScoped);
+  });
 }
 
 function parseArticleReadErrorCode(value: JsonValue): string | undefined {
@@ -5185,7 +5639,7 @@ async function readArticleByUrl(page: Page, targetUrl: string, authorHandle?: st
       }
     }
   }
-  const useEditor = targetUrl.includes("/compose/articles/edit/");
+  const useEditor = targetUrl.includes("/compose/articles/edit/") || isArticlePreviewUrl(targetUrl);
   if (articleId) {
     const cachedPage = getCachedArticleDraftPage(page, articleId);
     if (cachedPage) {
@@ -5195,7 +5649,7 @@ async function readArticleByUrl(page: Page, targetUrl: string, authorHandle?: st
     }
   }
   if (useEditor) {
-    return await withEphemeralPage(page, targetUrl, async (articlePage) => {
+    return await withEphemeralPage(page, articleId ? buildArticleEditUrl(articleId) : targetUrl, async (articlePage) => {
       await waitForArticleEditorSurface(articlePage);
       await ensureArticleDraftLoaded(articlePage, articleId);
       return await readArticleFromEditorPage(articlePage, articleId, false);
@@ -5507,8 +5961,9 @@ async function draftArticleMarkdown(
     return errorResult("VALIDATION_ERROR", `markdownPath was not found: ${markdownPath}`);
   }
 
-  const title = extractArticleTitle(markdown, resolvedMarkdown.attachment.path, explicitTitle);
-  const draftAssets = prepareArticleMarkdown(markdown, resolvedMarkdown.attachment.path);
+  const normalized = normalizeArticleMarkdown(markdown, resolvedMarkdown.attachment.path, explicitTitle);
+  const title = normalized.title;
+  const draftAssets = prepareArticleMarkdown(normalized.bodyMarkdown, resolvedMarkdown.attachment.path);
   const resolvedInlineImages: ArticleInlineImage[] = [];
   for (const image of draftAssets.inlineImages) {
     const resolved = await resolveArticleAttachment(image.path, image.marker);
@@ -5554,6 +6009,10 @@ async function draftArticleMarkdown(
       if (!coverUploaded) {
         return errorResult("UPSTREAM_CHANGED", "article cover upload failed");
       }
+      const coverApplied = await waitForArticleCoverApplied(articlePage);
+      if (!coverApplied) {
+        return errorResult("ACTION_UNCONFIRMED", "article cover upload was not confirmed");
+      }
     }
 
     const pasted = await pasteArticleMarkdown(articlePage, draftAssets.markdown, draftAssets.html);
@@ -5580,6 +6039,8 @@ async function draftArticleMarkdown(
     };
     if (articleId) {
       output.articleId = articleId;
+      output.draftId = articleId;
+      output.previewUrl = buildArticlePreviewUrl(articleId);
       const persisted = await waitForArticleDraftPersisted(articlePage, articleId, title);
       output.persisted = persisted;
       output.sessionScoped = !persisted;
@@ -5726,6 +6187,10 @@ async function setArticleCoverImage(
     if (!coverUploaded) {
       return errorResult("UPSTREAM_CHANGED", "article cover upload failed");
     }
+    const coverApplied = await waitForArticleCoverApplied(articlePage);
+    if (!coverApplied) {
+      return errorResult("ACTION_UNCONFIRMED", "article cover upload was not confirmed");
+    }
     const output: Record<string, JsonValue> = {
       ok: true,
       editUrl: articlePage.url(),
@@ -5753,8 +6218,9 @@ async function updateArticleMarkdown(
   if (markdown === undefined) {
     return errorResult("VALIDATION_ERROR", `markdownPath was not found: ${markdownPath}`);
   }
-  const title = extractArticleTitle(markdown, resolvedMarkdown.attachment.path, explicitTitle);
-  const draftAssets = prepareArticleMarkdown(markdown, resolvedMarkdown.attachment.path);
+  const normalized = normalizeArticleMarkdown(markdown, resolvedMarkdown.attachment.path, explicitTitle);
+  const title = normalized.title;
+  const draftAssets = prepareArticleMarkdown(normalized.bodyMarkdown, resolvedMarkdown.attachment.path);
   const resolvedInlineImages: ArticleInlineImage[] = [];
   for (const image of draftAssets.inlineImages) {
     const resolved = await resolveArticleAttachment(image.path, image.marker);
@@ -5796,12 +6262,27 @@ async function updateArticleMarkdown(
     };
     if (articleId) {
       output.articleId = articleId;
+      output.draftId = articleId;
+      output.previewUrl = buildArticlePreviewUrl(articleId);
       const persisted = await waitForArticleDraftPersisted(articlePage, articleId, title);
       output.persisted = persisted;
       output.sessionScoped = sessionScoped === true || !persisted;
     }
     return output;
   });
+}
+
+async function upsertArticleDraftMarkdown(
+  page: Page,
+  targetUrl: string | undefined,
+  markdownPath: string,
+  explicitTitle: string | undefined,
+  coverImagePath: string | undefined,
+): Promise<JsonValue> {
+  if (targetUrl) {
+    return await updateArticleMarkdown(page, targetUrl, markdownPath, explicitTitle);
+  }
+  return await draftArticleMarkdown(page, markdownPath, explicitTitle, coverImagePath);
 }
 
 async function waitForGrokSurface(page: Page): Promise<void> {
@@ -6072,7 +6553,7 @@ async function askGrokViaNetwork(
     };
   }>(responseText);
   const finalParts = collectTextByTag(
-    entries.map((entry) => {
+    entries.map((entry: { conversationId?: string; result?: { message?: string; messageTag?: string } }) => {
       const output: { message?: string; messageTag?: string } = {};
       if (typeof entry.result?.message === "string") {
         output.message = entry.result.message;
@@ -6920,6 +7401,32 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         return await readArticleByUrl(page, targetUrl, authorHandle || undefined);
       }
 
+      if (name === "article.listDrafts") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        return await listArticleDrafts(page);
+      }
+
+      if (name === "article.getDraft") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
+        if (!articleId && !url) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const targetUrl = articleId ? buildArticleEditUrl(articleId) : url;
+        if (!targetUrl) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        return await getArticleDraft(page, targetUrl);
+      }
+
       if (name === "article.draftMarkdown") {
         const authCheck = await requireAuthenticated(page);
         if (!authCheck.ok) {
@@ -6934,6 +7441,30 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         const coverImagePath = typeof args.coverImagePath === "string" ? args.coverImagePath.trim() : "";
         return await draftArticleMarkdown(
           page,
+          markdownPath,
+          explicitTitle || undefined,
+          coverImagePath || undefined,
+        );
+      }
+
+      if (name === "article.upsertDraftMarkdown") {
+        const authCheck = await requireAuthenticated(page);
+        if (!authCheck.ok) {
+          return authCheck.result;
+        }
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        const markdownPath = typeof args.markdownPath === "string" ? args.markdownPath.trim() : "";
+        if (!markdownPath) {
+          return errorResult("VALIDATION_ERROR", "markdownPath is required");
+        }
+        const explicitTitle = typeof args.title === "string" ? args.title.trim() : "";
+        const coverImagePath = typeof args.coverImagePath === "string" ? args.coverImagePath.trim() : "";
+        const articleId = id || (url ? parseArticleIdFromUrl(url) : undefined);
+        const targetUrl = articleId ? buildArticleEditUrl(articleId) : "";
+        return await upsertArticleDraftMarkdown(
+          page,
+          targetUrl || undefined,
           markdownPath,
           explicitTitle || undefined,
           coverImagePath || undefined,
