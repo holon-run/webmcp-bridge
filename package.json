@@ -28,7 +28,11 @@
     "typecheck": "pnpm -r --filter \"@webmcp-bridge/*\" run typecheck && pnpm -r --filter \"@webmcp-bridge/example-*\" run typecheck",
     "test": "vitest run",
     "lint": "eslint .",
-    "format": "prettier --check ."
+    "format": "prettier --check .",
+    "docs:dev": "npx -y mdorigin dev --root docs/site",
+    "docs:build:index": "npx -y mdorigin build index --root docs/site",
+    "docs:build:cloudflare": "npx -y mdorigin build cloudflare --root docs/site",
+    "docs:build": "pnpm docs:build:index && pnpm docs:build:cloudflare"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.6",
