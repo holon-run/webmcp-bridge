@@ -156,11 +156,17 @@ Built-in fallback adapter mode:
 webmcp-local-mcp --site x --headless --user-data-dir ~/.uxc/webmcp-profile/x
 ```
 
-For auth-sensitive sites such as `x` and `google`, the recommended first step is a headed
+For auth-sensitive sites such as `x`, `google`, and `weibo`, the recommended first step is a headed
 session with a managed profile so local-mcp can bootstrap a normal browser for manual sign-in:
 
 ```bash
 webmcp-local-mcp --site x --no-headless --user-data-dir ~/.uxc/webmcp-profile/x
+```
+
+Weibo example:
+
+```bash
+webmcp-local-mcp --site weibo --no-headless --user-data-dir ~/.uxc/webmcp-profile/weibo
 ```
 
 Deterministic fixture mode:
@@ -204,6 +210,7 @@ See [examples/board/README.md](examples/board/README.md) for the full collaborat
 - `@webmcp-bridge/core`: shared bridge contracts and shim runtime.
 - `@webmcp-bridge/playwright`: WebMCP page gateway for Playwright.
 - `@webmcp-bridge/adapter-x`: production fallback adapter for X/Twitter.
+- `@webmcp-bridge/adapter-weibo`: fallback adapter for Weibo home, post, user, and search reads.
 - `@webmcp-bridge/adapter-fixture`: deterministic fallback adapter for integration/contract tests.
 - `@webmcp-bridge/testkit`: shared contract test helpers.
 - `@webmcp-bridge/local-mcp`: local stdio MCP server.

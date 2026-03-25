@@ -80,6 +80,15 @@ describe("resolveSiteSource", () => {
     expect(typeof site.createFallbackAdapter).toBe("function");
   });
 
+  it("resolves built-in weibo site", async () => {
+    const site = await resolveSiteSource({ site: "weibo" });
+    expect(site.source).toBe("builtin");
+    expect(site.id).toBe("weibo");
+    expect(site.manifest.defaultUrl).toBe("https://weibo.com");
+    expect(site.manifest.hostPatterns).toContain("weibo.com");
+    expect(typeof site.createFallbackAdapter).toBe("function");
+  });
+
   it("still accepts legacy auth manifest fields", async () => {
     const module = await createTempAdapterModule(`
       export const manifest = {

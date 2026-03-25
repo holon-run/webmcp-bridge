@@ -157,6 +157,25 @@ vi.mock("../src/sites.js", () => ({
         },
       };
     }
+    if (options.site === "weibo") {
+      return {
+        id: "weibo",
+        source: "builtin",
+        manifest: {
+          id: "weibo.com",
+          displayName: "Weibo",
+          version: "0.5.0",
+          bridgeApiVersion: "1.0.0",
+          defaultUrl: "https://weibo.com",
+          hostPatterns: ["weibo.com", "*.weibo.com"],
+          authPolicy: {
+            mode: "bootstrap_then_attach",
+            authProbeTool: "auth.get",
+            allowAnonymousTools: true,
+          },
+        },
+      };
+    }
     throw new Error(`unsupported mocked site: ${String(options.site)}`);
   }),
 }));
@@ -342,6 +361,66 @@ describe("startLocalMcpBridge", () => {
       ok: true,
       mode: "attach",
     });
+  });
+
+  it("starts builtin weibo and exposes adapter-backed tools through the gateway proxy", async () => {
+    const weiboRuntime = createRuntimeHandle({
+      site: "weibo",
+      targetUrl: "https://weibo.com",
+      mode: "adapter-shim",
+      gateway: {
+        listTools: vi.fn(async () => [
+          { name: "auth.get", inputSchema: { type: "object" } },
+          { name: "search.ai.summary", inputSchema: { type: "object" } },
+        ]),
+        callTool: vi.fn(async (name: string, input: Record<string, unknown>) => ({
+          name,
+          input,
+          source: "network",
+        })),
+      },
+    });
+    mockSessionMetadata = {
+      version: 2,
+      site: "weibo",
+      profilePath: "/tmp/mock-weibo-profile",
+      targetUrl: "https://weibo.com",
+      authPolicyMode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
+      sessionState: "authenticated",
+      authState: "authenticated",
+      controlMode: "none",
+      ownership: "none",
+      updatedAt: new Date().toISOString(),
+    };
+    runtimeQueue = [weiboRuntime];
+    startedRuntimeHandles = [];
+
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    await startLocalMcpBridge({
+      site: "weibo",
+      userDataDir: "/tmp/mock-weibo-profile",
+      serviceVersion: "0.1.0-test",
+      input: new PassThrough(),
+    });
+
+    expect(startedRuntimeHandles[0]?.site).toBe("weibo");
+    expect(startedRuntimeHandles[0]?.targetUrl).toBe("https://weibo.com");
+    await expect(capturedServerOptions?.gateway.listTools()).resolves.toEqual([
+      { name: "auth.get", inputSchema: { type: "object" } },
+      { name: "search.ai.summary", inputSchema: { type: "object" } },
+    ]);
+    await expect(
+      capturedServerOptions?.gateway.callTool("search.ai.summary", { query: "OpenAI" }),
+    ).resolves.toEqual({
+      name: "search.ai.summary",
+      input: { query: "OpenAI" },
+      source: "network",
+    });
+    expect(weiboRuntime.gateway.callTool).toHaveBeenCalledWith("search.ai.summary", { query: "OpenAI" });
   });
 
   it("fails closed when attach startup and recovery both fail", async () => {

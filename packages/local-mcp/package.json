@@ -48,6 +48,7 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@webmcp-bridge/adapter-fixture": "workspace:*",
     "@webmcp-bridge/adapter-google": "workspace:*",
+    "@webmcp-bridge/adapter-weibo": "workspace:*",
     "@webmcp-bridge/adapter-x": "workspace:*",
     "@webmcp-bridge/core": "workspace:*",
     "@webmcp-bridge/playwright": "workspace:*",

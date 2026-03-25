@@ -1,35 +1,23 @@
 /**
- * This module defines built-in site presets and external adapter-module loading.
- * It depends on adapter packages and adapter contracts so runtime startup can resolve one fallback adapter source per process.
+ * This module defines built-in site presets and adapter-module loading.
+ * It depends on adapter contracts and lazy module resolution so runtime startup can resolve one fallback adapter source per process without static adapter imports.
  */
 
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
-import {
-  createAdapter as createFixtureAdapter,
-  manifest as fixtureManifest,
-} from "@webmcp-bridge/adapter-fixture";
-import {
-  createAdapter as createGoogleAdapter,
-  manifest as googleManifest,
-} from "@webmcp-bridge/adapter-google";
-import {
-  createAdapter as createXAdapter,
-  manifest as xManifest,
-} from "@webmcp-bridge/adapter-x";
 import type {
   AdapterManifest,
   SiteAdapter,
   SiteAdapterModule,
 } from "@webmcp-bridge/playwright";
 
-export type BuiltinSite = "x" | "google" | "fixture";
+export type BuiltinSite = "x" | "google" | "weibo" | "fixture";
 
 export type SiteDefinition = {
   id: string;
   source: "builtin" | "external" | "native";
   manifest: AdapterManifest;
-  createFallbackAdapter?: () => SiteAdapter;
+  createFallbackAdapter?: () => Promise<SiteAdapter>;
   adapterModule?: string;
 };
 
@@ -39,24 +27,80 @@ export type ResolveSiteSourceOptions = {
   moduleBaseDir?: string;
 };
 
-const BUILTIN_SITE_DEFINITIONS: Record<BuiltinSite, SiteDefinition> = {
+type BuiltinSiteDefinition = SiteDefinition & {
+  adapterModule: string;
+};
+
+const BUILTIN_SITE_DEFINITIONS: Record<BuiltinSite, BuiltinSiteDefinition> = {
   x: {
     id: "x",
     source: "builtin",
-    manifest: xManifest,
-    createFallbackAdapter: () => createXAdapter(),
+    manifest: {
+      id: "x.com",
+      displayName: "X",
+      version: "0.5.1",
+      bridgeApiVersion: "1.0.0",
+      defaultUrl: "https://x.com/home",
+      hostPatterns: ["x.com", "www.x.com", "*.x.com"],
+      authPolicy: {
+        mode: "bootstrap_then_attach",
+        authProbeTool: "auth.get",
+        allowAnonymousTools: true,
+      },
+    },
+    adapterModule: "@webmcp-bridge/adapter-x",
   },
   google: {
     id: "google",
     source: "builtin",
-    manifest: googleManifest,
-    createFallbackAdapter: () => createGoogleAdapter(),
+    manifest: {
+      id: "gemini.google.com",
+      displayName: "Google Gemini",
+      version: "0.5.1",
+      bridgeApiVersion: "1.0.0",
+      defaultUrl: "https://gemini.google.com/app",
+      hostPatterns: ["gemini.google.com", "www.google.com", "google.com", "*.google.com"],
+      authPolicy: {
+        mode: "bootstrap_then_attach",
+        authProbeTool: "auth.get",
+        allowAnonymousTools: true,
+      },
+    },
+    adapterModule: "@webmcp-bridge/adapter-google",
+  },
+  weibo: {
+    id: "weibo",
+    source: "builtin",
+    manifest: {
+      id: "weibo.com",
+      displayName: "Weibo",
+      version: "0.5.1",
+      bridgeApiVersion: "1.0.0",
+      defaultUrl: "https://weibo.com",
+      hostPatterns: ["weibo.com", "www.weibo.com", "*.weibo.com", "m.weibo.cn"],
+      authPolicy: {
+        mode: "bootstrap_then_attach",
+        authProbeTool: "auth.get",
+        allowAnonymousTools: true,
+      },
+    },
+    adapterModule: "@webmcp-bridge/adapter-weibo",
   },
   fixture: {
     id: "fixture",
     source: "builtin",
-    manifest: fixtureManifest,
-    createFallbackAdapter: () => createFixtureAdapter(),
+    manifest: {
+      id: "fixture",
+      displayName: "Fixture",
+      version: "0.5.1",
+      bridgeApiVersion: "1.0.0",
+      defaultUrl: "about:blank",
+      hostPatterns: ["about:blank"],
+      authPolicy: {
+        mode: "none",
+      },
+    },
+    adapterModule: "@webmcp-bridge/adapter-fixture",
   },
 };
 
@@ -231,14 +275,25 @@ async function resolveExternalSiteDefinition(
     id: adapterModuleExports.manifest.id,
     source: "external",
     manifest: adapterModuleExports.manifest,
-    createFallbackAdapter: adapterModuleExports.createAdapter,
+    createFallbackAdapter: async () => adapterModuleExports.createAdapter(),
     adapterModule,
   };
 }
 
+async function createBuiltinFallbackAdapter(site: BuiltinSite): Promise<SiteAdapter> {
+  const definition = BUILTIN_SITE_DEFINITIONS[site];
+  const loaded = await import(definition.adapterModule);
+  const adapterModuleExports = validateSiteAdapterModule(loaded);
+  return adapterModuleExports.createAdapter();
+}
+
 export function resolveSiteDefinition(site: string): SiteDefinition {
   if (site in BUILTIN_SITE_DEFINITIONS) {
-    return BUILTIN_SITE_DEFINITIONS[site as BuiltinSite];
+    const builtin = BUILTIN_SITE_DEFINITIONS[site as BuiltinSite];
+    return {
+      ...builtin,
+      createFallbackAdapter: async () => await createBuiltinFallbackAdapter(site as BuiltinSite),
+    };
   }
   throw new Error(`unsupported site: ${site}`);
 }
