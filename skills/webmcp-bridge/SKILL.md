@@ -49,6 +49,28 @@ If the target site does not expose native WebMCP and does not already have a fal
    - success path: `.ok == true`, consume `.data`
    - failure path: `.ok == false`, inspect `.error.code` and `.error.message`
 
+## When Only Bridge Tools Are Visible
+
+If `<site>-webmcp-cli -h` only shows `bridge.*` tools, do not keep retrying site tools blindly. The bridge is alive, but the page runtime is not attached to site tools yet.
+
+Use this recovery order:
+
+1. Inspect session state first:
+   - `<site>-webmcp-cli bridge.session.status`
+2. If the session is bootstrap-only or auth is incomplete:
+   - run `<site>-webmcp-cli bridge.session.bootstrap`
+   - complete login in the browser window
+   - then re-run `<site>-webmcp-cli -h`
+3. If a browser/profile already exists but the session is not attached to page tools:
+   - run `<site>-webmcp-cli bridge.session.attach`
+   - then re-run `<site>-webmcp-cli -h`
+4. If the task needs a visible browser:
+   - run `<site>-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'`
+   - run `<site>-webmcp-cli bridge.open`
+5. Only call site operations after help output shows site tools again.
+
+For auth-sensitive adapter sites such as `x` and `google`, seeing only bridge tools during first use is expected until bootstrap or attach completes successfully.
+
 ## Link Contract
 
 Every site gets one fixed command:

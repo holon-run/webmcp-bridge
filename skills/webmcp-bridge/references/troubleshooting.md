@@ -27,6 +27,51 @@ After login, switch back explicitly if needed:
 
 If `bridge.session.mode.set` returns `UNSUPPORTED_SESSION_CONTROL`, the current session is either external attach or bootstrap-only. Use a headed external browser, or finish attach first.
 
+## Only bridge tools are visible
+
+If `<site>-webmcp-cli -h` only lists `bridge.*`, the stdio bridge is running but the site runtime is not ready yet.
+
+Start with:
+
+```bash
+<site>-webmcp-cli bridge.session.status
+```
+
+Then choose the next step from the status:
+
+- If auth/bootstrap is incomplete, start or resume bootstrap:
+
+```bash
+<site>-webmcp-cli bridge.session.bootstrap
+```
+
+Complete login, then rerun:
+
+```bash
+<site>-webmcp-cli -h
+```
+
+- If the managed profile should already be logged in, attach the session:
+
+```bash
+<site>-webmcp-cli bridge.session.attach
+```
+
+Then rerun:
+
+```bash
+<site>-webmcp-cli -h
+```
+
+- If the task requires a visible browser while recovering:
+
+```bash
+<site>-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'
+<site>-webmcp-cli bridge.open
+```
+
+Only continue to business tools after help output shows the site operations again.
+
 ## The command default says headless but the session is still headed
 
 The launcher only sets the preferred default for bridge-managed sessions. It does not force the current live session to restart.

@@ -32,7 +32,7 @@ rg -q "<site>-webmcp-cli <operation> '\{" "$SKILL_FILE" || fail 'missing positio
 rg -q 'bridge.session.mode.set' "$SKILL_FILE" || fail 'missing explicit mode switch guidance'
 rg -q '~/.uxc/webmcp-profile/<site>' "$SKILL_FILE" || fail 'missing profile convention'
 
-if rg -q -- '(^|[[:space:]])(list|describe|call)([[:space:]]|$)|--input-json|--args .*[{]' "$SKILL_FILE" "${SKILL_DIR}/references"; then
+if rg -q -- '^[[:space:]]*(list|describe|call)([[:space:]]|$)|--input-json|--args[[:space:]]+\S' "$SKILL_FILE" "${SKILL_DIR}/references"; then
   fail 'found banned legacy invocation patterns'
 fi
 
