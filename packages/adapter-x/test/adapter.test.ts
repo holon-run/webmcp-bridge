@@ -51,6 +51,16 @@ type Behavior = {
 };
 
 function createMockPage(partial: Partial<Behavior> = {}) {
+  const articleRenderedText = () =>
+    (articleHtml || articleMarkdown)
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim();
   let replyConfirmAttempts = 0;
   let grokSubmitted = false;
   let uploadedFiles: string[] = [];
@@ -58,6 +68,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
   let currentUrl = "https://x.com/home";
   let articleTitle = "";
   let articleMarkdown = "";
+  let articleHtml = "";
   let articleDeleteMenuOpen = false;
   let tweetDeleteMenuOpen = false;
   const pendingDetectAuthErrors = [...(partial.detectAuthErrors ?? [])];
@@ -266,11 +277,13 @@ function createMockPage(partial: Partial<Behavior> = {}) {
           return false;
         }
         articleMarkdown = typeof command.markdownText === "string" ? command.markdownText : "";
+        articleHtml = typeof command.htmlText === "string" ? command.htmlText : "";
         return true;
       }
 
       if (command.op === "article_clear_body") {
         articleMarkdown = "";
+        articleHtml = "";
         return true;
       }
 
@@ -413,6 +426,20 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       uploadedFiles = Array.isArray(files) ? files : [files];
     }),
     waitForFunction: vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        Array.isArray((arg as Record<string, unknown>).snippets)
+      ) {
+        const renderedText = articleRenderedText();
+        const snippets = (arg as Record<string, unknown>).snippets as unknown[];
+        const ok = snippets.every((snippet) => typeof snippet === "string" && renderedText.includes(snippet));
+        if (!ok) {
+          throw new Error("timeout");
+        }
+        return true;
+      }
       if (
         arg &&
         typeof arg === "object" &&
@@ -708,7 +735,7 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     newPage,
     behavior,
     getUploadedFiles: () => uploadedFiles,
-    getArticleDraftState: () => ({ title: articleTitle, markdown: articleMarkdown, url: currentUrl }),
+    getArticleDraftState: () => ({ title: articleTitle, markdown: articleMarkdown, html: articleHtml, url: currentUrl }),
   };
 }
 
@@ -1497,10 +1524,14 @@ describe("createXAdapter", () => {
       hasCoverImage: true,
     });
     expect(getUploadedFiles()).toEqual([inlinePath]);
-    expect(getArticleDraftState()).toMatchObject({
+    const draftState = getArticleDraftState();
+    expect(draftState).toMatchObject({
       title: "Mock title",
       markdown: expect.stringContaining("[[WEBMCP_INLINE_IMAGE_1]]"),
     });
+    expect(draftState.html).toContain("<h1>Mock title</h1>");
+    expect(draftState.html).toContain("<p>Body text before image.</p>");
+    expect(draftState.html).toContain("<p>[[WEBMCP_INLINE_IMAGE_1]]</p>");
   });
 
   it("creates one article draft from markdown with cover and inline images", async () => {
@@ -1540,10 +1571,73 @@ describe("createXAdapter", () => {
       sessionScoped: false,
     });
     expect(getUploadedFiles()).toEqual([inlinePath]);
-    expect(getArticleDraftState()).toMatchObject({
+    const draftState = getArticleDraftState();
+    expect(draftState).toMatchObject({
       title: "Mock title",
       markdown: expect.stringContaining("[[WEBMCP_INLINE_IMAGE_1]]"),
     });
+    expect(draftState.html).toContain("<h1>Mock title</h1>");
+    expect(draftState.html).toContain("<p>Body text before image.</p>");
+    expect(draftState.html).toContain("<p>[[WEBMCP_INLINE_IMAGE_1]]</p>");
+  });
+
+  it("converts markdown structure to rich html for article paste", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-html-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    await writeFile(
+      markdownPath,
+      "# Title\n\nIntro paragraph.\n\n## Section\n\n- first item\n- second item\n\n```bash\nnpm install demo\n```\n",
+    );
+    const { page, getArticleDraftState } = createMockPage();
+
+    const result = await adapter.callTool(
+      {
+        name: "article.draftMarkdown",
+        input: { markdownPath },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      editUrl: expect.any(String),
+    });
+    const draftState = getArticleDraftState();
+    expect(draftState.html).toContain("<h1>Title</h1>");
+    expect(draftState.html).toContain("<h2>Section</h2>");
+    expect(draftState.html).toContain("<ul><li>first item</li><li>second item</li></ul>");
+    expect(draftState.html).toContain('<pre><code class="language-bash">npm install demo</code></pre>');
+  });
+
+  it("escapes rich html content without double-escaping link entities", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-escape-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    await writeFile(
+      markdownPath,
+      "# Title\n\nVisit [R&D](https://example.com?a=1&b=2) and keep <unsafe> text.\n",
+    );
+    const { page, getArticleDraftState } = createMockPage();
+
+    const result = await adapter.callTool(
+      {
+        name: "article.draftMarkdown",
+        input: { markdownPath },
+      },
+      { page: page as never },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      editUrl: expect.any(String),
+    });
+    const draftState = getArticleDraftState();
+    expect(draftState.html).toContain('<a href="https://example.com?a=1&amp;b=2">R&amp;D</a>');
+    expect(draftState.html).toContain("&lt;unsafe&gt;");
+    expect(draftState.html).not.toContain("&amp;amp;");
   });
 
   it("publishes one existing article draft by id", async () => {
