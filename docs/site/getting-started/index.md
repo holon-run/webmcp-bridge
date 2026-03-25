@@ -8,6 +8,10 @@ This guide is the shortest path to a working local bridge session.
 - Built-in adapter site: run `local-mcp` with `--site`
 - External adapter package: run `local-mcp` with `--adapter-module`
 
+## Before You Start
+
+Use the bridge only for research, development, testing, and normal authorized user flows. Do not use repository-provided adapters for unauthorized scraping, access-control bypass, or abusive automation against third-party services.
+
 ## Direct CLI
 
 Run a native site directly:

@@ -31,6 +31,22 @@ Without a bridge, local MCP clients cannot directly use browser-only WebMCP capa
 - browser app authors who want to expose native WebMCP tools
 - adapter authors who want a fallback path for sites without native WebMCP yet
 
+## Use Policy
+
+This project is intended for:
+
+- WebMCP research and experimentation
+- development, testing, and normal end-user workflows
+- user-authorized actions inside the user's own browser session
+
+It is not intended for:
+
+- unauthorized data collection or bulk scraping
+- bypassing access controls, rate limits, or platform restrictions
+- abusive automation, account misuse, or privacy-invasive collection
+
+Users are responsible for complying with applicable laws, website terms, and platform rules. If you use adapters or browser automation against a third-party service, you are responsible for that use and its consequences.
+
 ## What you can do with it
 
 - connect a local MCP client to a native WebMCP website

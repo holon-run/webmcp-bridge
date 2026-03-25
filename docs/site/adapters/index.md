@@ -15,6 +15,8 @@ They are used only when native WebMCP is unavailable.
 - fail closed on auth or ambiguous state
 - keep tool payloads JSON-serializable
 - keep site-specific behavior out of shared bridge packages
+- use adapters only for research, development, testing, and normal authorized user workflows
+- do not treat repository-provided adapters as a bulk-collection or bypass toolkit
 
 ## Creating New Adapters
 

@@ -26,6 +26,12 @@ It is native-first:
 - `@webmcp-bridge/core`: shared shim and runtime contracts
 - `examples/board`: native WebMCP example app
 
+## Use Policy
+
+This project is for WebMCP research, development, testing, and normal user-authorized browser workflows.
+
+It is not intended for unauthorized data collection, bulk scraping, access-control bypass, or abusive automation against third-party services. Operators are responsible for complying with applicable laws, platform rules, and website terms.
+
 ## Reader Paths
 
 ### I want to connect one site quickly
