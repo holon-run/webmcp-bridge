@@ -13,7 +13,7 @@ node packages/local-mcp/dist/cli.js [--site <site> | --adapter-module <specifier
 
 ## Source selection
 
-- `--site <site>`: use built-in adapter preset (`x`, `google`, or `fixture`).
+- `--site <site>`: use built-in adapter preset (`x`, `google`, `weibo`, or `fixture`).
 - `--adapter-module <specifier>`: use external adapter module (`npm` package name, file path, or `file://` URL).
 - If neither `--site` nor `--adapter-module` is provided, `--url` runs in native/polyfill mode (no adapter fallback).
 

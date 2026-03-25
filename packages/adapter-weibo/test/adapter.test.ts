@@ -137,6 +137,10 @@ describe("createAdapter", () => {
       nextCursor: "dom:2",
       source: "dom",
     });
+    expect(page.goto).toHaveBeenCalledWith("https://weibo.com/", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
   });
 
   it("rejects malformed timeline cursors", async () => {
@@ -386,6 +390,47 @@ describe("createAdapter", () => {
       format: "text",
       source: "dom",
       reason: "request_failed",
+    });
+  });
+
+  it("returns ai search metadata even when summary text is unavailable", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage();
+    page.evaluate = vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "url" in arg && "title" in arg) {
+        return {
+          state: "authenticated",
+          signals: ["feed-ui"],
+        };
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "inputQuery" in arg) {
+        return {
+          source: "network",
+          reason: "summary_unavailable",
+          result: {
+            query: "OpenAI",
+            displayQuery: "OpenAI",
+            format: "markdown",
+            status: 1,
+            qsStatus: 0,
+            statusStage: 0,
+          },
+        };
+      }
+      return undefined;
+    });
+
+    await expect(
+      adapter.callTool({ name: "search.ai.summary", input: { query: "OpenAI" } }, { page: page as never }),
+    ).resolves.toEqual({
+      query: "OpenAI",
+      displayQuery: "OpenAI",
+      format: "markdown",
+      status: 1,
+      qsStatus: 0,
+      statusStage: 0,
+      source: "network",
+      reason: "summary_unavailable",
     });
   });
 

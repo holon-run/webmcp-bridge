@@ -422,6 +422,12 @@ async function ensureCaptureInstalled(page: Parameters<SiteAdapter["callTool"]>[
   await page.evaluate(CAPTURE_INJECT_SCRIPT).catch(() => {});
 }
 
+async function warmHomeTimelinePage(page: Parameters<SiteAdapter["callTool"]>[1]["page"]): Promise<void> {
+  await page.goto("https://weibo.com/", { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await ensureCaptureInstalled(page);
+  await page.waitForTimeout(800);
+}
+
 async function detectAuthState(page: {
   evaluate: <T, Arg = void>(pageFunction: (arg: Arg) => T | Promise<T>, arg?: Arg) => Promise<T>;
   url: () => string;
@@ -891,6 +897,10 @@ async function readAiSearchSummaryViaNetwork(
           return { source: "dom" as const, reason: "request_failed" };
         }
       }
+      const summary =
+        typeof json.msg === "string" && json.msg.trim()
+          ? json.msg.trim()
+          : undefined;
 
       const midList = Array.isArray(json.mid_list)
         ? json.mid_list.flatMap((value) => {
@@ -911,7 +921,7 @@ async function readAiSearchSummaryViaNetwork(
           ...(typeof json.display_query === "string" && json.display_query.trim()
             ? { displayQuery: json.display_query.trim() }
             : {}),
-          ...(typeof json.msg === "string" && json.msg.trim() ? { summary: json.msg.trim() } : {}),
+          ...(summary ? { summary } : {}),
           ...(typeof json.msg_format === "string" && json.msg_format.trim() ? { format: json.msg_format.trim() } : {}),
           ...(typeof json.status === "number" ? { status: json.status } : {}),
           ...(typeof json.qs_status === "number" ? { qsStatus: json.qs_status } : {}),
@@ -919,6 +929,7 @@ async function readAiSearchSummaryViaNetwork(
           ...(typeof json.reference_num === "number" ? { referenceCount: json.reference_num } : {}),
           ...(midList.length > 0 ? { relatedPostIds: midList } : {}),
         },
+        ...(summary ? {} : { reason: "summary_unavailable" as const }),
       };
     },
     { inputQuery: query },
@@ -1016,7 +1027,7 @@ async function readTimelineViaNetwork(
 ): Promise<{ items: TimelineItem[]; nextCursor?: string; source: WeiboReadSource; reason?: string }> {
   const cachedTemplate = PROCESS_TEMPLATE_CACHE.get("timeline.home.list");
   const response = await page.evaluate(
-    async ({ inputLimit, inputCursor, fallbackTemplate }) => {
+    async ({ inputLimit, inputCursor, fallbackTemplate, headerAllowlist }) => {
       const globalAny = window as unknown as {
         __WEBMCP_WEIBO_CAPTURE__?: {
           entries?: Array<{
@@ -1058,11 +1069,12 @@ async function readTimelineViaNetwork(
         }
       }
       requestUrl.searchParams.set("count", String(inputLimit));
-      const headers = Object.fromEntries(
-        Object.entries(selected.headers ?? {}).filter(([key]) =>
-          ["x-xsrf-token", "client-version", "x-requested-with", "content-type"].includes(key.toLowerCase()),
-        ),
-      );
+      const headers = Object.entries(selected.headers ?? {}).reduce<Record<string, string>>((result, [key, value]) => {
+        if (typeof value === "string" && headerAllowlist.some((allowed) => allowed === key.toLowerCase())) {
+          result[key] = value;
+        }
+        return result;
+      }, {});
       let response: Response;
       try {
         response = await fetch(requestUrl.toString(), {
@@ -1101,6 +1113,7 @@ async function readTimelineViaNetwork(
       inputLimit: limit,
       inputCursor: cursor,
       fallbackTemplate: cachedTemplate,
+      headerAllowlist: [...TEMPLATE_HEADER_ALLOWLIST],
     },
   );
 
@@ -1144,7 +1157,7 @@ async function readPostViaNetwork(
 ): Promise<{ post?: TimelineItem; source: WeiboReadSource; reason?: string }> {
   const cachedTemplate = PROCESS_TEMPLATE_CACHE.get("post.get");
   const response = await page.evaluate(
-    async ({ inputId, fallbackTemplate }) => {
+    async ({ inputId, fallbackTemplate, headerAllowlist }) => {
       const globalAny = window as unknown as {
         __WEBMCP_WEIBO_CAPTURE__?: { entries?: Array<{ op?: string; url?: string; method?: string; headers?: Record<string, string> }> };
       };
@@ -1163,11 +1176,12 @@ async function readPostViaNetwork(
       requestUrl.pathname = "/ajax/statuses/show";
       requestUrl.search = "";
       requestUrl.searchParams.set("id", inputId);
-      const headers = Object.fromEntries(
-        Object.entries(selected.headers ?? {}).filter(([key]) =>
-          ["x-xsrf-token", "client-version", "x-requested-with", "content-type"].includes(key.toLowerCase()),
-        ),
-      );
+      const headers = Object.entries(selected.headers ?? {}).reduce<Record<string, string>>((result, [key, value]) => {
+        if (typeof value === "string" && headerAllowlist.some((allowed) => allowed === key.toLowerCase())) {
+          result[key] = value;
+        }
+        return result;
+      }, {});
       let response: Response;
       try {
         response = await fetch(requestUrl.toString(), {
@@ -1192,7 +1206,7 @@ async function readPostViaNetwork(
         },
       };
     },
-    { inputId: id, fallbackTemplate: cachedTemplate },
+    { inputId: id, fallbackTemplate: cachedTemplate, headerAllowlist: [...TEMPLATE_HEADER_ALLOWLIST] },
   );
   const typed = response as { post?: unknown; source?: "network" | "dom"; reason?: string; selectedTemplate?: RequestTemplate };
   if (!typed || typeof typed !== "object") {
@@ -1222,7 +1236,7 @@ async function readPostRepliesViaNetwork(
 ): Promise<{ items: TimelineItem[]; nextCursor?: string; source: "network" | "dom"; reason?: string }> {
   const cachedTemplate = PROCESS_TEMPLATE_CACHE.get("post.replies.list");
   const response = await page.evaluate(
-    async ({ inputId, inputCursor, fallbackTemplate }) => {
+    async ({ inputId, inputCursor, fallbackTemplate, headerAllowlist }) => {
       const globalAny = window as unknown as {
         __WEBMCP_WEIBO_CAPTURE__?: { entries?: Array<{ op?: string; url?: string; method?: string; headers?: Record<string, string> }> };
       };
@@ -1272,11 +1286,12 @@ async function readPostRepliesViaNetwork(
         requestUrl.searchParams.set("max_id", inputCursor.trim());
       }
 
-      const headers = Object.fromEntries(
-        Object.entries(selected.headers ?? {}).filter(([key]) =>
-          ["x-xsrf-token", "client-version", "x-requested-with", "content-type"].includes(key.toLowerCase()),
-        ),
-      );
+      const headers = Object.entries(selected.headers ?? {}).reduce<Record<string, string>>((result, [key, value]) => {
+        if (typeof value === "string" && headerAllowlist.some((allowed) => allowed === key.toLowerCase())) {
+          result[key] = value;
+        }
+        return result;
+      }, {});
       let response: Response;
       try {
         response = await fetch(requestUrl.toString(), {
@@ -1309,7 +1324,7 @@ async function readPostRepliesViaNetwork(
         },
       };
     },
-    { inputId: id, inputCursor: cursor, fallbackTemplate: cachedTemplate },
+    { inputId: id, inputCursor: cursor, fallbackTemplate: cachedTemplate, headerAllowlist: [...TEMPLATE_HEADER_ALLOWLIST] },
   );
   const typed = response as { items?: unknown[]; nextCursor?: string; source?: "network" | "dom"; reason?: string; selectedTemplate?: RequestTemplate };
   if (!typed || typeof typed !== "object") {
@@ -1369,7 +1384,7 @@ async function readPostRepostsViaNetwork(
 ): Promise<{ items: TimelineItem[]; nextCursor?: string; source: "network" | "dom"; reason?: string }> {
   const cachedTemplate = PROCESS_TEMPLATE_CACHE.get("post.repost.list");
   const response = await page.evaluate(
-    async ({ inputId, inputCursor, fallbackTemplate }) => {
+    async ({ inputId, inputCursor, fallbackTemplate, headerAllowlist }) => {
       const globalAny = window as unknown as {
         __WEBMCP_WEIBO_CAPTURE__?: { entries?: Array<{ op?: string; url?: string; method?: string; headers?: Record<string, string> }> };
       };
@@ -1394,11 +1409,12 @@ async function readPostRepostsViaNetwork(
       } else {
         requestUrl.searchParams.set("page", "1");
       }
-      const headers = Object.fromEntries(
-        Object.entries(selected.headers ?? {}).filter(([key]) =>
-          ["x-xsrf-token", "client-version", "x-requested-with", "content-type"].includes(key.toLowerCase()),
-        ),
-      );
+      const headers = Object.entries(selected.headers ?? {}).reduce<Record<string, string>>((result, [key, value]) => {
+        if (typeof value === "string" && headerAllowlist.some((allowed) => allowed === key.toLowerCase())) {
+          result[key] = value;
+        }
+        return result;
+      }, {});
       let response: Response;
       try {
         response = await fetch(requestUrl.toString(), {
@@ -1433,7 +1449,7 @@ async function readPostRepostsViaNetwork(
         },
       };
     },
-    { inputId: id, inputCursor: cursor, fallbackTemplate: cachedTemplate },
+    { inputId: id, inputCursor: cursor, fallbackTemplate: cachedTemplate, headerAllowlist: [...TEMPLATE_HEADER_ALLOWLIST] },
   );
   const typed = response as { items?: unknown[]; nextCursor?: string; source?: "network" | "dom"; reason?: string; selectedTemplate?: RequestTemplate };
   if (!typed || typeof typed !== "object") {
@@ -1469,7 +1485,7 @@ async function readUserViaNetwork(
 ): Promise<{ user?: UserProfile; source: "network" | "dom"; reason?: string }> {
   const cachedTemplate = PROCESS_TEMPLATE_CACHE.get("user.get");
   const response = await page.evaluate(
-    async ({ inputUid, fallbackTemplate }) => {
+    async ({ inputUid, fallbackTemplate, headerAllowlist }) => {
       const globalAny = window as unknown as {
         __WEBMCP_WEIBO_CAPTURE__?: { entries?: Array<{ op?: string; url?: string; method?: string; headers?: Record<string, string> }> };
       };
@@ -1488,11 +1504,12 @@ async function readUserViaNetwork(
       requestUrl.pathname = "/ajax/profile/info";
       requestUrl.search = "";
       requestUrl.searchParams.set("uid", inputUid);
-      const headers = Object.fromEntries(
-        Object.entries(selected.headers ?? {}).filter(([key]) =>
-          ["x-xsrf-token", "client-version", "x-requested-with", "content-type"].includes(key.toLowerCase()),
-        ),
-      );
+      const headers = Object.entries(selected.headers ?? {}).reduce<Record<string, string>>((result, [key, value]) => {
+        if (typeof value === "string" && headerAllowlist.some((allowed) => allowed === key.toLowerCase())) {
+          result[key] = value;
+        }
+        return result;
+      }, {});
       let response: Response;
       try {
         response = await fetch(requestUrl.toString(), {
@@ -1521,7 +1538,7 @@ async function readUserViaNetwork(
         },
       };
     },
-    { inputUid: uid, fallbackTemplate: cachedTemplate },
+    { inputUid: uid, fallbackTemplate: cachedTemplate, headerAllowlist: [...TEMPLATE_HEADER_ALLOWLIST] },
   );
   const typed = response as { user?: unknown; source?: "network" | "dom"; reason?: string; selectedTemplate?: RequestTemplate };
   if (!typed || typeof typed !== "object") {
@@ -1551,7 +1568,7 @@ async function readUserPostsViaNetwork(
 ): Promise<{ items: TimelineItem[]; nextCursor?: string; source: "network" | "dom"; reason?: string }> {
   const cachedTemplate = PROCESS_TEMPLATE_CACHE.get("user.posts.list");
   const response = await page.evaluate(
-    async ({ inputUid, inputCursor, fallbackTemplate }) => {
+    async ({ inputUid, inputCursor, fallbackTemplate, headerAllowlist }) => {
       const globalAny = window as unknown as {
         __WEBMCP_WEIBO_CAPTURE__?: { entries?: Array<{ op?: string; url?: string; method?: string; headers?: Record<string, string> }> };
       };
@@ -1572,11 +1589,12 @@ async function readUserPostsViaNetwork(
       requestUrl.searchParams.set("uid", inputUid);
       requestUrl.searchParams.set("feature", "0");
       requestUrl.searchParams.set("page", typeof inputCursor === "string" && inputCursor.trim() ? inputCursor.trim() : "1");
-      const headers = Object.fromEntries(
-        Object.entries(selected.headers ?? {}).filter(([key]) =>
-          ["x-xsrf-token", "client-version", "x-requested-with", "content-type"].includes(key.toLowerCase()),
-        ),
-      );
+      const headers = Object.entries(selected.headers ?? {}).reduce<Record<string, string>>((result, [key, value]) => {
+        if (typeof value === "string" && headerAllowlist.some((allowed) => allowed === key.toLowerCase())) {
+          result[key] = value;
+        }
+        return result;
+      }, {});
       let response: Response;
       try {
         response = await fetch(requestUrl.toString(), {
@@ -1608,7 +1626,7 @@ async function readUserPostsViaNetwork(
         },
       };
     },
-    { inputUid: uid, inputCursor: cursor, fallbackTemplate: cachedTemplate },
+    { inputUid: uid, inputCursor: cursor, fallbackTemplate: cachedTemplate, headerAllowlist: [...TEMPLATE_HEADER_ALLOWLIST] },
   );
   const typed = response as { items?: unknown[]; nextCursor?: string; source?: "network" | "dom"; reason?: string; selectedTemplate?: RequestTemplate };
   if (!typed || typeof typed !== "object") {
@@ -1680,7 +1698,11 @@ export function createWeiboAdapter(): SiteAdapter {
         }
 
         const networkCursor = parsedCursor?.kind === "network" ? parsedCursor.value : undefined;
-        const networkResult = await readTimelineViaNetwork(page, limit, networkCursor);
+        let networkResult = await readTimelineViaNetwork(page, limit, networkCursor);
+        if (networkResult.source !== "network" && parsedCursor?.kind !== "dom") {
+          await warmHomeTimelinePage(page);
+          networkResult = await readTimelineViaNetwork(page, limit, networkCursor);
+        }
         if (networkResult.source === "network" && networkResult.items.length > 0) {
           return {
             items: networkResult.items.slice(0, limit),

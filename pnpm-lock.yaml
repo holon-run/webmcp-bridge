@@ -112,6 +112,9 @@ importers:
 
   packages/adapter-weibo:
     dependencies:
+      '@webmcp-bridge/adapter-utils':
+        specifier: workspace:*
+        version: link:../adapter-utils
       '@webmcp-bridge/core':
         specifier: workspace:*
         version: link:../core
