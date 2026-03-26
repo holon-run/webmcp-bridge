@@ -8,6 +8,7 @@ They are used only when native WebMCP is unavailable.
 
 - [X](./x.md)
 - [Google And Gemini](./google.md)
+- [Weibo](./weibo.md)
 
 ## Adapter Rules
 
@@ -28,6 +29,9 @@ This repo also includes a dedicated authoring workflow:
 
 - [Adapter: Google And Gemini](./google.md)
   `@webmcp-bridge/adapter-google` handles Google and Gemini fallback automation when native WebMCP is unavailable.
+
+- [Adapter: Weibo](./weibo.md)
+  `@webmcp-bridge/adapter-weibo` supports Weibo reads, writes, article workflows, and search when native WebMCP is unavailable.
 
 - [Adapter: X](./x.md)
   `@webmcp-bridge/adapter-x` supports X and Twitter when native WebMCP is unavailable.

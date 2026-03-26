@@ -18,6 +18,7 @@ Public packages:
 - `@webmcp-bridge/adapter-fixture`
 - `@webmcp-bridge/adapter-google`
 - `@webmcp-bridge/adapter-x`
+- `@webmcp-bridge/adapter-weibo`
 - `@webmcp-bridge/local-mcp` (beta tag)
 - `@webmcp-bridge/testkit`
 
@@ -63,6 +64,7 @@ Current published skills:
 - `board-webmcp`
 - `x-webmcp`
 - `google-webmcp`
+- `weibo-webmcp`
 - `webmcp-adapter-creator`
 
 Release flow:
@@ -72,6 +74,7 @@ Release flow:
    - `bash skills/board-webmcp/scripts/validate.sh`
    - `bash skills/x-webmcp/scripts/validate.sh`
    - `bash skills/google-webmcp/scripts/validate.sh`
+   - `bash skills/weibo-webmcp/scripts/validate.sh`
    - `bash skills/webmcp-adapter-creator/scripts/validate.sh`
 2. Preview the registry changes:
 
@@ -89,14 +92,17 @@ Use `--bump minor` or `--bump major` only when the skill contract or workflow ch
 
 ## Current release prep
 
-The next `@webmcp-bridge/local-mcp` release includes:
+The next release line includes:
 
 - explicit `presentationMode` / `preferredPresentationMode` session state
 - `bridge.session.mode.get` and `bridge.session.mode.set`
 - single-link skill guidance with explicit runtime mode switching
-- new `x-webmcp` and `google-webmcp` skills
+- `x-webmcp`, `google-webmcp`, and `weibo-webmcp` skills
 - stabilized Grok and Gemini long prompt input and long-running wait handling
 - Google bootstrap convergence improvements that avoid extra windows
 - managed attach mode switching fixes for headed and headless transitions
 - X Articles draft lifecycle support: list drafts, read drafts by preview URL, update drafts in place, and confirm cover-image application
+- Weibo write flows for posts and comments
+- Weibo article drafting and publishing from markdown, including cover image upload
+- Weibo long-text hydration, media extraction, short-url decoding, and openable detail URLs
 - bridge skill guidance for recovering from bridge-only sessions through `bridge.session.status`, `bridge.session.bootstrap`, and `bridge.session.attach`

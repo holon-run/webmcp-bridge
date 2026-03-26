@@ -26,6 +26,16 @@ weibo-webmcp-cli post.replies.list '{"id":"5279584255214211"}'
 weibo-webmcp-cli post.repost.list '{"id":"5279584255214211"}'
 ```
 
+## Dry-run writes first
+
+```bash
+weibo-webmcp-cli post.create '{"text":"webmcp dry run","dryRun":true}'
+weibo-webmcp-cli comment.create '{"id":"5279584255214211","text":"webmcp dry run","dryRun":true}'
+weibo-webmcp-cli article.listDrafts
+weibo-webmcp-cli article.draftMarkdown '{"markdownPath":"/abs/path/article.md"}'
+weibo-webmcp-cli article.publishMarkdown '{"markdownPath":"/abs/path/article.md","coverImagePath":"/abs/path/cover.png","dryRun":true}'
+```
+
 ## Read profiles and user posts
 
 ```bash

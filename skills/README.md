@@ -13,7 +13,7 @@ This directory contains the skills that are maintained in this repository.
 - `google-webmcp`
   Site wrapper for Google and Gemini flows.
 - `weibo-webmcp`
-  Site wrapper for Weibo timeline, profile, and search flows.
+  Site wrapper for Weibo timeline, post, comment, article, and search flows.
 - `webmcp-adapter-creator`
   Workflow for creating new fallback site adapters.
 
@@ -51,7 +51,7 @@ Each skill usually contains:
   Connect a website to the local-mcp browser bridge through a fixed UXC link. Use when the user needs to operate native WebMCP sites or adapter-backed sites through local-mcp, manage per-site browser profiles, or switch bridge presentation modes explicitly.
 
 - [weibo-webmcp](./weibo-webmcp/)
-  Connect to Weibo through the built-in local-mcp Weibo adapter and one fixed UXC link. Use when the user wants to read timelines, inspect posts, browse user profiles, or run Weibo search from an authenticated browser profile.
+  Connect to Weibo through the built-in local-mcp Weibo adapter and one fixed UXC link. Use when the user wants to read timelines, inspect posts, publish posts or comments, manage Weibo articles, or run Weibo search from an authenticated browser profile.
 
 - [x-webmcp](./x-webmcp/)
   Connect to X and Grok through the built-in local-mcp X adapter and one fixed UXC link. Use when the user wants to read timelines, inspect tweets, post on X, or chat with Grok from an authenticated browser profile.

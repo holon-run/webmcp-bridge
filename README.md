@@ -226,19 +226,20 @@ See [examples/board/README.md](examples/board/README.md) for the full collaborat
 - `@webmcp-bridge/core`: shared bridge contracts and shim runtime.
 - `@webmcp-bridge/playwright`: WebMCP page gateway for Playwright.
 - `@webmcp-bridge/adapter-x`: production fallback adapter for X/Twitter.
-- `@webmcp-bridge/adapter-weibo`: fallback adapter for Weibo home, post, user, and search reads.
+- `@webmcp-bridge/adapter-weibo`: fallback adapter for Weibo reads, writes, article workflows, and search.
 - `@webmcp-bridge/adapter-fixture`: deterministic fallback adapter for integration/contract tests.
 - `@webmcp-bridge/testkit`: shared contract test helpers.
 - `@webmcp-bridge/local-mcp`: local stdio MCP server.
 
 ## Repository skills
 
-This repository includes five agent skills with distinct responsibilities:
+This repository includes six agent skills with distinct responsibilities:
 
 - `webmcp-bridge`: general bridge operations for existing sites. Use it to decide between `--url`, `--site`, and `--adapter-module`, create fixed `uxc` links, manage per-site profiles, and switch between headless and UI bridge modes.
 - `board-webmcp`: site wrapper for the public native demo at `https://board.holon.run`. Use it when the task is specifically about the shared board example.
 - `x-webmcp`: site wrapper for X, including timeline, Grok, and X Articles workflows.
 - `google-webmcp`: site wrapper for Google and Gemini workflows, including text and image generation.
+- `weibo-webmcp`: site wrapper for Weibo timeline, post, comment, article, and search workflows.
 - `webmcp-adapter-creator`: adapter creation workflow for sites that do not expose native WebMCP. Use it to scaffold a new adapter package, design tool schemas, and implement browser-side request-template execution.
 
 These skills assume the `uxc` CLI and the `uxc` skill are already installed.

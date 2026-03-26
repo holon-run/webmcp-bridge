@@ -15,7 +15,6 @@ It is native-first:
 - [Architecture](./reference/architecture.md)
 - [Adapters](./adapters/)
 - [Skills](./skills/)
-- [Release And Publishing](./operations/release.md)
 
 ## What Is In The Repo
 
@@ -23,6 +22,7 @@ It is native-first:
 - `@webmcp-bridge/playwright`: page gateway and browser lifecycle layer
 - `@webmcp-bridge/adapter-x`: X fallback adapter
 - `@webmcp-bridge/adapter-google`: Google and Gemini fallback adapter
+- `@webmcp-bridge/adapter-weibo`: Weibo fallback adapter
 - `@webmcp-bridge/core`: shared shim and runtime contracts
 - `examples/board`: native WebMCP example app
 
@@ -46,7 +46,7 @@ Go to [Bridge Session Model](./reference/session-lifecycle.md). That page explai
 
 Go to [Architecture](./reference/architecture.md).
 
-### I want to operate X or Gemini
+### I want to operate X, Gemini, or Weibo
 
 Go to [Adapters](./adapters/).
 
@@ -54,15 +54,10 @@ Go to [Adapters](./adapters/).
 
 Go to [Skills](./skills/).
 
-### I want to publish a new release
-
-Go to [Release And Publishing](./operations/release.md).
-
 <!-- INDEX:START -->
 
 - [Adapters](./adapters/)
 - [Getting Started](./getting-started/)
-- [Operations](./operations/)
 - [Reference](./reference/)
 - [Skills](./skills/)
 - [Tests And Validation](./tests/)

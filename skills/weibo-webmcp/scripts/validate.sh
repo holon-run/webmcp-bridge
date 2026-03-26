@@ -28,7 +28,8 @@ rg -q 'search.ai.summary -h' "$SKILL_FILE" || fail 'missing AI search help examp
 rg -q 'bridge.session.bootstrap' "$SKILL_FILE" || fail 'missing bootstrap guidance'
 rg -q 'bridge.session.mode.set' "$SKILL_FILE" || fail 'missing headed-mode guidance'
 rg -q '~/.uxc/webmcp-profile/weibo' "$SKILL_FILE" || fail 'missing profile convention'
-rg -q 'read-only' "$SKILL_FILE" || fail 'missing read-only guardrail'
+rg -q 'dryRun: true' "$SKILL_FILE" || fail 'missing dry-run guidance'
+rg -q 'article.publishMarkdown' "$SKILL_FILE" || fail 'missing article publish usage'
 
 if rg -q -- '(^|[[:space:]])(list|describe|call)([[:space:]]|$)|--input-json|--args .*[{]' "$SKILL_FILE" "${SKILL_DIR}/references"; then
   fail 'found banned legacy invocation patterns'

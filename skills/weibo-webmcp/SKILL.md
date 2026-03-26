@@ -1,6 +1,6 @@
 ---
 name: weibo-webmcp
-description: Connect to Weibo through the built-in local-mcp Weibo adapter and one fixed UXC link. Use when the user wants to read timelines, inspect posts, browse user profiles, or run Weibo search from an authenticated browser profile.
+description: Connect to Weibo through the built-in local-mcp Weibo adapter and one fixed UXC link. Use when the user wants to read timelines, inspect posts, publish posts or comments, manage Weibo articles, or run Weibo search from an authenticated browser profile.
 ---
 
 # Weibo WebMCP
@@ -36,15 +36,21 @@ For generic bridge setup patterns or non-Weibo sites, switch to `$webmcp-bridge`
      - `weibo-webmcp-cli bridge.open`
 4. Use read tools for timeline, posts, and profiles:
    - `weibo-webmcp-cli timeline.home.list limit=10`
-   - `weibo-webmcp-cli post.get '{"url":"https://weibo.com/123/detail/abcDEF"}'`
+   - `weibo-webmcp-cli post.get '{"url":"https://weibo.com/1648815335/QkMA02KXt"}'`
    - `weibo-webmcp-cli post.replies.list '{"id":"5279584255214211"}'`
    - `weibo-webmcp-cli post.repost.list '{"id":"5279584255214211"}'`
    - `weibo-webmcp-cli user.get screenName=jolestar`
    - `weibo-webmcp-cli user.posts.list '{"uid":"1648815335"}'`
-5. Use search tools for public results and AI summaries:
+5. Use write tools carefully:
+   - `weibo-webmcp-cli post.create '{"text":"webmcp dry run","dryRun":true}'`
+   - `weibo-webmcp-cli comment.create '{"id":"5279584255214211","text":"webmcp dry run","dryRun":true}'`
+   - `weibo-webmcp-cli article.listDrafts`
+   - `weibo-webmcp-cli article.draftMarkdown '{"markdownPath":"/abs/path/article.md"}'`
+   - `weibo-webmcp-cli article.publishMarkdown '{"markdownPath":"/abs/path/article.md","coverImagePath":"/abs/path/cover.png","dryRun":true}'`
+6. Use search tools for public results and AI summaries:
    - `weibo-webmcp-cli search.weibo '{"query":"OpenAI","limit":10}'`
    - `weibo-webmcp-cli search.ai.summary '{"query":"OpenAI"}'`
-6. Parse JSON output only:
+7. Parse JSON output only:
    - success path: `.ok == true`, consume `.data`
    - failure path: `.ok == false`, inspect `.error.code` and `.error.message`
 
@@ -72,10 +78,12 @@ skills/weibo-webmcp/scripts/ensure-links.sh
 
 - Keep the Weibo profile isolated from other sites.
 - Weibo uses `bootstrap_then_attach`; do not expect page tools to work until the managed profile is authenticated.
-- The current Weibo skill is read-only. Do not imply posting, liking, following, or any other write operation.
+- Prefer `dryRun: true` before any real write operation on a user account.
+- The current Weibo skill supports posting, commenting, and article drafting/publishing, but does not cover liking, following, deleting content, or account settings writes.
 - `timeline.home.list` is network-first but may warm templates in a dedicated read page; do not assume the currently visible tab is the one serving data.
 - `search.weibo` uses server-rendered results with page-number pagination, not a stable public JSON results API.
 - `search.ai.summary` can return structured status without a non-empty summary body. Treat `summary_unavailable` as a valid no-summary state, not an automatic failure.
+- Detail URLs returned by the adapter use `uid/mblogid` or `uid/number_id`; do not rewrite them into `handle/number_id`.
 - Prefer explicit `bridge.session.mode.set` over relaunching the command to change runtime mode.
 - If the user closes the visible Weibo window manually, the headed owner session ends. Run `weibo-webmcp-cli bridge.open` again if you still need a visible session on the same profile.
 
