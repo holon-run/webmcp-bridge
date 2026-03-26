@@ -1,5 +1,13 @@
 # @webmcp-bridge/adapter-x
 
+## 0.5.3
+
+### Patch Changes
+
+- @webmcp-bridge/core@0.5.3
+- @webmcp-bridge/playwright@0.5.3
+- @webmcp-bridge/adapter-utils@0.5.3
+
 ## 0.5.2
 
 ### Patch Changes

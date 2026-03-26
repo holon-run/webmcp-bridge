@@ -1,5 +1,17 @@
 # @webmcp-bridge/local-mcp
 
+## 0.5.3
+
+### Patch Changes
+
+- Updated dependencies [894b9af]
+  - @webmcp-bridge/adapter-weibo@0.6.0
+  - @webmcp-bridge/core@0.5.3
+  - @webmcp-bridge/playwright@0.5.3
+  - @webmcp-bridge/adapter-google@0.5.3
+  - @webmcp-bridge/adapter-x@0.5.3
+  - @webmcp-bridge/adapter-fixture@0.5.3
+
 ## 0.5.2
 
 ### Patch Changes
