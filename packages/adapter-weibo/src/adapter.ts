@@ -126,7 +126,7 @@ const LEGACY_DOM_CURSOR_PREFIX = "dom:";
 const WEIBO_ALLOWED_HOSTS = new Set(["weibo.com", "www.weibo.com", "m.weibo.cn"]);
 const TEMPLATE_HEADER_ALLOWLIST = ["x-xsrf-token", "client-version", "x-requested-with", "content-type"] as const;
 const HOME_TIMELINE_URL = "https://weibo.com/";
-const WEIBO_ARTICLE_EDITOR_URL = "https://card.weibo.com/article/v3/editor";
+const WEIBO_ARTICLE_EDITOR_URL = "https://card.weibo.com/article/v5/editor";
 
 type WeiboTemplateBucket =
   | "timeline.home.list"
@@ -670,9 +670,12 @@ function buildProfileUrl(screenName: string): string {
 }
 
 function buildArticleEditUrl(draftId?: string): string {
-  return draftId
-    ? `https://card.weibo.com/article/v5/editor#/draft/${encodeURIComponent(draftId)}`
-    : WEIBO_ARTICLE_EDITOR_URL;
+  if (!draftId) {
+    return WEIBO_ARTICLE_EDITOR_URL;
+  }
+  const url = new URL(WEIBO_ARTICLE_EDITOR_URL);
+  url.hash = `/draft/${encodeURIComponent(draftId)}`;
+  return url.toString();
 }
 
 function parseArticleDraftId(url: string): string | undefined {
@@ -1008,6 +1011,19 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+function sanitizeMarkdownHref(value: string): string | undefined {
+  const href = value.trim();
+  if (!href) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(href);
+    return ["http:", "https:", "mailto:"].includes(parsed.protocol) ? parsed.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function convertMarkdownInlineToHtml(value: string): string {
   const placeholders: string[] = [];
   const reserve = (html: string): string => {
@@ -1024,8 +1040,10 @@ function convertMarkdownInlineToHtml(value: string): string {
     })
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, textRaw: string, hrefRaw: string) => {
       const text = escapeHtml(textRaw.trim() || hrefRaw.trim());
-      const href = escapeHtml(hrefRaw.trim());
-      return reserve(`<a href="${href}">${text}</a>`);
+      const href = sanitizeMarkdownHref(hrefRaw);
+      return href
+        ? reserve(`<a href="${escapeHtml(href)}">${text}</a>`)
+        : text;
     })
     .replace(/`([^`]+)`/g, (_match, codeRaw: string) => reserve(`<code>${escapeHtml(codeRaw)}</code>`))
     .replace(/\*\*([^*]+)\*\*/g, (_match, textRaw: string) => reserve(`<strong>${escapeHtml(textRaw)}</strong>`))
@@ -1266,7 +1284,6 @@ async function clickTextAction(page: Page, labels: string[]): Promise<boolean> {
 }
 
 async function openFreshWeiboArticleEditor(page: Page): Promise<void> {
-  await page.goto(WEIBO_ARTICLE_EDITOR_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await waitForWeiboArticleEditor(page);
   await clickTextAction(page, ["写文章"]).catch(() => false);
   await page.waitForTimeout(800);
@@ -1666,7 +1683,8 @@ async function composeWeiboComment(page: Page, text: string, dryRun: boolean): P
       if (!label || !label.includes("评论")) {
         return false;
       }
-      return true;
+      const ariaDisabled = element.getAttribute("aria-disabled");
+      return !(element.hasAttribute("disabled") || ariaDisabled === "true" || ariaDisabled === "disabled");
     });
     if (!submit) {
       return { ok: false, reason: "submit_not_found" } as const;

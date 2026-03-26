@@ -44,7 +44,7 @@ function createMockPage(options?: {
     if (selector === ".image-list .image-item") {
       return {
         count: vi.fn(async () => coverLibraryCount),
-        nth: (_index: number) => ({
+        nth: () => ({
           count: vi.fn(async () => (coverLibraryCount > 0 ? 1 : 0)),
           click: vi.fn(async () => {
             if (coverLibraryCount > 0) {
@@ -82,7 +82,7 @@ function createMockPage(options?: {
         setInputFiles: vi.fn(async () => {}),
         isDisabled: vi.fn(async () => !coverSelectionEnabled),
       }),
-      nth: (_index: number) => ({
+      nth: () => ({
         count: vi.fn(async () => 0),
         click: vi.fn(async () => {}),
       }),
