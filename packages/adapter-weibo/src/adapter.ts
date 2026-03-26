@@ -10,6 +10,8 @@ import {
   type RequestTemplate,
   TemplateCache,
 } from "@webmcp-bridge/adapter-utils";
+import { readFile, stat } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
 import type { Page } from "playwright";
 
 type WeiboAuthState = "authenticated" | "auth_required" | "challenge_required";
@@ -21,6 +23,23 @@ type AuthProbeResult = {
   title: string;
 };
 
+type WeiboImageMedia = {
+  url: string;
+  width?: number;
+  height?: number;
+  previewUrl?: string;
+  type?: string;
+};
+
+type WeiboVideoMedia = {
+  url?: string;
+  hdUrl?: string;
+  coverUrl?: string;
+  pageUrl?: string;
+  durationSeconds?: number;
+  type?: string;
+};
+
 type TimelineItem = {
   id: string;
   url?: string;
@@ -28,6 +47,8 @@ type TimelineItem = {
   authorName?: string;
   authorUrl?: string;
   createdAt?: string;
+  images?: WeiboImageMedia[];
+  video?: WeiboVideoMedia;
 };
 
 type UserProfile = {
@@ -53,13 +74,59 @@ type AiSearchSummary = {
 
 type WeiboReadSource = "network" | "dom";
 
+type WeiboComposeDomResult = {
+  ok: boolean;
+  dryRun?: boolean;
+  reason?: string;
+  submitVisible?: boolean;
+};
+
+type WeiboComposeConfirmation = {
+  confirmed: boolean;
+  url?: string;
+};
+
+type WeiboArticleDraftSummary = {
+  id?: string;
+  title: string;
+  updatedAt?: string;
+  editUrl?: string;
+  active?: boolean;
+};
+
+type WeiboArticleDraft = WeiboArticleDraftSummary & {
+  lead?: string;
+  bodyText?: string;
+  bodyHtml?: string;
+  wordCount?: number;
+  hasCoverImage?: boolean;
+};
+
+type ArticleAttachment = {
+  path: string;
+  name: string;
+};
+
+type NormalizedArticleMarkdown = {
+  title: string;
+  bodyMarkdown: string;
+};
+
+type PreparedArticleMarkdown = {
+  markdown: string;
+  html: string;
+  lead?: string;
+};
+
 const DEFAULT_TIMELINE_LIMIT = 10;
 const MAX_TIMELINE_LIMIT = 20;
 const MAX_HOME_SCROLL_PASSES = 4;
+const DEFAULT_WRITE_CONFIRM_TIMEOUT_MS = 10_000;
 const LEGACY_DOM_CURSOR_PREFIX = "dom:";
 const WEIBO_ALLOWED_HOSTS = new Set(["weibo.com", "www.weibo.com", "m.weibo.cn"]);
 const TEMPLATE_HEADER_ALLOWLIST = ["x-xsrf-token", "client-version", "x-requested-with", "content-type"] as const;
 const HOME_TIMELINE_URL = "https://weibo.com/";
+const WEIBO_ARTICLE_EDITOR_URL = "https://card.weibo.com/article/v5/editor";
 
 type WeiboTemplateBucket =
   | "timeline.home.list"
@@ -149,6 +216,27 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
   },
   {
+    name: "post.create",
+    description: "Publish one Weibo post from the authenticated account",
+    inputSchema: {
+      type: "object",
+      description: "Create a new Weibo post from the current authenticated session.",
+      properties: {
+        text: {
+          type: "string",
+          description: "Post text content.",
+          minLength: 1,
+        },
+        dryRun: {
+          type: "boolean",
+          description: "When true, validate the compose path without submitting.",
+        },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "post.get",
     description: "Read one Weibo post by url or id",
     inputSchema: {
@@ -168,6 +256,123 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
     },
     annotations: {
       readOnlyHint: true,
+    },
+  },
+  {
+    name: "comment.create",
+    description: "Publish one comment for a Weibo post by url or id",
+    inputSchema: {
+      type: "object",
+      description: "Open a Weibo detail page, compose one comment, and optionally skip final submit with dryRun.",
+      properties: {
+        url: {
+          type: "string",
+          description: "Absolute Weibo post URL.",
+        },
+        id: {
+          type: "string",
+          description: "Weibo post id. Used to build a detail URL when url is omitted.",
+        },
+        text: {
+          type: "string",
+          description: "Comment text content.",
+          minLength: 1,
+        },
+        dryRun: {
+          type: "boolean",
+          description: "When true, validate the comment compose path without submitting.",
+        },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.listDrafts",
+    description: "List visible Weibo article drafts from the article editor sidebar",
+    inputSchema: {
+      type: "object",
+      description: "Open the Weibo article editor and read visible drafts from the sidebar.",
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.getDraft",
+    description: "Read one Weibo article draft from the editor by draftId or current draft",
+    inputSchema: {
+      type: "object",
+      description: "Open one article draft in the editor and read its current title, lead, and body.",
+      properties: {
+        draftId: {
+          type: "string",
+          description: "Optional Weibo article draft id. When omitted, read the current editor draft.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.draftMarkdown",
+    description: "Create or update a Weibo article draft from a markdown file",
+    inputSchema: {
+      type: "object",
+      description: "Open the Weibo article editor, convert markdown into article content, optionally upload a cover image, and save a draft.",
+      properties: {
+        markdownPath: {
+          type: "string",
+          description: "Absolute path to a markdown file.",
+        },
+        title: {
+          type: "string",
+          description: "Optional explicit title. Defaults to the first H1 or markdown filename.",
+        },
+        lead: {
+          type: "string",
+          description: "Optional lead text. Defaults to the first non-empty paragraph from the markdown body.",
+        },
+        coverImagePath: {
+          type: "string",
+          description: "Optional absolute path to a cover image file.",
+        },
+        dryRun: {
+          type: "boolean",
+          description: "When true, validate the draft and publish-settings path without saving or publishing.",
+        },
+      },
+      required: ["markdownPath"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "article.publishMarkdown",
+    description: "Publish a Weibo article from a markdown file",
+    inputSchema: {
+      type: "object",
+      description: "Open the Weibo article editor, convert markdown into article content, optionally upload a cover image, and publish the article.",
+      properties: {
+        markdownPath: {
+          type: "string",
+          description: "Absolute path to a markdown file.",
+        },
+        title: {
+          type: "string",
+          description: "Optional explicit title. Defaults to the first H1 or markdown filename.",
+        },
+        lead: {
+          type: "string",
+          description: "Optional lead text. Defaults to the first non-empty paragraph from the markdown body.",
+        },
+        coverImagePath: {
+          type: "string",
+          description: "Optional absolute path to a cover image file.",
+        },
+        dryRun: {
+          type: "boolean",
+          description: "When true, validate the publish path without clicking the final publish button.",
+        },
+      },
+      required: ["markdownPath"],
+      additionalProperties: false,
     },
   },
   {
@@ -404,8 +609,78 @@ function buildPostUrl(id: string): string {
   return `https://weibo.com/detail/${encodeURIComponent(id)}`;
 }
 
+const WEIBO_BASE62_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+function decodeWeiboBase62(value: string): string | undefined {
+  let result = 0n;
+  for (const char of value) {
+    const index = WEIBO_BASE62_ALPHABET.indexOf(char);
+    if (index < 0) {
+      return undefined;
+    }
+    result = result * 62n + BigInt(index);
+  }
+  return result.toString(10);
+}
+
+function decodeWeiboMblogId(value: string): string | undefined {
+  if (!/^[0-9A-Za-z]+$/.test(value)) {
+    return undefined;
+  }
+  const chunks: string[] = [];
+  for (let cursor = value.length; cursor > 0; cursor -= 4) {
+    chunks.unshift(value.slice(Math.max(0, cursor - 4), cursor));
+  }
+  const decoded = chunks.map((chunk, index) => {
+    const numeric = decodeWeiboBase62(chunk);
+    if (!numeric) {
+      return undefined;
+    }
+    return index === 0 ? numeric : numeric.padStart(7, "0");
+  });
+  return decoded.every((part) => typeof part === "string") ? decoded.join("") : undefined;
+}
+
+function parsePostIdFromUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const detailIndex = segments.findIndex((segment) => segment === "detail");
+    if (detailIndex >= 0) {
+      const detailId = segments[detailIndex + 1];
+      if (detailId && /^\d{8,}$/.test(detailId)) {
+        return detailId;
+      }
+    }
+    const lastSegment = segments.at(-1);
+    if (!lastSegment) {
+      return undefined;
+    }
+    if (/^\d{8,}$/.test(lastSegment)) {
+      return lastSegment;
+    }
+    return decodeWeiboMblogId(lastSegment);
+  } catch {
+    return undefined;
+  }
+}
+
 function buildProfileUrl(screenName: string): string {
   return `https://weibo.com/n/${encodeURIComponent(screenName)}`;
+}
+
+function buildArticleEditUrl(draftId?: string): string {
+  if (!draftId) {
+    return WEIBO_ARTICLE_EDITOR_URL;
+  }
+  const url = new URL(WEIBO_ARTICLE_EDITOR_URL);
+  url.hash = `/draft/${encodeURIComponent(draftId)}`;
+  return url.toString();
+}
+
+function parseArticleDraftId(url: string): string | undefined {
+  const match = url.match(/#\/draft\/(\d+)/);
+  return match?.[1];
 }
 
 function parseUserIdFromUrl(url: string): string | undefined {
@@ -457,12 +732,72 @@ async function withCachedReadPage<T>(ownerPage: Page, url: string, run: (readPag
   return await run(readPage);
 }
 
+async function withEphemeralReadPage<T>(ownerPage: Page, url: string, run: (readPage: Page) => Promise<T>): Promise<T> {
+  const readPage = await ownerPage.context().newPage();
+  try {
+    await ensureCaptureInstalled(readPage);
+    await readPage.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    return await run(readPage);
+  } finally {
+    if (!readPage.isClosed()) {
+      await readPage.close().catch(() => {});
+    }
+  }
+}
+
+async function withEphemeralPage<T>(ownerPage: Page, url: string, run: (page: Page) => Promise<T>): Promise<T> {
+  const nextPage = await ownerPage.context().newPage();
+  try {
+    await ensureCaptureInstalled(nextPage);
+    await nextPage.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    return await run(nextPage);
+  } finally {
+    if (!nextPage.isClosed()) {
+      await nextPage.close().catch(() => {});
+    }
+  }
+}
+
 async function closeCachedReadPages(ownerPage: Page): Promise<void> {
   const readPage = READ_PAGE_CACHE.get(ownerPage);
   READ_PAGE_CACHE.delete(ownerPage);
   if (readPage && !readPage.isClosed()) {
     await readPage.close().catch(() => {});
   }
+}
+
+function isNavigationRaceError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.includes("Execution context was destroyed");
+}
+
+async function settleReadPage(page: Page): Promise<void> {
+  await page.waitForTimeout(500);
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  await page.waitForLoadState("load").catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: 1_500 }).catch(() => {});
+}
+
+async function retryOnNavigationRace<T>(page: Page, run: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  const delays = [0, 700, 1_500, 2_500];
+  for (const delay of delays) {
+    if (delay > 0) {
+      await page.waitForTimeout(delay);
+      await settleReadPage(page);
+    }
+    try {
+      return await run();
+    } catch (error) {
+      if (!isNavigationRaceError(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Execution context was destroyed");
 }
 
 async function detectAuthState(page: {
@@ -542,6 +877,853 @@ async function ensureAuthenticated(page: Parameters<SiteAdapter["callTool"]>[1][
       ? "interactive Weibo verification is required in the browser session"
       : "interactive Weibo sign-in is required in the browser session",
   );
+}
+
+async function waitForWeiboSurface(page: Page): Promise<void> {
+  await page
+    .waitForFunction(() => {
+      return (
+        document.querySelector("textarea") !== null ||
+        document.querySelector("[contenteditable='true']") !== null
+      );
+    }, undefined, { timeout: 12_000 })
+    .catch(() => {});
+  await page.waitForTimeout(800);
+}
+
+async function resolveArticleAttachment(
+  value: unknown,
+  fieldName: string,
+): Promise<{ ok: true; attachment?: ArticleAttachment } | { ok: false; result: JsonValue }> {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  const path = typeof value === "string" ? value.trim() : "";
+  if (!path) {
+    return {
+      ok: false,
+      result: errorResult("VALIDATION_ERROR", `${fieldName} must be a non-empty string`),
+    };
+  }
+  if (!isAbsolute(path)) {
+    return {
+      ok: false,
+      result: errorResult("VALIDATION_ERROR", `${fieldName} must be an absolute file path`),
+    };
+  }
+  try {
+    const fileStat = await stat(path);
+    if (!fileStat.isFile()) {
+      return {
+        ok: false,
+        result: errorResult("VALIDATION_ERROR", `${fieldName} must point to a file`),
+      };
+    }
+  } catch {
+    return {
+      ok: false,
+      result: errorResult("VALIDATION_ERROR", `${fieldName} was not found`),
+    };
+  }
+  return {
+    ok: true,
+    attachment: {
+      path,
+      name: basename(path),
+    },
+  };
+}
+
+function extractArticleTitle(markdown: string, markdownPath: string, explicitTitle?: string): string {
+  const title = typeof explicitTitle === "string" ? explicitTitle.trim() : "";
+  if (title) {
+    return title;
+  }
+  const headingMatch = markdown.match(/^\s*#\s+(.+?)\s*$/m);
+  if (headingMatch?.[1]) {
+    return headingMatch[1].trim();
+  }
+  return basename(markdownPath, extname(markdownPath)).trim() || "Untitled";
+}
+
+function normalizeArticleTitleForComparison(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function normalizeArticleMarkdown(markdown: string, markdownPath: string, explicitTitle?: string): NormalizedArticleMarkdown {
+  const normalized = markdown.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  const explicit = typeof explicitTitle === "string" ? explicitTitle.trim() : "";
+  const derivedTitle = extractArticleTitle(normalized, markdownPath, explicitTitle);
+  const comparisonTitle = normalizeArticleTitleForComparison(derivedTitle);
+  const output: string[] = [];
+  let insideFence = false;
+  let firstH1Handled = false;
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      insideFence = !insideFence;
+      output.push(line);
+      continue;
+    }
+    if (insideFence) {
+      output.push(line);
+      continue;
+    }
+    const match = line.match(/^(\s*)#\s+(.+?)\s*$/);
+    if (!match) {
+      output.push(line);
+      continue;
+    }
+    const headingText = (match[2] ?? "").trim();
+    if (!firstH1Handled) {
+      firstH1Handled = true;
+      if (!explicit || normalizeArticleTitleForComparison(headingText) === comparisonTitle) {
+        continue;
+      }
+    }
+    output.push(`${match[1]}## ${headingText}`);
+  }
+
+  return {
+    title: derivedTitle,
+    bodyMarkdown: output.join("\n").replace(/^\s*\n/, "").trim(),
+  };
+}
+
+function stripMarkdownImageDestination(rawDestination: string): string {
+  const trimmed = rawDestination.trim();
+  const withoutAngle = trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1) : trimmed;
+  const titleMatch = withoutAngle.match(/^(.+?)(?:\s+["'(].*)?$/);
+  return (titleMatch?.[1] ?? withoutAngle).trim();
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function sanitizeMarkdownHref(value: string): string | undefined {
+  const href = value.trim();
+  if (!href) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(href);
+    return ["http:", "https:", "mailto:"].includes(parsed.protocol) ? parsed.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function convertMarkdownInlineToHtml(value: string): string {
+  const placeholders: string[] = [];
+  const reserve = (html: string): string => {
+    const token = `__WEBMCP_HTML_${placeholders.length}__`;
+    placeholders.push(html);
+    return token;
+  };
+
+  let rendered = value
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, altRaw: string, destinationRaw: string) => {
+      const alt = escapeHtml(altRaw.trim());
+      const destination = escapeHtml(stripMarkdownImageDestination(destinationRaw));
+      return reserve(`<img src="${destination}" alt="${alt}">`);
+    })
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, textRaw: string, hrefRaw: string) => {
+      const text = escapeHtml(textRaw.trim() || hrefRaw.trim());
+      const href = sanitizeMarkdownHref(hrefRaw);
+      return href
+        ? reserve(`<a href="${escapeHtml(href)}">${text}</a>`)
+        : text;
+    })
+    .replace(/`([^`]+)`/g, (_match, codeRaw: string) => reserve(`<code>${escapeHtml(codeRaw)}</code>`))
+    .replace(/\*\*([^*]+)\*\*/g, (_match, textRaw: string) => reserve(`<strong>${escapeHtml(textRaw)}</strong>`))
+    .replace(/\*([^*]+)\*/g, (_match, textRaw: string) => reserve(`<em>${escapeHtml(textRaw)}</em>`));
+
+  rendered = escapeHtml(rendered);
+  return rendered.replace(/__WEBMCP_HTML_(\d+)__/g, (_match, indexRaw: string) => {
+    const index = Number.parseInt(indexRaw, 10);
+    return placeholders[index] ?? "";
+  });
+}
+
+function convertMarkdownToHtml(markdown: string): string {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const blocks: string[] = [];
+  let index = 0;
+
+  const flushParagraph = (paragraphLines: string[]) => {
+    if (paragraphLines.length === 0) {
+      return;
+    }
+    const text = paragraphLines.join(" ").trim();
+    if (!text) {
+      return;
+    }
+    blocks.push(`<p>${convertMarkdownInlineToHtml(text)}</p>`);
+  };
+
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    const fenceMatch = trimmed.match(/^```([^`]*)$/);
+    if (fenceMatch) {
+      const language = escapeHtml(fenceMatch[1]?.trim() ?? "");
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !lines[index]!.trim().startsWith("```")) {
+        codeLines.push(lines[index]!);
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      const code = escapeHtml(codeLines.join("\n"));
+      blocks.push(language ? `<pre><code class="language-${language}">${code}</code></pre>` : `<pre><code>${code}</code></pre>`);
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      const level = Math.min(6, headingMatch[1]!.length);
+      const content = convertMarkdownInlineToHtml(headingMatch[2]!.trim());
+      blocks.push(`<h${level}>${content}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    const bulletMatch = trimmed.match(/^[-*+]\s+(.+)$/);
+    if (bulletMatch) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const itemLine = lines[index]!.trim();
+        const match = itemLine.match(/^[-*+]\s+(.+)$/);
+        if (!match) {
+          break;
+        }
+        items.push(`<li>${convertMarkdownInlineToHtml(match[1]!.trim())}</li>`);
+        index += 1;
+      }
+      blocks.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (orderedMatch) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const itemLine = lines[index]!.trim();
+        const match = itemLine.match(/^\d+\.\s+(.+)$/);
+        if (!match) {
+          break;
+        }
+        items.push(`<li>${convertMarkdownInlineToHtml(match[1]!.trim())}</li>`);
+        index += 1;
+      }
+      blocks.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+
+    const paragraphLines: string[] = [];
+    while (index < lines.length) {
+      const paragraphLine = lines[index] ?? "";
+      const paragraphTrimmed = paragraphLine.trim();
+      if (!paragraphTrimmed) {
+        break;
+      }
+      if (/^```/.test(paragraphTrimmed) || /^(#{1,6})\s+/.test(paragraphTrimmed) || /^[-*+]\s+/.test(paragraphTrimmed) || /^\d+\.\s+/.test(paragraphTrimmed)) {
+        break;
+      }
+      paragraphLines.push(paragraphLine.trim());
+      index += 1;
+    }
+    flushParagraph(paragraphLines);
+  }
+
+  return blocks.join("\n");
+}
+
+function extractMarkdownLead(markdown: string): string | undefined {
+  for (const line of markdown.replace(/\r\n/g, "\n").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("```")) {
+      continue;
+    }
+    const normalized = trimmed
+      .replace(/^[-*+]\s+/, "")
+      .replace(/^\d+\.\s+/, "")
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "$1")
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/\*([^*]+)\*/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (normalized) {
+      return normalized.slice(0, 140);
+    }
+  }
+  return undefined;
+}
+
+function prepareArticleMarkdown(markdown: string, markdownPath: string, explicitLead?: string): PreparedArticleMarkdown {
+  const prepared = markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, altRaw: string, destinationRaw: string) => {
+    const destination = stripMarkdownImageDestination(destinationRaw);
+    if (/^(?:https?:|data:)/i.test(destination)) {
+      return _match;
+    }
+    const resolvedPath = isAbsolute(destination) ? destination : resolve(dirname(markdownPath), destination);
+    const alt = altRaw.trim();
+    return alt ? `![${alt}](${resolvedPath})` : `![](${resolvedPath})`;
+  });
+  const lead = typeof explicitLead === "string" && explicitLead.trim() ? explicitLead.trim() : extractMarkdownLead(prepared);
+  return {
+    markdown: prepared,
+    html: convertMarkdownToHtml(prepared),
+    ...(lead ? { lead } : {}),
+  };
+}
+
+async function waitForWeiboArticleEditor(page: Page): Promise<void> {
+  await page
+    .waitForFunction(() => {
+      return (
+        document.querySelector("textarea[placeholder*='标题']") !== null &&
+        document.querySelector("[contenteditable='true']") !== null
+      );
+    }, undefined, { timeout: 20_000 })
+    .catch(() => {});
+  await page.waitForTimeout(800);
+}
+
+async function extractWeiboArticleDrafts(page: Page): Promise<WeiboArticleDraftSummary[]> {
+  return await page.evaluate((input: { op: string }) => {
+    void input;
+    const compact = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const currentDraftId = location.href.match(/#\/draft\/(\d+)/)?.[1];
+    const currentTitle =
+      compact((document.querySelector<HTMLTextAreaElement>("textarea[placeholder*='标题']")?.value ?? "")) || undefined;
+    const items = Array.from(document.querySelectorAll<HTMLElement>(".list-item"));
+    return items.flatMap((item) => {
+      const text = compact(item.innerText || item.textContent || "");
+      if (!text) {
+        return [];
+      }
+      const match = text.match(/^(.*?)(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})$/);
+      const title = compact(match?.[1] ?? text);
+      const updatedAt = match?.[2] ? compact(match[2]) : undefined;
+      if (!title) {
+        return [];
+      }
+      const active = Boolean(currentTitle && currentTitle === title);
+      const output: WeiboArticleDraftSummary = {
+        title,
+        ...(updatedAt ? { updatedAt } : {}),
+        ...(active ? { active: true } : {}),
+        ...(active && currentDraftId ? { id: currentDraftId, editUrl: `https://card.weibo.com/article/v5/editor#/draft/${currentDraftId}` } : {}),
+      };
+      return [output];
+    });
+  }, { op: "extract_article_drafts" });
+}
+
+async function extractWeiboArticleDraft(page: Page): Promise<WeiboArticleDraft | undefined> {
+  return await page.evaluate((input: { op: string }) => {
+    void input;
+    const compact = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const title = compact(document.querySelector<HTMLTextAreaElement>("textarea[placeholder*='标题']")?.value ?? "");
+    if (!title) {
+      return undefined;
+    }
+    const lead = compact(document.querySelector<HTMLTextAreaElement>("textarea[placeholder*='导语']")?.value ?? "");
+    const bodyNode = document.querySelector<HTMLElement>("[contenteditable='true']");
+    const bodyText = compact(bodyNode?.innerText ?? "");
+    const bodyHtml = typeof bodyNode?.innerHTML === "string" ? bodyNode.innerHTML : "";
+    const id = location.href.match(/#\/draft\/(\d+)/)?.[1];
+    const output: WeiboArticleDraft = {
+      title,
+      ...(id ? { id, editUrl: `https://card.weibo.com/article/v5/editor#/draft/${id}` } : {}),
+      ...(lead ? { lead } : {}),
+      ...(bodyText ? { bodyText } : {}),
+      ...(bodyHtml ? { bodyHtml } : {}),
+      ...(bodyText ? { wordCount: bodyText.length } : {}),
+    };
+    return output;
+  }, { op: "extract_article_draft" });
+}
+
+async function clickTextAction(page: Page, labels: string[]): Promise<boolean> {
+  return await page.evaluate((input) => {
+    const compact = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const elements = Array.from(document.querySelectorAll<HTMLElement>("button, [role='button'], a, label, span"));
+    const target = elements.find((element) => {
+      const text = compact(element.innerText || element.textContent || "");
+      return text && input.labels.some((label) => text.includes(label));
+    });
+    if (!target) {
+      return false;
+    }
+    target.click();
+    return true;
+  }, { labels });
+}
+
+async function openFreshWeiboArticleEditor(page: Page): Promise<void> {
+  await waitForWeiboArticleEditor(page);
+  await clickTextAction(page, ["写文章"]).catch(() => false);
+  await page.waitForTimeout(800);
+}
+
+async function setWeiboArticleTextArea(page: Page, placeholderNeedle: string, value: string): Promise<boolean> {
+  return await page.evaluate((input) => {
+    const element = document.querySelector<HTMLTextAreaElement>(`textarea[placeholder*='${input.placeholderNeedle}']`);
+    if (!element) {
+      return false;
+    }
+    element.focus();
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    if (setter) {
+      setter.call(element, input.value);
+    } else {
+      element.value = input.value;
+    }
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: input.value }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }, { placeholderNeedle, value });
+}
+
+async function setWeiboArticleBody(page: Page, html: string): Promise<boolean> {
+  return await page.evaluate((input) => {
+    const editor = document.querySelector<HTMLElement>("[contenteditable='true']");
+    if (!editor) {
+      return false;
+    }
+    editor.focus();
+    editor.innerHTML = input.html || "<p></p>";
+    editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: "" }));
+    editor.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }, { html });
+}
+
+async function saveWeiboArticleDraft(page: Page): Promise<boolean> {
+  const clicked = await clickTextAction(page, ["保存草稿"]);
+  if (!clicked) {
+    return false;
+  }
+  await page.waitForTimeout(1_200);
+  return true;
+}
+
+async function advanceWeiboArticlePublishSettings(page: Page): Promise<boolean> {
+  const nextClicked = await clickTextAction(page, ["下一步"]);
+  if (!nextClicked) {
+    return false;
+  }
+  await page.waitForTimeout(800);
+  await clickTextAction(page, ["我同意"]).catch(() => false);
+  await page.waitForTimeout(1_500);
+  return await page.evaluate((input: { op: string }) => {
+    void input;
+    const text = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
+    return text.includes("发布设置") || text.includes("设置封面") || text.includes("替换封面图");
+  }, { op: "article_publish_ready" }).catch(() => false);
+}
+
+async function isWeiboCoverDialogVisible(page: Page): Promise<boolean> {
+  return await page.evaluate(() => {
+    const text = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
+    return text.includes("正文图片") && text.includes("图片库") && text.includes("取消");
+  }).catch(() => false);
+}
+
+async function openWeiboCoverDialog(page: Page): Promise<boolean> {
+  const preview = page.locator(".cover-preview").first();
+  if (await preview.count().catch(() => 0)) {
+    await preview.click({ force: true }).catch(() => {});
+  } else {
+    const mask = page.locator(".cover-preview .mask").first();
+    if (await mask.count().catch(() => 0)) {
+      await mask.click({ force: true }).catch(() => {});
+    } else {
+      return false;
+    }
+  }
+  await page.waitForTimeout(800);
+  return await isWeiboCoverDialogVisible(page);
+}
+
+async function selectWeiboCoverLibraryItem(page: Page, index: number): Promise<boolean> {
+  const item = page.locator(".image-list .image-item").nth(index);
+  if (!(await item.count().catch(() => 0))) {
+    return false;
+  }
+  await item.click({ force: true }).catch(() => {});
+  await page.waitForTimeout(500);
+  const nextButton = page.getByText("下一步", { exact: false }).last();
+  return (await nextButton.count().catch(() => 0))
+    ? !(await nextButton.isDisabled().catch(() => true))
+    : false;
+}
+
+async function chooseWeiboCoverFromLibrary(page: Page, coverImagePath: string): Promise<boolean> {
+  const dialogOpened = await openWeiboCoverDialog(page);
+  if (!dialogOpened) {
+    return false;
+  }
+
+  const libraryTab = page.getByText("图片库", { exact: false }).first();
+  if (await libraryTab.count().catch(() => 0)) {
+    await libraryTab.click({ force: true }).catch(() => {});
+    await page.waitForTimeout(600);
+  }
+
+  const uploadButton = page.getByText("上传", { exact: false }).first();
+  if (await uploadButton.count().catch(() => 0)) {
+    await uploadButton.click({ force: true }).catch(() => {});
+    await page.waitForTimeout(300);
+  }
+
+  const items = page.locator(".image-list .image-item");
+  const beforeCount = await items.count().catch(() => 0);
+  const input = page.locator("input[type='file']").last();
+  if (!(await input.count().catch(() => 0))) {
+    return false;
+  }
+  await input.setInputFiles(coverImagePath).catch(() => {});
+  await page.waitForTimeout(1_200);
+
+  const waitForUploadedItem = beforeCount > 0
+    ? await page.waitForFunction(
+        ({ selector, minCount }) => document.querySelectorAll(selector).length > minCount,
+        { selector: ".image-list .image-item", minCount: beforeCount },
+        { timeout: 8_000 },
+      ).then(() => true)
+        .catch(() => false)
+    : false;
+
+  const targetIndex = waitForUploadedItem
+    ? await items.count().catch(() => beforeCount) - 1
+    : Math.max(beforeCount - 1, 0);
+  const selected = await selectWeiboCoverLibraryItem(page, targetIndex);
+  if (!selected) {
+    return false;
+  }
+
+  const nextButton = page.getByText("下一步", { exact: false }).last();
+  if (await nextButton.count().catch(() => 0)) {
+    await nextButton.click({ force: true }).catch(() => {});
+  }
+  await page.waitForTimeout(1_500);
+
+  return await page.evaluate(() => {
+    const dialogVisible = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
+    if (dialogVisible.includes("正文图片") && dialogVisible.includes("图片库") && dialogVisible.includes("取消")) {
+      return false;
+    }
+    const coverImage = document.querySelector<HTMLImageElement>(".cover-preview .cover-img");
+    return Boolean(coverImage && typeof coverImage.src === "string" && coverImage.src.trim());
+  }).catch(() => false);
+}
+
+async function uploadWeiboArticleCover(page: Page, coverImagePath: string): Promise<boolean> {
+  return await chooseWeiboCoverFromLibrary(page, coverImagePath);
+}
+
+async function publishWeiboArticle(page: Page): Promise<{ confirmed: boolean; url?: string }> {
+  const clicked = await clickTextAction(page, ["发布"]);
+  if (!clicked) {
+    return { confirmed: false };
+  }
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const result = await page.evaluate(() => {
+      const text = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
+      const currentUrl = location.href;
+      if (!currentUrl.includes("/editor") || text.includes("发布成功")) {
+        return currentUrl.startsWith("http")
+          ? {
+              confirmed: true,
+              url: currentUrl,
+            }
+          : {
+              confirmed: true,
+            };
+      }
+      return { confirmed: false };
+    }).catch(() => ({ confirmed: false }));
+    if (result.confirmed) {
+      return result;
+    }
+    await page.waitForTimeout(600);
+  }
+  return { confirmed: false };
+}
+
+async function createWeiboArticleFromMarkdown(
+  page: Page,
+  markdownPath: string,
+  explicitTitle: string | undefined,
+  explicitLead: string | undefined,
+  coverImagePath: string | undefined,
+  publish: boolean,
+  dryRun: boolean,
+): Promise<JsonValue> {
+  const resolvedMarkdown = await resolveArticleAttachment(markdownPath, "markdownPath");
+  if (!resolvedMarkdown.ok || !resolvedMarkdown.attachment) {
+    return resolvedMarkdown.ok ? errorResult("VALIDATION_ERROR", "markdownPath was not found") : resolvedMarkdown.result;
+  }
+  const markdown = await readFile(resolvedMarkdown.attachment.path, "utf8").catch(() => undefined);
+  if (markdown === undefined) {
+    return errorResult("VALIDATION_ERROR", `markdownPath was not found: ${markdownPath}`);
+  }
+  const normalized = normalizeArticleMarkdown(markdown, resolvedMarkdown.attachment.path, explicitTitle);
+  const prepared = prepareArticleMarkdown(normalized.bodyMarkdown, resolvedMarkdown.attachment.path, explicitLead);
+
+  let resolvedCover: ArticleAttachment | undefined;
+  if (coverImagePath) {
+    const coverResult = await resolveArticleAttachment(coverImagePath, "coverImagePath");
+    if (!coverResult.ok || !coverResult.attachment) {
+      return coverResult.ok ? errorResult("VALIDATION_ERROR", "coverImagePath was not found") : coverResult.result;
+    }
+    resolvedCover = coverResult.attachment;
+  }
+
+  return await withEphemeralPage(page, WEIBO_ARTICLE_EDITOR_URL, async (articlePage) => {
+    await openFreshWeiboArticleEditor(articlePage);
+    const titleSet = await setWeiboArticleTextArea(articlePage, "标题", normalized.title);
+    const leadSet = prepared.lead ? await setWeiboArticleTextArea(articlePage, "导语", prepared.lead) : true;
+    const bodySet = await setWeiboArticleBody(articlePage, prepared.html);
+    if (!titleSet || !leadSet || !bodySet) {
+      return errorResult("UPSTREAM_CHANGED", "article editor controls not found");
+    }
+
+    if (dryRun && !publish) {
+      return {
+        ok: true,
+        dryRun: true,
+        title: normalized.title,
+        ...(prepared.lead ? { lead: prepared.lead } : {}),
+      };
+    }
+
+    const saved = await saveWeiboArticleDraft(articlePage);
+    if (!saved) {
+      return errorResult("UPSTREAM_CHANGED", "article save draft control not found");
+    }
+
+    const draftId = parseArticleDraftId(articlePage.url());
+    const editUrl = articlePage.url();
+    const output: Record<string, JsonValue> = {
+      ok: true,
+      title: normalized.title,
+      editUrl,
+      ...(draftId ? { draftId } : {}),
+      ...(prepared.lead ? { lead: prepared.lead } : {}),
+      saved: true,
+    };
+
+    if (!publish) {
+      return {
+        ...output,
+        ...(resolvedCover ? { hasCoverImage: false } : {}),
+      };
+    }
+
+    const publishReady = await advanceWeiboArticlePublishSettings(articlePage);
+    if (!publishReady) {
+      return errorResult("UPSTREAM_CHANGED", "article publish settings were not opened");
+    }
+
+    if (resolvedCover) {
+      const uploaded = await uploadWeiboArticleCover(articlePage, resolvedCover.path);
+      if (!uploaded) {
+        return errorResult("UPSTREAM_CHANGED", "article cover upload failed");
+      }
+      output.hasCoverImage = true;
+    }
+
+    if (dryRun) {
+      return {
+        ...output,
+        dryRun: true,
+        canPublish: true,
+      };
+    }
+
+    const published = await publishWeiboArticle(articlePage);
+    if (!published.confirmed) {
+      return errorResult("ACTION_UNCONFIRMED", "article publish was not confirmed");
+    }
+    return {
+      ...output,
+      confirmed: true,
+      ...(published.url ? { url: published.url } : {}),
+    };
+  });
+}
+
+async function composeWeiboPost(page: Page, text: string, dryRun: boolean): Promise<WeiboComposeDomResult> {
+  return await page.evaluate((input) => {
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const composer =
+      document.querySelector<HTMLTextAreaElement>("textarea[placeholder*='新鲜事']") ||
+      document.querySelector<HTMLTextAreaElement>("textarea");
+    if (!composer) {
+      return { ok: false, reason: "composer_not_found" } as const;
+    }
+    composer.focus();
+    const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    if (valueSetter) {
+      valueSetter.call(composer, input.text);
+    } else {
+      composer.value = input.text;
+    }
+    composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: input.text }));
+    composer.dispatchEvent(new Event("change", { bubbles: true }));
+    composer.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "a" }));
+
+    const submit = Array.from(document.querySelectorAll<HTMLElement>("button, [role='button']")).find((element) => {
+      const label = normalize(element.getAttribute("aria-label") ?? element.textContent ?? "");
+      if (!label || !label.includes("发送")) {
+        return false;
+      }
+      if (element instanceof HTMLButtonElement && element.disabled) {
+        return false;
+      }
+      if ((element.getAttribute("aria-disabled") ?? "").toLowerCase() === "true") {
+        return false;
+      }
+      return true;
+    });
+    if (!submit) {
+      return { ok: false, reason: "submit_not_found" } as const;
+    }
+    if (input.dryRun) {
+      return { ok: true, dryRun: true, submitVisible: true } as const;
+    }
+    submit.click();
+    return { ok: true } as const;
+  }, { op: "compose_post", text, dryRun });
+}
+
+async function waitForPostConfirmation(
+  page: Page,
+  text: string,
+  timeoutMs: number,
+): Promise<WeiboComposeConfirmation> {
+  const deadline = Date.now() + timeoutMs;
+  const needle = text.replace(/\s+/g, " ").trim().slice(0, 24);
+  while (Date.now() < deadline) {
+    const confirmation = await page.evaluate((input) => {
+      const cards = Array.from(
+        document.querySelectorAll<HTMLElement>("[action-type='feed_list_item'], .Feed_wrap, [mid]"),
+      );
+      for (const card of cards) {
+        const textNode =
+          card.querySelector<HTMLElement>("[node-type='feed_list_content_full'], [node-type='feed_list_content'], .detail_wbtext_4CRf9, .wbpro-feed-content, .txt") ||
+          card;
+        const content = textNode.innerText.replace(/\s+/g, " ").trim();
+        if (!content || !content.includes(input.needle)) {
+          continue;
+        }
+        const url =
+          card.querySelector<HTMLAnchorElement>(".from a[href], a[href*='/detail/'], a[href*='/status/']")?.href ||
+          undefined;
+        return { confirmed: true, ...(url ? { url } : {}) };
+      }
+      return { confirmed: false };
+    }, { op: "confirm_post", needle }).catch(() => ({ confirmed: false }));
+    if (confirmation.confirmed) {
+      return confirmation;
+    }
+    await page.waitForTimeout(600);
+  }
+  return { confirmed: false };
+}
+
+async function composeWeiboComment(page: Page, text: string, dryRun: boolean): Promise<WeiboComposeDomResult> {
+  return await page.evaluate((input) => {
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const composer =
+      document.querySelector<HTMLTextAreaElement>("textarea[placeholder*='评论']") ||
+      document.querySelector<HTMLTextAreaElement>("textarea");
+    if (!composer) {
+      return { ok: false, reason: "composer_not_found" } as const;
+    }
+    composer.focus();
+    const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    if (valueSetter) {
+      valueSetter.call(composer, input.text);
+    } else {
+      composer.value = input.text;
+    }
+    composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: input.text }));
+    composer.dispatchEvent(new Event("change", { bubbles: true }));
+    composer.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "a" }));
+
+    const submit = Array.from(document.querySelectorAll<HTMLElement>("button, [role='button']")).find((element) => {
+      const label = normalize(element.getAttribute("aria-label") ?? element.textContent ?? "");
+      if (!label || !label.includes("评论")) {
+        return false;
+      }
+      const ariaDisabled = element.getAttribute("aria-disabled");
+      return !(element.hasAttribute("disabled") || ariaDisabled === "true" || ariaDisabled === "disabled");
+    });
+    if (!submit) {
+      return { ok: false, reason: "submit_not_found" } as const;
+    }
+    if (input.dryRun) {
+      return { ok: true, dryRun: true, submitVisible: true } as const;
+    }
+    submit.click();
+    return { ok: true } as const;
+  }, { op: "compose_comment", text, dryRun });
+}
+
+async function waitForCommentConfirmation(
+  page: Page,
+  text: string,
+  timeoutMs: number,
+): Promise<WeiboComposeConfirmation> {
+  const deadline = Date.now() + timeoutMs;
+  const needle = text.replace(/\s+/g, " ").trim().slice(0, 24);
+  while (Date.now() < deadline) {
+    const confirmation = await page.evaluate((input) => {
+      const items = Array.from(
+        document.querySelectorAll<HTMLElement>("[id^='floor_'], .CommentItem_root, [data-testid='comment']"),
+      );
+      for (const item of items) {
+        const content = item.innerText.replace(/\s+/g, " ").trim();
+        if (content.includes(input.needle)) {
+          const url = window.location.href && window.location.href.startsWith("http") ? window.location.href : undefined;
+          return { confirmed: true, ...(url ? { url } : {}) };
+        }
+      }
+      return { confirmed: false };
+    }, { op: "confirm_comment", needle }).catch(() => ({ confirmed: false }));
+    if (confirmation.confirmed) {
+      return confirmation;
+    }
+    await page.waitForTimeout(600);
+  }
+  return { confirmed: false };
 }
 
 async function collectTimelineItems(
@@ -625,7 +1807,8 @@ async function extractCurrentPost(
   return page.evaluate((input: { op: string }) => {
     const card =
       document.querySelector<HTMLElement>("[action-type='feed_list_item'], .Feed_wrap, [mid]") ||
-      document.querySelector<HTMLElement>("article");
+      document.querySelector<HTMLElement>("article") ||
+      document.querySelector<HTMLElement>("main._wrap_1l406_3, ._full_1l406_7, ._feed_zsq3w_24, .wbpro-feed-content");
     if (!card) {
       return undefined;
     }
@@ -635,6 +1818,7 @@ async function extractCurrentPost(
       card.dataset.mid ||
       card.dataset.id ||
       card.getAttribute("data-mid") ||
+      location.pathname.split("/").filter(Boolean).at(-1) ||
       "";
     if (!id) {
       return undefined;
@@ -642,15 +1826,18 @@ async function extractCurrentPost(
 
     const authorLink =
       card.querySelector<HTMLAnchorElement>("a[node-type='feed_list_originNick']") ||
-      card.querySelector<HTMLAnchorElement>("a.name");
+      card.querySelector<HTMLAnchorElement>("a.name") ||
+      card.querySelector<HTMLAnchorElement>("a._name_ygi5b_120, a[href*='/u/'], a[href*='weibo.com/n/']");
     const dateLink =
       card.querySelector<HTMLAnchorElement>("a[node-type='feed_list_item_date']") ||
-      card.querySelector<HTMLAnchorElement>("a[href*='/detail/']");
+      card.querySelector<HTMLAnchorElement>("a[href*='/detail/']") ||
+      card.querySelector<HTMLAnchorElement>("a._time_1tpft_33");
     const contentNode =
       card.querySelector<HTMLElement>("[node-type='feed_list_content_full']") ||
       card.querySelector<HTMLElement>("[node-type='feed_list_content']") ||
       card.querySelector<HTMLElement>(".detail_wbtext_4CRf9") ||
-      card.querySelector<HTMLElement>(".wbpro-feed-content");
+      card.querySelector<HTMLElement>(".wbpro-feed-content") ||
+      card.querySelector<HTMLElement>("._wbtext_s71t2_14, .wbpro-feed-ogText, ._text_s71t2_2");
 
     void input;
     return {
@@ -666,6 +1853,17 @@ async function extractCurrentPost(
         : {}),
     };
   }, { op: "extract_post" });
+}
+
+async function extractCurrentPostCandidateIds(
+  page: Parameters<SiteAdapter["callTool"]>[1]["page"],
+): Promise<string[]> {
+  return await page.evaluate((input: { op: string }) => {
+    void input;
+    const html = document.documentElement?.outerHTML ?? "";
+    const matches = html.match(/\b\d{16}\b/g) ?? [];
+    return Array.from(new Set(matches)).slice(0, 20);
+  }, { op: "extract_post_candidate_ids" }).catch(() => []);
 }
 
 async function extractUserProfile(
@@ -877,6 +2075,88 @@ async function extractSearchResults(
   };
 }
 
+async function extractSearchResultsFromHtml(
+  page: Parameters<SiteAdapter["callTool"]>[1]["page"],
+  html: string,
+  limit: number,
+): Promise<{ items: TimelineItem[]; hasMore: boolean; nextCursor?: string }> {
+  return await page.evaluate((input: { html: string; maxItems: number }) => {
+    const doc = new DOMParser().parseFromString(input.html, "text/html");
+    const cards = Array.from(doc.querySelectorAll<HTMLElement>(".card-wrap[mid], .card-wrap"));
+    const output: TimelineItem[] = [];
+    const seen = new Set<string>();
+    for (const card of cards) {
+      const id = card.getAttribute("mid") || card.getAttribute("data-mid") || "";
+      const textNode =
+        card.querySelector<HTMLElement>(".txt[node-type='feed_list_content_full']") ||
+        card.querySelector<HTMLElement>(".txt") ||
+        card.querySelector<HTMLElement>("[node-type='feed_list_content']") ||
+        card;
+      const text = textNode.innerText.replace(/\s+/g, " ").trim();
+      if (!id || !text || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      const authorLink =
+        card.querySelector<HTMLAnchorElement>(".name[href], a[href*='/u/'], a[href*='/n/']") ||
+        undefined;
+      const timeLink =
+        card.querySelector<HTMLAnchorElement>(".from a[href]") ||
+        undefined;
+      output.push({
+        id,
+        text,
+        ...(authorLink?.textContent?.replace(/\s+/g, " ").trim()
+          ? { authorName: authorLink.textContent.replace(/\s+/g, " ").trim() }
+          : {}),
+        ...(authorLink?.href ? { authorUrl: new URL(authorLink.href, "https://s.weibo.com").toString() } : {}),
+        ...(timeLink?.href ? { url: new URL(timeLink.href, "https://s.weibo.com").toString() } : {}),
+        ...(timeLink?.textContent?.replace(/\s+/g, " ").trim()
+          ? { createdAt: timeLink.textContent.replace(/\s+/g, " ").trim() }
+          : {}),
+      });
+      if (output.length >= input.maxItems) {
+        break;
+      }
+    }
+    const nextLink = doc.querySelector<HTMLAnchorElement>(".m-page a.next[href], a.next[href]");
+    const nextHref = nextLink?.getAttribute("href") ?? undefined;
+    const nextPageValue = nextHref ? new URL(nextHref, "https://s.weibo.com").searchParams.get("page") ?? undefined : undefined;
+    return {
+      items: output,
+      hasMore: Boolean(nextPageValue),
+      ...(nextPageValue ? { nextCursor: nextPageValue } : {}),
+    };
+  }, { html, maxItems: limit });
+}
+
+async function readSearchResultsViaRequest(
+  page: Parameters<SiteAdapter["callTool"]>[1]["page"],
+  url: string,
+  limit: number,
+): Promise<{ items: TimelineItem[]; hasMore: boolean; nextCursor?: string } | undefined> {
+  const request = page.context().request;
+  if (!request || typeof request.get !== "function") {
+    return undefined;
+  }
+  const response = await request.get(url, { failOnStatusCode: false }).catch(() => null);
+  if (!response || !response.ok()) {
+    return undefined;
+  }
+  const html = await response.text().catch(() => "");
+  if (!html.trim()) {
+    return undefined;
+  }
+  const parsePage = await page.context().newPage();
+  try {
+    return await extractSearchResultsFromHtml(parsePage, html, limit);
+  } finally {
+    if (!parsePage.isClosed()) {
+      await parsePage.close().catch(() => {});
+    }
+  }
+}
+
 async function extractAiSearchSummary(
   page: Parameters<SiteAdapter["callTool"]>[1]["page"],
   query: string,
@@ -987,17 +2267,8 @@ async function readAiSearchSummaryViaNetwork(
 }
 
 function normalizeTimelineItem(raw: Record<string, unknown>): TimelineItem | undefined {
-  const id =
-    typeof raw.idstr === "string"
-      ? raw.idstr
-      : typeof raw.mid === "string"
-        ? raw.mid
-        : typeof raw.id === "number"
-          ? String(raw.id)
-          : typeof raw.id === "string"
-            ? raw.id
-            : "";
-  const text = typeof raw.text_raw === "string" ? raw.text_raw.trim() : typeof raw.text === "string" ? raw.text.trim() : "";
+  const id = extractWeiboPostId(raw);
+  const text = extractWeiboPostText(raw);
   if (!id || !text) {
     return undefined;
   }
@@ -1009,15 +2280,217 @@ function normalizeTimelineItem(raw: Record<string, unknown>): TimelineItem | und
   const authorUrl = typeof user?.profile_url === "string" && user.profile_url
     ? new URL(String(user.profile_url), "https://weibo.com").toString()
     : undefined;
+  const postUrl = buildWeiboPostUrl(raw, id);
+  const images = extractWeiboImages(raw);
+  const video = extractWeiboVideo(raw);
   const item: TimelineItem = {
     id,
     text,
     ...(screenName ? { authorName: screenName } : {}),
     ...(authorUrl ? { authorUrl } : {}),
     ...(typeof raw.created_at === "string" ? { createdAt: raw.created_at } : {}),
-    ...(screenName ? { url: `https://weibo.com/${screenName}/${id}` } : {}),
+    ...(postUrl ? { url: postUrl } : {}),
+    ...(images.length ? { images } : {}),
+    ...(video ? { video } : {}),
   };
   return item;
+}
+
+function extractWeiboPostId(raw: Record<string, unknown>): string {
+  return typeof raw.idstr === "string"
+    ? raw.idstr
+    : typeof raw.mid === "string"
+      ? raw.mid
+      : typeof raw.id === "number"
+        ? String(raw.id)
+        : typeof raw.id === "string"
+          ? raw.id
+          : "";
+}
+
+function extractWeiboPostText(raw: Record<string, unknown>): string {
+  const longText = typeof raw.longTextContent_raw === "string"
+    ? raw.longTextContent_raw
+    : typeof raw.longTextContent === "string"
+      ? raw.longTextContent
+      : typeof raw.text_raw === "string"
+        ? raw.text_raw
+        : typeof raw.text === "string"
+          ? raw.text
+          : "";
+  return longText.trim();
+}
+
+function buildWeiboPostUrl(raw: Record<string, unknown>, id: string): string | undefined {
+  const user = asRecord(raw.user);
+  const uid = typeof user?.idstr === "string" && user.idstr
+    ? user.idstr
+    : typeof user?.id === "number"
+      ? String(user.id)
+      : typeof user?.id === "string" && user.id
+        ? user.id
+        : undefined;
+  if (!uid) {
+    return undefined;
+  }
+  const mblogId = typeof raw.mblogid === "string" && raw.mblogid
+    ? raw.mblogid
+    : undefined;
+  return `https://weibo.com/${uid}/${encodeURIComponent(mblogId ?? id)}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function toNumber(value: unknown): number | undefined {
+  return typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() && !Number.isNaN(Number(value))
+      ? Number(value)
+      : undefined;
+}
+
+function extractWeiboImages(raw: Record<string, unknown>): WeiboImageMedia[] {
+  const picInfos = asRecord(raw.pic_infos);
+  if (!picInfos) {
+    return [];
+  }
+
+  return Object.values(picInfos).flatMap((entry) => {
+    const pic = asRecord(entry);
+    if (!pic) {
+      return [];
+    }
+    const source =
+      asRecord(pic.original)
+      ?? asRecord(pic.largest)
+      ?? asRecord(pic.mw2000)
+      ?? asRecord(pic.large)
+      ?? asRecord(pic.bmiddle)
+      ?? asRecord(pic.thumbnail);
+    const preview = asRecord(pic.thumbnail) ?? asRecord(pic.bmiddle) ?? source;
+    const url = typeof source?.url === "string"
+      ? source.url
+      : typeof preview?.url === "string"
+        ? preview.url
+        : "";
+    if (!url) {
+      return [];
+    }
+    const width = toNumber(source?.width);
+    const height = toNumber(source?.height);
+    const previewUrl = typeof preview?.url === "string" && preview.url !== url ? preview.url : undefined;
+    return [{
+      url,
+      ...(width !== undefined ? { width } : {}),
+      ...(height !== undefined ? { height } : {}),
+      ...(previewUrl ? { previewUrl } : {}),
+      ...(typeof pic.type === "string" && pic.type ? { type: pic.type } : {}),
+    }];
+  });
+}
+
+function extractWeiboVideo(raw: Record<string, unknown>): WeiboVideoMedia | undefined {
+  const pageInfo = asRecord(raw.page_info);
+  if (!pageInfo) {
+    return undefined;
+  }
+  const mediaInfo = asRecord(pageInfo.media_info);
+  const pagePic = asRecord(pageInfo.page_pic);
+  const videoUrl =
+    typeof mediaInfo?.stream_url === "string" && mediaInfo.stream_url
+      ? mediaInfo.stream_url
+      : typeof mediaInfo?.mp4_sd_url === "string" && mediaInfo.mp4_sd_url
+        ? mediaInfo.mp4_sd_url
+        : undefined;
+  const hdUrl =
+    typeof mediaInfo?.stream_url_hd === "string" && mediaInfo.stream_url_hd
+      ? mediaInfo.stream_url_hd
+      : typeof mediaInfo?.mp4_hd_url === "string" && mediaInfo.mp4_hd_url
+        ? mediaInfo.mp4_hd_url
+        : undefined;
+  const coverUrl =
+    typeof pagePic?.url === "string" && pagePic.url
+      ? pagePic.url
+      : typeof pageInfo.page_pic === "string" && pageInfo.page_pic
+        ? pageInfo.page_pic
+        : undefined;
+  if (!videoUrl && !hdUrl && !coverUrl) {
+    return undefined;
+  }
+  const durationSeconds = toNumber(mediaInfo?.duration);
+  return {
+    ...(videoUrl ? { url: videoUrl } : {}),
+    ...(hdUrl ? { hdUrl } : {}),
+    ...(coverUrl ? { coverUrl } : {}),
+    ...(typeof pageInfo.page_url === "string" && pageInfo.page_url ? { pageUrl: pageInfo.page_url } : {}),
+    ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+    ...(typeof pageInfo.object_type === "string" && pageInfo.object_type ? { type: pageInfo.object_type } : {}),
+  };
+}
+
+function needsLongTextHydration(raw: Record<string, unknown>): boolean {
+  const isLongText = raw.isLongText === true || raw.isLongText === 1 || raw.isLongText === "true";
+  if (!isLongText) {
+    return false;
+  }
+  return typeof raw.longTextContent_raw !== "string" && typeof raw.longTextContent !== "string";
+}
+
+async function hydrateLongTextItems(
+  page: Parameters<SiteAdapter["callTool"]>[1]["page"],
+  items: unknown[],
+): Promise<Array<Record<string, unknown>>> {
+  const rawItems = items.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    return [entry as Record<string, unknown>];
+  });
+  const pendingIds = rawItems
+    .map((entry) => ({ id: extractWeiboPostId(entry), needsHydration: needsLongTextHydration(entry) }))
+    .filter((entry) => entry.id && entry.needsHydration)
+    .map((entry) => entry.id);
+  if (!pendingIds.length) {
+    return rawItems;
+  }
+
+  const detailed = await page.evaluate(async ({ ids }) => {
+    const result: Record<string, Record<string, unknown>> = {};
+    for (const id of ids) {
+      try {
+        const requestUrl = new URL("/ajax/statuses/show", location.origin);
+        requestUrl.searchParams.set("id", id);
+        requestUrl.searchParams.set("isGetLongText", "true");
+        requestUrl.searchParams.set("locale", "en-US");
+        const response = await fetch(requestUrl.toString(), {
+          credentials: "include",
+        });
+        if (!response.ok) {
+          continue;
+        }
+        const json = await response.json().catch(() => null);
+        if (json && typeof json === "object" && !Array.isArray(json)) {
+          result[id] = json as Record<string, unknown>;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return result;
+  }, { ids: pendingIds });
+
+  const detailMap = detailed && typeof detailed === "object" && !Array.isArray(detailed)
+    ? detailed as Record<string, Record<string, unknown>>
+    : {};
+  return rawItems.map((entry) => {
+    const id = extractWeiboPostId(entry);
+    const detail = id ? detailMap[id] : undefined;
+    return detail ? { ...entry, ...detail } : entry;
+  });
 }
 
 function normalizeUserProfile(raw: Record<string, unknown>): UserProfile | undefined {
@@ -1171,15 +2644,15 @@ async function readTimelineViaNetwork(
   if (typed.selectedTemplate?.url && typed.selectedTemplate.method) {
     PROCESS_TEMPLATE_CACHE.set("timeline.home.list", typed.selectedTemplate);
   }
-  const items = Array.isArray(typed.items)
-    ? typed.items.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const item = normalizeTimelineItem(entry as Record<string, unknown>);
-        return item ? [item] : [];
-      })
-    : [];
+  const hydratedItems = Array.isArray(typed.items) ? await hydrateLongTextItems(page, typed.items) : [];
+  const items = hydratedItems
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const item = normalizeTimelineItem(entry as Record<string, unknown>);
+      return item ? [item] : [];
+    });
   return {
     items,
     source: typed.source === "network" ? "network" : "dom",
@@ -1213,6 +2686,8 @@ async function readPostViaNetwork(
       requestUrl.pathname = "/ajax/statuses/show";
       requestUrl.search = "";
       requestUrl.searchParams.set("id", inputId);
+      requestUrl.searchParams.set("isGetLongText", "true");
+      requestUrl.searchParams.set("locale", "en-US");
       const headers = Object.entries(selected.headers ?? {}).reduce<Record<string, string>>((result, [key, value]) => {
         if (typeof value === "string" && headerAllowlist.some((allowed) => allowed === key.toLowerCase())) {
           result[key] = value;
@@ -1374,38 +2849,38 @@ async function readPostRepliesViaNetwork(
   if (typed.selectedTemplate?.url && typed.selectedTemplate.method) {
     PROCESS_TEMPLATE_CACHE.set("post.replies.list", typed.selectedTemplate);
   }
-  const items = Array.isArray(typed.items)
-    ? typed.items.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const raw = entry as Record<string, unknown>;
-        const user = raw.user && typeof raw.user === "object" && !Array.isArray(raw.user)
-          ? (raw.user as Record<string, unknown>)
-          : undefined;
-        const id =
-          typeof raw.idstr === "string"
-            ? raw.idstr
-            : typeof raw.id === "number"
-              ? String(raw.id)
-              : typeof raw.id === "string"
-                ? raw.id
-                : "";
-        const text = typeof raw.text_raw === "string" ? raw.text_raw.trim() : typeof raw.text === "string" ? raw.text.trim() : "";
-        if (!id || !text) {
-          return [];
-        }
-        const authorName = typeof user?.screen_name === "string" ? user.screen_name : undefined;
-        const authorUrl = typeof user?.profile_url === "string" ? new URL(user.profile_url, "https://weibo.com").toString() : undefined;
-        return [{
-          id,
-          text,
-          ...(authorName ? { authorName } : {}),
-          ...(authorUrl ? { authorUrl } : {}),
-          ...(typeof raw.created_at === "string" ? { createdAt: raw.created_at } : {}),
-        }];
-      })
-    : [];
+  const hydratedItems = Array.isArray(typed.items) ? await hydrateLongTextItems(page, typed.items) : [];
+  const items = hydratedItems
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const raw = entry as Record<string, unknown>;
+      const user = raw.user && typeof raw.user === "object" && !Array.isArray(raw.user)
+        ? (raw.user as Record<string, unknown>)
+        : undefined;
+      const id =
+        typeof raw.idstr === "string"
+          ? raw.idstr
+          : typeof raw.id === "number"
+            ? String(raw.id)
+            : typeof raw.id === "string"
+              ? raw.id
+              : "";
+      const text = extractWeiboPostText(raw);
+      if (!id || !text) {
+        return [];
+      }
+      const authorName = typeof user?.screen_name === "string" ? user.screen_name : undefined;
+      const authorUrl = typeof user?.profile_url === "string" ? new URL(user.profile_url, "https://weibo.com").toString() : undefined;
+      return [{
+        id,
+        text,
+        ...(authorName ? { authorName } : {}),
+        ...(authorUrl ? { authorUrl } : {}),
+        ...(typeof raw.created_at === "string" ? { createdAt: raw.created_at } : {}),
+      }];
+    });
   return {
     items,
     source: typed.source === "network" ? "network" : "dom",
@@ -1499,15 +2974,15 @@ async function readPostRepostsViaNetwork(
   if (typed.selectedTemplate?.url && typed.selectedTemplate.method) {
     PROCESS_TEMPLATE_CACHE.set("post.repost.list", typed.selectedTemplate);
   }
-  const items = Array.isArray(typed.items)
-    ? typed.items.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const item = normalizeTimelineItem(entry as Record<string, unknown>);
-        return item ? [item] : [];
-      })
-    : [];
+  const hydratedItems = Array.isArray(typed.items) ? await hydrateLongTextItems(page, typed.items) : [];
+  const items = hydratedItems
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const item = normalizeTimelineItem(entry as Record<string, unknown>);
+      return item ? [item] : [];
+    });
   return {
     items,
     source: typed.source === "network" ? "network" : "dom",
@@ -1676,15 +3151,15 @@ async function readUserPostsViaNetwork(
   if (typed.selectedTemplate?.url && typed.selectedTemplate.method) {
     PROCESS_TEMPLATE_CACHE.set("user.posts.list", typed.selectedTemplate);
   }
-  const items = Array.isArray(typed.items)
-    ? typed.items.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const item = normalizeTimelineItem(entry as Record<string, unknown>);
-        return item ? [item] : [];
-      })
-    : [];
+  const hydratedItems = Array.isArray(typed.items) ? await hydrateLongTextItems(page, typed.items) : [];
+  const items = hydratedItems
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const item = normalizeTimelineItem(entry as Record<string, unknown>);
+      return item ? [item] : [];
+    });
   return {
     items,
     source: typed.source === "network" ? "network" : "dom",
@@ -1770,6 +3245,40 @@ export function createWeiboAdapter(): SiteAdapter {
         };
       }
 
+      if (name === "post.create") {
+        const text = readNonEmptyString(args, "text");
+        if (!text) {
+          return errorResult("VALIDATION_ERROR", "text is required");
+        }
+        const authError = await ensureAuthenticated(page);
+        if (authError) {
+          return authError;
+        }
+        return await withEphemeralPage(page, HOME_TIMELINE_URL, async (writePage) => {
+          await waitForWeiboSurface(writePage);
+          const composeResult = await composeWeiboPost(writePage, text, args.dryRun === true);
+          if (!composeResult.ok) {
+            return errorResult("UPSTREAM_CHANGED", "post compose controls not found");
+          }
+          if (composeResult.dryRun) {
+            return {
+              ok: true,
+              dryRun: true,
+              submitVisible: composeResult.submitVisible === true,
+            };
+          }
+          const confirmation = await waitForPostConfirmation(writePage, text, DEFAULT_WRITE_CONFIRM_TIMEOUT_MS);
+          if (!confirmation.confirmed) {
+            return errorResult("ACTION_UNCONFIRMED", "post submit was not confirmed in timeline");
+          }
+          return {
+            ok: true,
+            confirmed: true,
+            ...(confirmation.url ? { url: confirmation.url } : {}),
+          };
+        });
+      }
+
       if (name === "post.get") {
         const url = readNonEmptyString(args, "url");
         const id = readNonEmptyString(args, "id");
@@ -1786,7 +3295,7 @@ export function createWeiboAdapter(): SiteAdapter {
           return authError;
         }
 
-        const targetId = id ?? targetUrl.match(/(\d{8,})/)?.[1];
+        const targetId = id ?? parsePostIdFromUrl(targetUrl);
         if (targetId) {
           const networkResult = await readPostViaNetwork(page, targetId);
           if (networkResult.post) {
@@ -1799,8 +3308,24 @@ export function createWeiboAdapter(): SiteAdapter {
         }
 
         await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-        await page.waitForTimeout(500);
-        const post = await extractCurrentPost(page);
+        await settleReadPage(page);
+        if (!targetId) {
+          const candidateIds = await retryOnNavigationRace(page, async () => await extractCurrentPostCandidateIds(page));
+          for (const candidateId of candidateIds) {
+            const networkResult = await readPostViaNetwork(page, candidateId);
+            if (networkResult.post) {
+              return {
+                post: {
+                  ...networkResult.post,
+                  url: targetUrl,
+                },
+                source: networkResult.source,
+                ...(networkResult.reason ? { reason: networkResult.reason } : {}),
+              };
+            }
+          }
+        }
+        const post = await retryOnNavigationRace(page, async () => await extractCurrentPost(page));
         if (!post) {
           return errorResult("UPSTREAM_CHANGED", "unable to locate the target Weibo post");
         }
@@ -1808,6 +3333,125 @@ export function createWeiboAdapter(): SiteAdapter {
           post,
           source: "dom",
         };
+      }
+
+      if (name === "comment.create") {
+        const text = readNonEmptyString(args, "text");
+        const url = readNonEmptyString(args, "url");
+        const id = readNonEmptyString(args, "id");
+        if (!text) {
+          return errorResult("VALIDATION_ERROR", "text is required");
+        }
+        if (!url && !id) {
+          return errorResult("VALIDATION_ERROR", "url or id is required");
+        }
+        const targetUrl = url ?? buildPostUrl(id as string);
+        if (!isAllowedWeiboUrl(targetUrl)) {
+          return errorResult("URL_NOT_ALLOWED", "url must stay within weibo.com hosts");
+        }
+        const authError = await ensureAuthenticated(page);
+        if (authError) {
+          return authError;
+        }
+        return await withEphemeralPage(page, targetUrl, async (commentPage) => {
+          await waitForWeiboSurface(commentPage);
+          const composeResult = await composeWeiboComment(commentPage, text, args.dryRun === true);
+          if (!composeResult.ok) {
+            return errorResult("UPSTREAM_CHANGED", "comment controls not found");
+          }
+          if (composeResult.dryRun) {
+            return {
+              ok: true,
+              dryRun: true,
+              submitVisible: composeResult.submitVisible === true,
+              commentToUrl: targetUrl,
+            };
+          }
+          const confirmation = await waitForCommentConfirmation(commentPage, text, DEFAULT_WRITE_CONFIRM_TIMEOUT_MS);
+          if (!confirmation.confirmed) {
+            return errorResult("ACTION_UNCONFIRMED", "comment submit was not confirmed in replies");
+          }
+          return {
+            ok: true,
+            confirmed: true,
+            commentToUrl: targetUrl,
+            ...(confirmation.url ? { url: confirmation.url } : {}),
+          };
+        });
+      }
+
+      if (name === "article.listDrafts") {
+        const authError = await ensureAuthenticated(page);
+        if (authError) {
+          return authError;
+        }
+        return await withEphemeralPage(page, WEIBO_ARTICLE_EDITOR_URL, async (articlePage) => {
+          await waitForWeiboArticleEditor(articlePage);
+          const drafts = await extractWeiboArticleDrafts(articlePage);
+          return {
+            items: drafts,
+            source: "dom",
+          };
+        });
+      }
+
+      if (name === "article.getDraft") {
+        const draftId = readNonEmptyString(args, "draftId");
+        const authError = await ensureAuthenticated(page);
+        if (authError) {
+          return authError;
+        }
+        return await withEphemeralPage(page, buildArticleEditUrl(draftId), async (articlePage) => {
+          await waitForWeiboArticleEditor(articlePage);
+          const draft = await extractWeiboArticleDraft(articlePage);
+          if (!draft) {
+            return errorResult("UPSTREAM_CHANGED", "article draft editor content not found");
+          }
+          return {
+            draft,
+            source: "dom",
+          };
+        });
+      }
+
+      if (name === "article.draftMarkdown") {
+        const markdownPath = readNonEmptyString(args, "markdownPath");
+        if (!markdownPath) {
+          return errorResult("VALIDATION_ERROR", "markdownPath is required");
+        }
+        const authError = await ensureAuthenticated(page);
+        if (authError) {
+          return authError;
+        }
+        return await createWeiboArticleFromMarkdown(
+          page,
+          markdownPath,
+          readNonEmptyString(args, "title"),
+          readNonEmptyString(args, "lead"),
+          readNonEmptyString(args, "coverImagePath"),
+          false,
+          args.dryRun === true,
+        );
+      }
+
+      if (name === "article.publishMarkdown") {
+        const markdownPath = readNonEmptyString(args, "markdownPath");
+        if (!markdownPath) {
+          return errorResult("VALIDATION_ERROR", "markdownPath is required");
+        }
+        const authError = await ensureAuthenticated(page);
+        if (authError) {
+          return authError;
+        }
+        return await createWeiboArticleFromMarkdown(
+          page,
+          markdownPath,
+          readNonEmptyString(args, "title"),
+          readNonEmptyString(args, "lead"),
+          readNonEmptyString(args, "coverImagePath"),
+          true,
+          args.dryRun === true,
+        );
       }
 
       if (name === "post.replies.list") {
@@ -1825,7 +3469,7 @@ export function createWeiboAdapter(): SiteAdapter {
         if (authError) {
           return authError;
         }
-        const targetId = id ?? targetUrl.match(/(\d{8,})/)?.[1];
+        const targetId = id ?? parsePostIdFromUrl(targetUrl);
         if (targetId) {
           const networkResult = await readPostRepliesViaNetwork(page, targetId, cursor);
           if (networkResult.source === "network") {
@@ -1867,7 +3511,7 @@ export function createWeiboAdapter(): SiteAdapter {
         if (authError) {
           return authError;
         }
-        const targetId = id ?? targetUrl.match(/(\d{8,})/)?.[1];
+        const targetId = id ?? parsePostIdFromUrl(targetUrl);
         if (targetId) {
           const networkResult = await readPostRepostsViaNetwork(page, targetId, cursor);
           if (networkResult.source === "network") {
@@ -1999,9 +3643,21 @@ export function createWeiboAdapter(): SiteAdapter {
           searchUrl.searchParams.set("page", String(pageNo));
         }
 
-        await page.goto(searchUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30_000 });
-        await page.waitForTimeout(500);
-        const result = await extractSearchResults(page, limit);
+        const requestResult = await readSearchResultsViaRequest(page, searchUrl.toString(), limit);
+        if (requestResult) {
+          return {
+            query,
+            items: requestResult.items,
+            hasMore: requestResult.hasMore,
+            source: "dom",
+            ...(requestResult.nextCursor ? { nextCursor: requestResult.nextCursor } : {}),
+          };
+        }
+
+        const result = await withEphemeralReadPage(page, searchUrl.toString(), async (readPage) => {
+          await settleReadPage(readPage);
+          return await retryOnNavigationRace(readPage, async () => await extractSearchResults(readPage, limit));
+        });
         return {
           query,
           items: result.items,
