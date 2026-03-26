@@ -2158,17 +2158,8 @@ async function readAiSearchSummaryViaNetwork(
 }
 
 function normalizeTimelineItem(raw: Record<string, unknown>): TimelineItem | undefined {
-  const id =
-    typeof raw.idstr === "string"
-      ? raw.idstr
-      : typeof raw.mid === "string"
-        ? raw.mid
-        : typeof raw.id === "number"
-          ? String(raw.id)
-          : typeof raw.id === "string"
-            ? raw.id
-            : "";
-  const text = typeof raw.text_raw === "string" ? raw.text_raw.trim() : typeof raw.text === "string" ? raw.text.trim() : "";
+  const id = extractWeiboPostId(raw);
+  const text = extractWeiboPostText(raw);
   if (!id || !text) {
     return undefined;
   }
@@ -2189,6 +2180,92 @@ function normalizeTimelineItem(raw: Record<string, unknown>): TimelineItem | und
     ...(screenName ? { url: `https://weibo.com/${screenName}/${id}` } : {}),
   };
   return item;
+}
+
+function extractWeiboPostId(raw: Record<string, unknown>): string {
+  return typeof raw.idstr === "string"
+    ? raw.idstr
+    : typeof raw.mid === "string"
+      ? raw.mid
+      : typeof raw.id === "number"
+        ? String(raw.id)
+        : typeof raw.id === "string"
+          ? raw.id
+          : "";
+}
+
+function extractWeiboPostText(raw: Record<string, unknown>): string {
+  const longText = typeof raw.longTextContent_raw === "string"
+    ? raw.longTextContent_raw
+    : typeof raw.longTextContent === "string"
+      ? raw.longTextContent
+      : typeof raw.text_raw === "string"
+        ? raw.text_raw
+        : typeof raw.text === "string"
+          ? raw.text
+          : "";
+  return longText.trim();
+}
+
+function needsLongTextHydration(raw: Record<string, unknown>): boolean {
+  const isLongText = raw.isLongText === true || raw.isLongText === 1 || raw.isLongText === "true";
+  if (!isLongText) {
+    return false;
+  }
+  return typeof raw.longTextContent_raw !== "string" && typeof raw.longTextContent !== "string";
+}
+
+async function hydrateLongTextItems(
+  page: Parameters<SiteAdapter["callTool"]>[1]["page"],
+  items: unknown[],
+): Promise<Array<Record<string, unknown>>> {
+  const rawItems = items.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    return [entry as Record<string, unknown>];
+  });
+  const pendingIds = rawItems
+    .map((entry) => ({ id: extractWeiboPostId(entry), needsHydration: needsLongTextHydration(entry) }))
+    .filter((entry) => entry.id && entry.needsHydration)
+    .map((entry) => entry.id);
+  if (!pendingIds.length) {
+    return rawItems;
+  }
+
+  const detailed = await page.evaluate(async ({ ids }) => {
+    const result: Record<string, Record<string, unknown>> = {};
+    for (const id of ids) {
+      try {
+        const requestUrl = new URL("/ajax/statuses/show", location.origin);
+        requestUrl.searchParams.set("id", id);
+        requestUrl.searchParams.set("isGetLongText", "true");
+        requestUrl.searchParams.set("locale", "en-US");
+        const response = await fetch(requestUrl.toString(), {
+          credentials: "include",
+        });
+        if (!response.ok) {
+          continue;
+        }
+        const json = await response.json().catch(() => null);
+        if (json && typeof json === "object" && !Array.isArray(json)) {
+          result[id] = json as Record<string, unknown>;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return result;
+  }, { ids: pendingIds });
+
+  const detailMap = detailed && typeof detailed === "object" && !Array.isArray(detailed)
+    ? detailed as Record<string, Record<string, unknown>>
+    : {};
+  return rawItems.map((entry) => {
+    const id = extractWeiboPostId(entry);
+    const detail = id ? detailMap[id] : undefined;
+    return detail ? { ...entry, ...detail } : entry;
+  });
 }
 
 function normalizeUserProfile(raw: Record<string, unknown>): UserProfile | undefined {
@@ -2342,15 +2419,15 @@ async function readTimelineViaNetwork(
   if (typed.selectedTemplate?.url && typed.selectedTemplate.method) {
     PROCESS_TEMPLATE_CACHE.set("timeline.home.list", typed.selectedTemplate);
   }
-  const items = Array.isArray(typed.items)
-    ? typed.items.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const item = normalizeTimelineItem(entry as Record<string, unknown>);
-        return item ? [item] : [];
-      })
-    : [];
+  const hydratedItems = Array.isArray(typed.items) ? await hydrateLongTextItems(page, typed.items) : [];
+  const items = hydratedItems
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const item = normalizeTimelineItem(entry as Record<string, unknown>);
+      return item ? [item] : [];
+    });
   return {
     items,
     source: typed.source === "network" ? "network" : "dom",
@@ -2384,6 +2461,8 @@ async function readPostViaNetwork(
       requestUrl.pathname = "/ajax/statuses/show";
       requestUrl.search = "";
       requestUrl.searchParams.set("id", inputId);
+      requestUrl.searchParams.set("isGetLongText", "true");
+      requestUrl.searchParams.set("locale", "en-US");
       const headers = Object.entries(selected.headers ?? {}).reduce<Record<string, string>>((result, [key, value]) => {
         if (typeof value === "string" && headerAllowlist.some((allowed) => allowed === key.toLowerCase())) {
           result[key] = value;
@@ -2545,38 +2624,38 @@ async function readPostRepliesViaNetwork(
   if (typed.selectedTemplate?.url && typed.selectedTemplate.method) {
     PROCESS_TEMPLATE_CACHE.set("post.replies.list", typed.selectedTemplate);
   }
-  const items = Array.isArray(typed.items)
-    ? typed.items.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const raw = entry as Record<string, unknown>;
-        const user = raw.user && typeof raw.user === "object" && !Array.isArray(raw.user)
-          ? (raw.user as Record<string, unknown>)
-          : undefined;
-        const id =
-          typeof raw.idstr === "string"
-            ? raw.idstr
-            : typeof raw.id === "number"
-              ? String(raw.id)
-              : typeof raw.id === "string"
-                ? raw.id
-                : "";
-        const text = typeof raw.text_raw === "string" ? raw.text_raw.trim() : typeof raw.text === "string" ? raw.text.trim() : "";
-        if (!id || !text) {
-          return [];
-        }
-        const authorName = typeof user?.screen_name === "string" ? user.screen_name : undefined;
-        const authorUrl = typeof user?.profile_url === "string" ? new URL(user.profile_url, "https://weibo.com").toString() : undefined;
-        return [{
-          id,
-          text,
-          ...(authorName ? { authorName } : {}),
-          ...(authorUrl ? { authorUrl } : {}),
-          ...(typeof raw.created_at === "string" ? { createdAt: raw.created_at } : {}),
-        }];
-      })
-    : [];
+  const hydratedItems = Array.isArray(typed.items) ? await hydrateLongTextItems(page, typed.items) : [];
+  const items = hydratedItems
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const raw = entry as Record<string, unknown>;
+      const user = raw.user && typeof raw.user === "object" && !Array.isArray(raw.user)
+        ? (raw.user as Record<string, unknown>)
+        : undefined;
+      const id =
+        typeof raw.idstr === "string"
+          ? raw.idstr
+          : typeof raw.id === "number"
+            ? String(raw.id)
+            : typeof raw.id === "string"
+              ? raw.id
+              : "";
+      const text = extractWeiboPostText(raw);
+      if (!id || !text) {
+        return [];
+      }
+      const authorName = typeof user?.screen_name === "string" ? user.screen_name : undefined;
+      const authorUrl = typeof user?.profile_url === "string" ? new URL(user.profile_url, "https://weibo.com").toString() : undefined;
+      return [{
+        id,
+        text,
+        ...(authorName ? { authorName } : {}),
+        ...(authorUrl ? { authorUrl } : {}),
+        ...(typeof raw.created_at === "string" ? { createdAt: raw.created_at } : {}),
+      }];
+    });
   return {
     items,
     source: typed.source === "network" ? "network" : "dom",
@@ -2670,15 +2749,15 @@ async function readPostRepostsViaNetwork(
   if (typed.selectedTemplate?.url && typed.selectedTemplate.method) {
     PROCESS_TEMPLATE_CACHE.set("post.repost.list", typed.selectedTemplate);
   }
-  const items = Array.isArray(typed.items)
-    ? typed.items.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const item = normalizeTimelineItem(entry as Record<string, unknown>);
-        return item ? [item] : [];
-      })
-    : [];
+  const hydratedItems = Array.isArray(typed.items) ? await hydrateLongTextItems(page, typed.items) : [];
+  const items = hydratedItems
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const item = normalizeTimelineItem(entry as Record<string, unknown>);
+      return item ? [item] : [];
+    });
   return {
     items,
     source: typed.source === "network" ? "network" : "dom",
@@ -2847,15 +2926,15 @@ async function readUserPostsViaNetwork(
   if (typed.selectedTemplate?.url && typed.selectedTemplate.method) {
     PROCESS_TEMPLATE_CACHE.set("user.posts.list", typed.selectedTemplate);
   }
-  const items = Array.isArray(typed.items)
-    ? typed.items.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const item = normalizeTimelineItem(entry as Record<string, unknown>);
-        return item ? [item] : [];
-      })
-    : [];
+  const hydratedItems = Array.isArray(typed.items) ? await hydrateLongTextItems(page, typed.items) : [];
+  const items = hydratedItems
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const item = normalizeTimelineItem(entry as Record<string, unknown>);
+      return item ? [item] : [];
+    });
   return {
     items,
     source: typed.source === "network" ? "network" : "dom",

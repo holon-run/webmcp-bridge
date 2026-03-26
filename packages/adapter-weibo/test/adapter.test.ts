@@ -15,7 +15,9 @@ function createMockPage(options?: {
   authState?: "authenticated" | "auth_required" | "challenge_required";
   authSignals?: string[];
   timelineBatches?: Array<Array<Record<string, unknown>>>;
+  networkTimelineItems?: Array<Record<string, unknown>>;
   post?: Record<string, unknown>;
+  networkPost?: Record<string, unknown>;
   user?: Record<string, unknown>;
   aiSummary?: Record<string, unknown>;
   composeResult?: { ok: boolean; dryRun?: boolean; reason?: string; submitVisible?: boolean };
@@ -307,6 +309,60 @@ function createMockPage(options?: {
     if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_user") {
       return options?.user;
     }
+    if (
+      arg
+      && typeof arg === "object"
+      && !Array.isArray(arg)
+      && "inputLimit" in arg
+      && "inputCursor" in arg
+      && "fallbackTemplate" in arg
+      && "headerAllowlist" in arg
+      && options?.networkTimelineItems
+    ) {
+      return {
+        source: "network",
+        items: options.networkTimelineItems,
+        selectedTemplate: {
+          url: "https://weibo.com/ajax/feed/unreadfriendstimeline?since_id=0",
+          method: "GET",
+          headers: {},
+        },
+      };
+    }
+    if (
+      arg
+      && typeof arg === "object"
+      && !Array.isArray(arg)
+      && "ids" in arg
+      && Array.isArray(arg.ids)
+      && options?.networkPost
+    ) {
+      const ids = arg.ids as string[];
+      return ids.reduce<Record<string, Record<string, unknown>>>((result, id) => {
+        result[id] = options.networkPost as Record<string, unknown>;
+        return result;
+      }, {});
+    }
+    if (
+      arg
+      && typeof arg === "object"
+      && !Array.isArray(arg)
+      && "inputId" in arg
+      && "fallbackTemplate" in arg
+      && "headerAllowlist" in arg
+      && !("inputCursor" in arg)
+      && options?.networkPost
+    ) {
+      return {
+        source: "network",
+        post: options.networkPost,
+        selectedTemplate: {
+          url: "https://weibo.com/ajax/statuses/show?id=0",
+          method: "GET",
+          headers: {},
+        },
+      };
+    }
     if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "compose_post") {
       return options?.composeResult ?? { ok: true };
     }
@@ -488,6 +544,48 @@ describe("createAdapter", () => {
       confirmed: true,
       commentToUrl: "https://weibo.com/detail/m1",
       url: "https://weibo.com/detail/m1",
+    });
+  });
+
+  it("hydrates long text items in network timeline reads", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      networkTimelineItems: [
+        {
+          id: "5272327174494361",
+          text_raw: "截断微博 一 ​​​",
+          isLongText: true,
+          user: {
+            screen_name: "jolestar",
+            profile_url: "/u/1648815335",
+          },
+        },
+      ],
+      networkPost: {
+        id: "5272327174494361",
+        text_raw: "截断微博 一 ​​​",
+        longTextContent_raw: "这是 timeline 返回时需要补抓的完整长微博正文。",
+        user: {
+          screen_name: "jolestar",
+          profile_url: "/u/1648815335",
+        },
+      },
+    });
+
+    await expect(
+      adapter.callTool({ name: "timeline.home.list", input: { limit: 1 } }, { page: page as never }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: "5272327174494361",
+          text: "这是 timeline 返回时需要补抓的完整长微博正文。",
+          authorName: "jolestar",
+          authorUrl: "https://weibo.com/u/1648815335",
+          url: "https://weibo.com/jolestar/5272327174494361",
+        },
+      ],
+      hasMore: false,
+      source: "network",
     });
   });
 
@@ -735,6 +833,34 @@ describe("createAdapter", () => {
     expect(page.goto).toHaveBeenCalledWith("https://weibo.com/detail/m1", {
       waitUntil: "domcontentloaded",
       timeout: 30000,
+    });
+  });
+
+  it("prefers long text content for long posts", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      networkPost: {
+        id: "5272327174494361",
+        text_raw: "截断微博 一 ​​​",
+        longTextContent_raw: "这是完整长微博正文，应该优先返回这一段，而不是截断版本。",
+        user: {
+          screen_name: "jolestar",
+          profile_url: "/u/1648815335",
+        },
+      },
+    });
+
+    await expect(
+      adapter.callTool({ name: "post.get", input: { id: "5272327174494361" } }, { page: page as never }),
+    ).resolves.toEqual({
+      post: {
+        id: "5272327174494361",
+        text: "这是完整长微博正文，应该优先返回这一段，而不是截断版本。",
+        authorName: "jolestar",
+        authorUrl: "https://weibo.com/u/1648815335",
+        url: "https://weibo.com/jolestar/5272327174494361",
+      },
+      source: "network",
     });
   });
 
