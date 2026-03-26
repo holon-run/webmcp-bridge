@@ -1,0 +1,7 @@
+interface:
+  display_name: "Weibo WebMCP"
+  short_description: "Operate Weibo through local-mcp"
+  default_prompt: "Use $weibo-webmcp to connect to Weibo through the built-in adapter, verify auth state, and read timeline, post, profile, and search data through local-mcp."
+
+policy:
+  allow_implicit_invocation: true

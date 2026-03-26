@@ -4,6 +4,9 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createAdapter, manifest } from "../src/index.js";
 
 function createMockPage(options?: {
@@ -15,14 +18,102 @@ function createMockPage(options?: {
   post?: Record<string, unknown>;
   user?: Record<string, unknown>;
   aiSummary?: Record<string, unknown>;
+  composeResult?: { ok: boolean; dryRun?: boolean; reason?: string; submitVisible?: boolean };
+  commentComposeResult?: { ok: boolean; dryRun?: boolean; reason?: string; submitVisible?: boolean };
+  postConfirmation?: { confirmed: boolean; url?: string };
+  commentConfirmation?: { confirmed: boolean; url?: string };
+  articleDrafts?: Array<Record<string, unknown>>;
+  articleDraft?: Record<string, unknown>;
+  childUrl?: string;
+  coverLibraryItems?: number;
 }) {
   let timelinePass = 0;
+  let coverLibraryCount = options?.coverLibraryItems ?? 0;
+  let coverSelectionEnabled = false;
+  const makeLocator = (selector: string) => {
+    if (selector === ".cover-preview" || selector === ".cover-preview .mask") {
+      return {
+        first: () => ({
+          count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
+          click: vi.fn(async () => {}),
+        }),
+      };
+    }
+    if (selector === ".image-list .image-item") {
+      return {
+        count: vi.fn(async () => coverLibraryCount),
+        nth: (_index: number) => ({
+          count: vi.fn(async () => (coverLibraryCount > 0 ? 1 : 0)),
+          click: vi.fn(async () => {
+            if (coverLibraryCount > 0) {
+              coverSelectionEnabled = true;
+            }
+          }),
+        }),
+      };
+    }
+    if (selector === "input[type='file']") {
+      return {
+        first: () => ({
+          count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
+          setInputFiles: vi.fn(async () => {
+            coverLibraryCount += 1;
+          }),
+        }),
+        last: () => ({
+          count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
+          setInputFiles: vi.fn(async () => {
+            coverLibraryCount += 1;
+          }),
+        }),
+      };
+    }
+    return {
+      first: () => ({
+        count: vi.fn(async () => 0),
+        click: vi.fn(async () => {}),
+        setInputFiles: vi.fn(async () => {}),
+      }),
+      last: () => ({
+        count: vi.fn(async () => 0),
+        click: vi.fn(async () => {}),
+        setInputFiles: vi.fn(async () => {}),
+        isDisabled: vi.fn(async () => !coverSelectionEnabled),
+      }),
+      nth: (_index: number) => ({
+        count: vi.fn(async () => 0),
+        click: vi.fn(async () => {}),
+      }),
+      count: vi.fn(async () => 0),
+    };
+  };
+  const makeTextLocator = (text: string) => ({
+    first: () => ({
+      count: vi.fn(async () => {
+        if (options?.coverLibraryItems === undefined) {
+          return 1;
+        }
+        return ["图片库", "上传", "下一步", "取消"].includes(text) ? 1 : 1;
+      }),
+      click: vi.fn(async () => {}),
+    }),
+    last: () => ({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {}),
+      isDisabled: vi.fn(async () => (text.includes("下一步") ? !coverSelectionEnabled : false)),
+    }),
+  });
   const page: {
     addInitScript: ReturnType<typeof vi.fn>;
     goto: ReturnType<typeof vi.fn>;
     url: ReturnType<typeof vi.fn>;
     title: ReturnType<typeof vi.fn>;
     waitForTimeout: ReturnType<typeof vi.fn>;
+    waitForLoadState: ReturnType<typeof vi.fn>;
+    waitForFunction: ReturnType<typeof vi.fn>;
+    waitForEvent: ReturnType<typeof vi.fn>;
+    locator: ReturnType<typeof vi.fn>;
+    getByText: ReturnType<typeof vi.fn>;
     evaluate: ReturnType<typeof vi.fn>;
     context?: ReturnType<typeof vi.fn>;
     __childPage?: {
@@ -30,6 +121,11 @@ function createMockPage(options?: {
       close: ReturnType<typeof vi.fn>;
       url: ReturnType<typeof vi.fn>;
       isClosed: ReturnType<typeof vi.fn>;
+      waitForLoadState: ReturnType<typeof vi.fn>;
+      waitForFunction: ReturnType<typeof vi.fn>;
+      waitForEvent: ReturnType<typeof vi.fn>;
+      locator: ReturnType<typeof vi.fn>;
+      getByText: ReturnType<typeof vi.fn>;
     };
     __newPageMock?: ReturnType<typeof vi.fn>;
   } = {
@@ -38,6 +134,11 @@ function createMockPage(options?: {
     url: vi.fn(() => options?.url ?? "https://weibo.com"),
     title: vi.fn(async () => options?.title ?? "微博"),
     waitForTimeout: vi.fn(async () => {}),
+    waitForLoadState: vi.fn(async () => {}),
+    waitForFunction: vi.fn(async () => {}),
+    waitForEvent: vi.fn(async () => null),
+    locator: vi.fn((selector: string) => makeLocator(selector)),
+    getByText: vi.fn((text: string) => makeTextLocator(text)),
     evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
       if (arg && typeof arg === "object" && !Array.isArray(arg) && "url" in arg && "title" in arg) {
         return {
@@ -82,8 +183,29 @@ function createMockPage(options?: {
       if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_user") {
         return options?.user;
       }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "inputQuery" in arg) {
-        return { source: "dom", reason: "request_failed" };
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "compose_post") {
+        return options?.composeResult ?? { ok: true };
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "confirm_post") {
+        return options?.postConfirmation ?? { confirmed: true, url: "https://weibo.com/detail/mock-post" };
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "compose_comment") {
+        return options?.commentComposeResult ?? { ok: true };
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "confirm_comment") {
+        return options?.commentConfirmation ?? { confirmed: true, url: "https://weibo.com/detail/mock-comment" };
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "labels" in arg) {
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "placeholderNeedle" in arg && "value" in arg) {
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "html" in arg) {
+        return true;
+      }
+      if (arg === undefined) {
+        return options?.articleDrafts ?? true;
       }
       if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_ai_search") {
         return options?.aiSummary;
@@ -97,16 +219,140 @@ function createMockPage(options?: {
   const childPage = {
     addInitScript: vi.fn(async () => {}),
     goto: vi.fn(async () => {}),
-    url: vi.fn(() => options?.url ?? "https://weibo.com"),
+    url: vi.fn(() => options?.childUrl ?? options?.url ?? "https://weibo.com"),
     title: vi.fn(async () => options?.title ?? "微博"),
     waitForTimeout: vi.fn(async () => {}),
+    waitForLoadState: vi.fn(async () => {}),
+    waitForFunction: vi.fn(async () => {}),
+    waitForEvent: vi.fn(async () => null),
+    locator: vi.fn((selector: string) => makeLocator(selector)),
+    getByText: vi.fn((text: string) => makeTextLocator(text)),
     close: vi.fn(async () => {}),
     isClosed: vi.fn(() => false),
-    evaluate: page.evaluate,
+    evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "labels" in arg) {
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "placeholderNeedle" in arg && "value" in arg) {
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "html" in arg) {
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "inputQuery" in arg) {
+        return { source: "dom", reason: "request_failed" };
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_ai_search") {
+        return options?.aiSummary;
+      }
+      if (arg === undefined) {
+        return true;
+      }
+      return undefined;
+    }),
   };
+  const articleDrafts = options?.articleDrafts ?? [
+    { id: "168782", title: "现有草稿", updatedAt: "2026-03-25 22:45", editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782", active: true },
+  ];
+  const articleDraft = options?.articleDraft ?? {
+    id: "168782",
+    title: "现有草稿",
+    lead: "草稿导语",
+    bodyText: "草稿正文",
+    bodyHtml: "<p>草稿正文</p>",
+    wordCount: 4,
+    editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+  };
+  page.evaluate = vi.fn(async (_fn: unknown, arg?: unknown) => {
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "url" in arg && "title" in arg) {
+      return {
+        state: options?.authState ?? "authenticated",
+        signals: options?.authSignals ?? ["feed-ui"],
+      };
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "collect_timeline") {
+      const timelineArg = arg as unknown as { maxItems: number };
+      const batches = options?.timelineBatches ?? [
+        [
+          { id: "m1", text: "第一条微博", url: "https://weibo.com/detail/m1", authorName: "alice" },
+          { id: "m2", text: "第二条微博", url: "https://weibo.com/detail/m2", authorName: "bob" },
+          { id: "m3", text: "第三条微博", url: "https://weibo.com/detail/m3", authorName: "carol" },
+        ],
+      ];
+      const batch = batches[Math.min(timelinePass, batches.length - 1)] ?? [];
+      timelinePass += 1;
+      return batch.slice(0, timelineArg.maxItems);
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_post") {
+      return options?.post;
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_comments") {
+      const timelineArg = arg as unknown as { maxItems: number };
+      const batches = options?.timelineBatches ?? [];
+      const batch = batches[0] ?? [];
+      return batch.slice(0, timelineArg.maxItems);
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_reposts") {
+      const timelineArg = arg as unknown as { maxItems: number };
+      const batches = options?.timelineBatches ?? [];
+      const batch = batches[0] ?? [];
+      return batch.slice(0, timelineArg.maxItems);
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_search_results") {
+      const timelineArg = arg as unknown as { maxItems: number };
+      const batches = options?.timelineBatches ?? [];
+      const batch = batches[0] ?? [];
+      return batch.slice(0, timelineArg.maxItems);
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_user") {
+      return options?.user;
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "compose_post") {
+      return options?.composeResult ?? { ok: true };
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "confirm_post") {
+      return options?.postConfirmation ?? { confirmed: true, url: "https://weibo.com/detail/mock-post" };
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "compose_comment") {
+      return options?.commentComposeResult ?? { ok: true };
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "confirm_comment") {
+      return options?.commentConfirmation ?? { confirmed: true, url: "https://weibo.com/detail/mock-comment" };
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "inputQuery" in arg) {
+      return { source: "dom", reason: "request_failed" };
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "labels" in arg) {
+      return true;
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "placeholderNeedle" in arg && "value" in arg) {
+      return true;
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "html" in arg) {
+      return true;
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_ai_search") {
+      return options?.aiSummary;
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_article_drafts") {
+      return articleDrafts;
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_article_draft") {
+      return articleDraft;
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "article_publish_ready") {
+      return true;
+    }
+    if (arg === undefined) {
+      return true;
+    }
+    return undefined;
+  });
+  childPage.evaluate = page.evaluate;
   const newPageMock = vi.fn(async () => childPage);
   page.context = vi.fn(() => ({
     newPage: newPageMock,
+    request: undefined,
   }));
   return Object.assign(page, { __childPage: childPage, __newPageMock: newPageMock });
 }
@@ -173,6 +419,232 @@ describe("createAdapter", () => {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
+  });
+
+  it("supports dry-run post compose without submitting", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      composeResult: { ok: true, dryRun: true, submitVisible: true },
+    });
+
+    await expect(
+      adapter.callTool({ name: "post.create", input: { text: "hello weibo", dryRun: true } }, { page: page as never }),
+    ).resolves.toEqual({
+      ok: true,
+      dryRun: true,
+      submitVisible: true,
+    });
+  });
+
+  it("returns confirmed post compose result", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      composeResult: { ok: true },
+      postConfirmation: { confirmed: true, url: "https://weibo.com/detail/new-post" },
+    });
+
+    await expect(
+      adapter.callTool({ name: "post.create", input: { text: "hello weibo" } }, { page: page as never }),
+    ).resolves.toEqual({
+      ok: true,
+      confirmed: true,
+      url: "https://weibo.com/detail/new-post",
+    });
+  });
+
+  it("supports dry-run comment compose without submitting", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      commentComposeResult: { ok: true, dryRun: true, submitVisible: true },
+    });
+
+    await expect(
+      adapter.callTool(
+        { name: "comment.create", input: { id: "m1", text: "hello comment", dryRun: true } },
+        { page: page as never },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      dryRun: true,
+      submitVisible: true,
+      commentToUrl: "https://weibo.com/detail/m1",
+    });
+  });
+
+  it("returns confirmed comment result", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      commentComposeResult: { ok: true },
+      commentConfirmation: { confirmed: true, url: "https://weibo.com/detail/m1" },
+    });
+
+    await expect(
+      adapter.callTool(
+        { name: "comment.create", input: { id: "m1", text: "hello comment" } },
+        { page: page as never },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      confirmed: true,
+      commentToUrl: "https://weibo.com/detail/m1",
+      url: "https://weibo.com/detail/m1",
+    });
+  });
+
+  it("lists visible article drafts from the editor sidebar", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      childUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+      articleDrafts: [
+        {
+          id: "168782",
+          title: "现有草稿",
+          updatedAt: "2026-03-25 22:45",
+          editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+          active: true,
+        },
+        {
+          title: "旧草稿",
+          updatedAt: "2018-03-21 16:46",
+        },
+      ],
+    });
+
+    await expect(
+      adapter.callTool({ name: "article.listDrafts", input: {} }, { page: page as never }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: "168782",
+          title: "现有草稿",
+          updatedAt: "2026-03-25 22:45",
+          editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+          active: true,
+        },
+        {
+          title: "旧草稿",
+          updatedAt: "2018-03-21 16:46",
+        },
+      ],
+      source: "dom",
+    });
+  });
+
+  it("reads the current article draft from the editor", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      childUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+      articleDraft: {
+        id: "168782",
+        title: "现有草稿",
+        lead: "草稿导语",
+        bodyText: "草稿正文",
+        bodyHtml: "<p>草稿正文</p>",
+        wordCount: 4,
+        editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+      },
+    });
+
+    await expect(
+      adapter.callTool({ name: "article.getDraft", input: { draftId: "168782" } }, { page: page as never }),
+    ).resolves.toEqual({
+      draft: {
+        id: "168782",
+        title: "现有草稿",
+        lead: "草稿导语",
+        bodyText: "草稿正文",
+        bodyHtml: "<p>草稿正文</p>",
+        wordCount: 4,
+        editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+      },
+      source: "dom",
+    });
+  });
+
+  it("creates an article draft from markdown", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      childUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+    });
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-weibo-article-"));
+    const markdownPath = join(tempDir, "draft.md");
+    await writeFile(markdownPath, "# 测试文章\n\n这是一段正文。", "utf8");
+
+    try {
+      await expect(
+        adapter.callTool({ name: "article.draftMarkdown", input: { markdownPath } }, { page: page as never }),
+      ).resolves.toEqual({
+        ok: true,
+        title: "测试文章",
+        lead: "这是一段正文。",
+        editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+        draftId: "168782",
+        saved: true,
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("supports dry-run article publish without clicking the final publish button", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      childUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+    });
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-weibo-article-"));
+    const markdownPath = join(tempDir, "publish.md");
+    await writeFile(markdownPath, "# 发布测试\n\n这是一段正文。", "utf8");
+
+    try {
+      await expect(
+        adapter.callTool({ name: "article.publishMarkdown", input: { markdownPath, dryRun: true } }, { page: page as never }),
+      ).resolves.toEqual({
+        ok: true,
+        title: "发布测试",
+        lead: "这是一段正文。",
+        editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+        draftId: "168782",
+        saved: true,
+        dryRun: true,
+        canPublish: true,
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("supports dry-run article publish with a cover image upload", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      childUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+      coverLibraryItems: 2,
+    });
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-weibo-article-"));
+    const markdownPath = join(tempDir, "publish-cover.md");
+    const coverPath = join(tempDir, "cover.png");
+    await writeFile(markdownPath, "# 封面发布测试\n\n这是一段正文。", "utf8");
+    await writeFile(coverPath, "fake-image", "utf8");
+
+    try {
+      await expect(
+        adapter.callTool(
+          { name: "article.publishMarkdown", input: { markdownPath, coverImagePath: coverPath, dryRun: true } },
+          { page: page as never },
+        ),
+      ).resolves.toEqual({
+        ok: true,
+        title: "封面发布测试",
+        lead: "这是一段正文。",
+        editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+        draftId: "168782",
+        saved: true,
+        hasCoverImage: true,
+        dryRun: true,
+        canPublish: true,
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("reuses one cached read page across repeated timeline warmups", async () => {
@@ -397,6 +869,10 @@ describe("createAdapter", () => {
       hasMore: true,
       nextCursor: "2",
       source: "dom",
+    });
+    expect((page as typeof page & { __childPage: { goto: ReturnType<typeof vi.fn> } }).__childPage.goto).toHaveBeenCalledWith("https://s.weibo.com/weibo?q=OpenAI&Refer=weibo_weibo", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
     });
   });
 
