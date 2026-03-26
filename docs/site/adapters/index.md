@@ -6,6 +6,7 @@ They are used only when native WebMCP is unavailable.
 
 ## Built-In Adapters
 
+- [Fixture](./fixture.md)
 - [X](./x.md)
 - [Google And Gemini](./google.md)
 - [Weibo](./weibo.md)
@@ -26,6 +27,9 @@ This repo also includes a dedicated authoring workflow:
 - [Skills](../skills/) for `webmcp-adapter-creator`
 
 <!-- INDEX:START -->
+
+- [Adapter: Fixture](./fixture.md)
+  `@webmcp-bridge/adapter-fixture` provides deterministic fallback behavior for integration and contract tests.
 
 - [Adapter: Google And Gemini](./google.md)
   `@webmcp-bridge/adapter-google` handles Google and Gemini fallback automation when native WebMCP is unavailable.

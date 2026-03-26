@@ -1,6 +1,6 @@
 # Skills
 
-The repo publishes five agent skills.
+The repo publishes six agent skills.
 
 ## Site Skills
 
@@ -12,6 +12,8 @@ The repo publishes five agent skills.
   Wrapper skill for X, Grok, and X Articles.
 - `google-webmcp`
   Wrapper skill for Google and Gemini.
+- `weibo-webmcp`
+  Wrapper skill for Weibo timeline, post, comment, article, and search workflows.
 
 ## Authoring Skill
 
@@ -28,6 +30,7 @@ clawhub install webmcp-bridge
 clawhub install board-webmcp
 clawhub install x-webmcp
 clawhub install google-webmcp
+clawhub install weibo-webmcp
 clawhub install webmcp-adapter-creator
 ```
 
@@ -39,7 +42,7 @@ The site also exposes the live repository `skills/` directory through a symlink,
 
 ## Important Runtime Rule
 
-Site wrapper commands such as `x-webmcp-cli` and `google-webmcp-cli` do not guarantee that page tools are already attached.
+Site wrapper commands such as `x-webmcp-cli`, `google-webmcp-cli`, and `weibo-webmcp-cli` do not guarantee that page tools are already attached.
 
 When only bridge tools are visible, use the recovery flow in:
 

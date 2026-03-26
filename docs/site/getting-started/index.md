@@ -32,6 +32,12 @@ Run Google or Gemini through the built-in adapter:
 node packages/local-mcp/dist/cli.js --site google --headless --user-data-dir ~/.uxc/webmcp-profile/google
 ```
 
+Run Weibo through the built-in adapter:
+
+```bash
+node packages/local-mcp/dist/cli.js --site weibo --no-headless --user-data-dir ~/.uxc/webmcp-profile/weibo
+```
+
 ## Fixed Site Links
 
 For daily usage, prefer one stable `uxc` link per site:
@@ -40,6 +46,7 @@ For daily usage, prefer one stable `uxc` link per site:
 skills/webmcp-bridge/scripts/ensure-links.sh --name board --url https://board.holon.run
 skills/x-webmcp/scripts/ensure-links.sh
 skills/google-webmcp/scripts/ensure-links.sh
+skills/weibo-webmcp/scripts/ensure-links.sh
 ```
 
 This creates commands such as:
@@ -47,6 +54,7 @@ This creates commands such as:
 - `board-webmcp-cli`
 - `x-webmcp-cli`
 - `google-webmcp-cli`
+- `weibo-webmcp-cli`
 
 ## First Commands
 

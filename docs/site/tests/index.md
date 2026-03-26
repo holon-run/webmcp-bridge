@@ -6,6 +6,10 @@ This section tracks higher-signal manual validation flows that are useful for re
 
 - [Manual Test: X Article Draft Lifecycle](./x-article-draft-lifecycle.md)
 
+## Maintainer Runbooks
+
+Detailed operator runbooks live in `docs/manual-tests/` and are intended for repository maintainers rather than public site readers.
+
 ## Purpose
 
 These pages complement automated tests with browser-level flows that are hard to prove from unit tests alone.
