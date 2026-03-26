@@ -23,6 +23,23 @@ type AuthProbeResult = {
   title: string;
 };
 
+type WeiboImageMedia = {
+  url: string;
+  width?: number;
+  height?: number;
+  previewUrl?: string;
+  type?: string;
+};
+
+type WeiboVideoMedia = {
+  url?: string;
+  hdUrl?: string;
+  coverUrl?: string;
+  pageUrl?: string;
+  durationSeconds?: number;
+  type?: string;
+};
+
 type TimelineItem = {
   id: string;
   url?: string;
@@ -30,6 +47,8 @@ type TimelineItem = {
   authorName?: string;
   authorUrl?: string;
   createdAt?: string;
+  images?: WeiboImageMedia[];
+  video?: WeiboVideoMedia;
 };
 
 type UserProfile = {
@@ -588,6 +607,62 @@ function isAllowedWeiboUrl(url: string): boolean {
 
 function buildPostUrl(id: string): string {
   return `https://weibo.com/detail/${encodeURIComponent(id)}`;
+}
+
+const WEIBO_BASE62_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+function decodeWeiboBase62(value: string): string | undefined {
+  let result = 0n;
+  for (const char of value) {
+    const index = WEIBO_BASE62_ALPHABET.indexOf(char);
+    if (index < 0) {
+      return undefined;
+    }
+    result = result * 62n + BigInt(index);
+  }
+  return result.toString(10);
+}
+
+function decodeWeiboMblogId(value: string): string | undefined {
+  if (!/^[0-9A-Za-z]+$/.test(value)) {
+    return undefined;
+  }
+  const chunks: string[] = [];
+  for (let cursor = value.length; cursor > 0; cursor -= 4) {
+    chunks.unshift(value.slice(Math.max(0, cursor - 4), cursor));
+  }
+  const decoded = chunks.map((chunk, index) => {
+    const numeric = decodeWeiboBase62(chunk);
+    if (!numeric) {
+      return undefined;
+    }
+    return index === 0 ? numeric : numeric.padStart(7, "0");
+  });
+  return decoded.every((part) => typeof part === "string") ? decoded.join("") : undefined;
+}
+
+function parsePostIdFromUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const detailIndex = segments.findIndex((segment) => segment === "detail");
+    if (detailIndex >= 0) {
+      const detailId = segments[detailIndex + 1];
+      if (detailId && /^\d{8,}$/.test(detailId)) {
+        return detailId;
+      }
+    }
+    const lastSegment = segments.at(-1);
+    if (!lastSegment) {
+      return undefined;
+    }
+    if (/^\d{8,}$/.test(lastSegment)) {
+      return lastSegment;
+    }
+    return decodeWeiboMblogId(lastSegment);
+  } catch {
+    return undefined;
+  }
 }
 
 function buildProfileUrl(screenName: string): string {
@@ -1714,7 +1789,8 @@ async function extractCurrentPost(
   return page.evaluate((input: { op: string }) => {
     const card =
       document.querySelector<HTMLElement>("[action-type='feed_list_item'], .Feed_wrap, [mid]") ||
-      document.querySelector<HTMLElement>("article");
+      document.querySelector<HTMLElement>("article") ||
+      document.querySelector<HTMLElement>("main._wrap_1l406_3, ._full_1l406_7, ._feed_zsq3w_24, .wbpro-feed-content");
     if (!card) {
       return undefined;
     }
@@ -1724,6 +1800,7 @@ async function extractCurrentPost(
       card.dataset.mid ||
       card.dataset.id ||
       card.getAttribute("data-mid") ||
+      location.pathname.split("/").filter(Boolean).at(-1) ||
       "";
     if (!id) {
       return undefined;
@@ -1731,15 +1808,18 @@ async function extractCurrentPost(
 
     const authorLink =
       card.querySelector<HTMLAnchorElement>("a[node-type='feed_list_originNick']") ||
-      card.querySelector<HTMLAnchorElement>("a.name");
+      card.querySelector<HTMLAnchorElement>("a.name") ||
+      card.querySelector<HTMLAnchorElement>("a._name_ygi5b_120, a[href*='/u/'], a[href*='weibo.com/n/']");
     const dateLink =
       card.querySelector<HTMLAnchorElement>("a[node-type='feed_list_item_date']") ||
-      card.querySelector<HTMLAnchorElement>("a[href*='/detail/']");
+      card.querySelector<HTMLAnchorElement>("a[href*='/detail/']") ||
+      card.querySelector<HTMLAnchorElement>("a._time_1tpft_33");
     const contentNode =
       card.querySelector<HTMLElement>("[node-type='feed_list_content_full']") ||
       card.querySelector<HTMLElement>("[node-type='feed_list_content']") ||
       card.querySelector<HTMLElement>(".detail_wbtext_4CRf9") ||
-      card.querySelector<HTMLElement>(".wbpro-feed-content");
+      card.querySelector<HTMLElement>(".wbpro-feed-content") ||
+      card.querySelector<HTMLElement>("._wbtext_s71t2_14, .wbpro-feed-ogText, ._text_s71t2_2");
 
     void input;
     return {
@@ -1755,6 +1835,17 @@ async function extractCurrentPost(
         : {}),
     };
   }, { op: "extract_post" });
+}
+
+async function extractCurrentPostCandidateIds(
+  page: Parameters<SiteAdapter["callTool"]>[1]["page"],
+): Promise<string[]> {
+  return await page.evaluate((input: { op: string }) => {
+    void input;
+    const html = document.documentElement?.outerHTML ?? "";
+    const matches = html.match(/\b\d{16}\b/g) ?? [];
+    return Array.from(new Set(matches)).slice(0, 20);
+  }, { op: "extract_post_candidate_ids" }).catch(() => []);
 }
 
 async function extractUserProfile(
@@ -2171,13 +2262,18 @@ function normalizeTimelineItem(raw: Record<string, unknown>): TimelineItem | und
   const authorUrl = typeof user?.profile_url === "string" && user.profile_url
     ? new URL(String(user.profile_url), "https://weibo.com").toString()
     : undefined;
+  const postUrl = buildWeiboPostUrl(raw, id);
+  const images = extractWeiboImages(raw);
+  const video = extractWeiboVideo(raw);
   const item: TimelineItem = {
     id,
     text,
     ...(screenName ? { authorName: screenName } : {}),
     ...(authorUrl ? { authorUrl } : {}),
     ...(typeof raw.created_at === "string" ? { createdAt: raw.created_at } : {}),
-    ...(screenName ? { url: `https://weibo.com/${screenName}/${id}` } : {}),
+    ...(postUrl ? { url: postUrl } : {}),
+    ...(images.length ? { images } : {}),
+    ...(video ? { video } : {}),
   };
   return item;
 }
@@ -2205,6 +2301,117 @@ function extractWeiboPostText(raw: Record<string, unknown>): string {
           ? raw.text
           : "";
   return longText.trim();
+}
+
+function buildWeiboPostUrl(raw: Record<string, unknown>, id: string): string | undefined {
+  const user = asRecord(raw.user);
+  const uid = typeof user?.idstr === "string" && user.idstr
+    ? user.idstr
+    : typeof user?.id === "number"
+      ? String(user.id)
+      : typeof user?.id === "string" && user.id
+        ? user.id
+        : undefined;
+  if (!uid) {
+    return undefined;
+  }
+  const mblogId = typeof raw.mblogid === "string" && raw.mblogid
+    ? raw.mblogid
+    : undefined;
+  return `https://weibo.com/${uid}/${encodeURIComponent(mblogId ?? id)}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function toNumber(value: unknown): number | undefined {
+  return typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() && !Number.isNaN(Number(value))
+      ? Number(value)
+      : undefined;
+}
+
+function extractWeiboImages(raw: Record<string, unknown>): WeiboImageMedia[] {
+  const picInfos = asRecord(raw.pic_infos);
+  if (!picInfos) {
+    return [];
+  }
+
+  return Object.values(picInfos).flatMap((entry) => {
+    const pic = asRecord(entry);
+    if (!pic) {
+      return [];
+    }
+    const source =
+      asRecord(pic.original)
+      ?? asRecord(pic.largest)
+      ?? asRecord(pic.mw2000)
+      ?? asRecord(pic.large)
+      ?? asRecord(pic.bmiddle)
+      ?? asRecord(pic.thumbnail);
+    const preview = asRecord(pic.thumbnail) ?? asRecord(pic.bmiddle) ?? source;
+    const url = typeof source?.url === "string"
+      ? source.url
+      : typeof preview?.url === "string"
+        ? preview.url
+        : "";
+    if (!url) {
+      return [];
+    }
+    const width = toNumber(source?.width);
+    const height = toNumber(source?.height);
+    const previewUrl = typeof preview?.url === "string" && preview.url !== url ? preview.url : undefined;
+    return [{
+      url,
+      ...(width !== undefined ? { width } : {}),
+      ...(height !== undefined ? { height } : {}),
+      ...(previewUrl ? { previewUrl } : {}),
+      ...(typeof pic.type === "string" && pic.type ? { type: pic.type } : {}),
+    }];
+  });
+}
+
+function extractWeiboVideo(raw: Record<string, unknown>): WeiboVideoMedia | undefined {
+  const pageInfo = asRecord(raw.page_info);
+  if (!pageInfo) {
+    return undefined;
+  }
+  const mediaInfo = asRecord(pageInfo.media_info);
+  const pagePic = asRecord(pageInfo.page_pic);
+  const videoUrl =
+    typeof mediaInfo?.stream_url === "string" && mediaInfo.stream_url
+      ? mediaInfo.stream_url
+      : typeof mediaInfo?.mp4_sd_url === "string" && mediaInfo.mp4_sd_url
+        ? mediaInfo.mp4_sd_url
+        : undefined;
+  const hdUrl =
+    typeof mediaInfo?.stream_url_hd === "string" && mediaInfo.stream_url_hd
+      ? mediaInfo.stream_url_hd
+      : typeof mediaInfo?.mp4_hd_url === "string" && mediaInfo.mp4_hd_url
+        ? mediaInfo.mp4_hd_url
+        : undefined;
+  const coverUrl =
+    typeof pagePic?.url === "string" && pagePic.url
+      ? pagePic.url
+      : typeof pageInfo.page_pic === "string" && pageInfo.page_pic
+        ? pageInfo.page_pic
+        : undefined;
+  if (!videoUrl && !hdUrl && !coverUrl) {
+    return undefined;
+  }
+  const durationSeconds = toNumber(mediaInfo?.duration);
+  return {
+    ...(videoUrl ? { url: videoUrl } : {}),
+    ...(hdUrl ? { hdUrl } : {}),
+    ...(coverUrl ? { coverUrl } : {}),
+    ...(typeof pageInfo.page_url === "string" && pageInfo.page_url ? { pageUrl: pageInfo.page_url } : {}),
+    ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+    ...(typeof pageInfo.object_type === "string" && pageInfo.object_type ? { type: pageInfo.object_type } : {}),
+  };
 }
 
 function needsLongTextHydration(raw: Record<string, unknown>): boolean {
@@ -3070,7 +3277,7 @@ export function createWeiboAdapter(): SiteAdapter {
           return authError;
         }
 
-        const targetId = id ?? targetUrl.match(/(\d{8,})/)?.[1];
+        const targetId = id ?? parsePostIdFromUrl(targetUrl);
         if (targetId) {
           const networkResult = await readPostViaNetwork(page, targetId);
           if (networkResult.post) {
@@ -3083,8 +3290,24 @@ export function createWeiboAdapter(): SiteAdapter {
         }
 
         await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-        await page.waitForTimeout(500);
-        const post = await extractCurrentPost(page);
+        await settleReadPage(page);
+        if (!targetId) {
+          const candidateIds = await retryOnNavigationRace(page, async () => await extractCurrentPostCandidateIds(page));
+          for (const candidateId of candidateIds) {
+            const networkResult = await readPostViaNetwork(page, candidateId);
+            if (networkResult.post) {
+              return {
+                post: {
+                  ...networkResult.post,
+                  url: targetUrl,
+                },
+                source: networkResult.source,
+                ...(networkResult.reason ? { reason: networkResult.reason } : {}),
+              };
+            }
+          }
+        }
+        const post = await retryOnNavigationRace(page, async () => await extractCurrentPost(page));
         if (!post) {
           return errorResult("UPSTREAM_CHANGED", "unable to locate the target Weibo post");
         }
@@ -3228,7 +3451,7 @@ export function createWeiboAdapter(): SiteAdapter {
         if (authError) {
           return authError;
         }
-        const targetId = id ?? targetUrl.match(/(\d{8,})/)?.[1];
+        const targetId = id ?? parsePostIdFromUrl(targetUrl);
         if (targetId) {
           const networkResult = await readPostRepliesViaNetwork(page, targetId, cursor);
           if (networkResult.source === "network") {
@@ -3270,7 +3493,7 @@ export function createWeiboAdapter(): SiteAdapter {
         if (authError) {
           return authError;
         }
-        const targetId = id ?? targetUrl.match(/(\d{8,})/)?.[1];
+        const targetId = id ?? parsePostIdFromUrl(targetUrl);
         if (targetId) {
           const networkResult = await readPostRepostsViaNetwork(page, targetId, cursor);
           if (networkResult.source === "network") {

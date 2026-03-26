@@ -555,7 +555,9 @@ describe("createAdapter", () => {
           id: "5272327174494361",
           text_raw: "截断微博 一 ​​​",
           isLongText: true,
+          mblogid: "QnLongText1",
           user: {
+            idstr: "1648815335",
             screen_name: "jolestar",
             profile_url: "/u/1648815335",
           },
@@ -565,7 +567,9 @@ describe("createAdapter", () => {
         id: "5272327174494361",
         text_raw: "截断微博 一 ​​​",
         longTextContent_raw: "这是 timeline 返回时需要补抓的完整长微博正文。",
+        mblogid: "QnLongText1",
         user: {
+          idstr: "1648815335",
           screen_name: "jolestar",
           profile_url: "/u/1648815335",
         },
@@ -581,7 +585,75 @@ describe("createAdapter", () => {
           text: "这是 timeline 返回时需要补抓的完整长微博正文。",
           authorName: "jolestar",
           authorUrl: "https://weibo.com/u/1648815335",
-          url: "https://weibo.com/jolestar/5272327174494361",
+          url: "https://weibo.com/1648815335/QnLongText1",
+        },
+      ],
+      hasMore: false,
+      source: "network",
+    });
+  });
+
+  it("returns media fields for network timeline items", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      networkTimelineItems: [
+        {
+          id: "5281000000000001",
+          text_raw: "带图片和视频的微博",
+          mblogid: "QmediaOne1",
+          user: {
+            idstr: "1648815335",
+            screen_name: "jolestar",
+            profile_url: "/u/1648815335",
+          },
+          pic_infos: {
+            a: {
+              largest: { url: "https://wx1.sinaimg.cn/large/a.jpg", width: "1280", height: "720" },
+              thumbnail: { url: "https://wx1.sinaimg.cn/thumb/a.jpg" },
+              type: "pic",
+            },
+          },
+          page_info: {
+            object_type: "video",
+            page_pic: { url: "https://wx1.sinaimg.cn/cover/video.jpg" },
+            page_url: "https://weibo.com/tv/show/1:1",
+            media_info: {
+              stream_url: "https://f.video.weibocdn.com/video-sd.mp4",
+              stream_url_hd: "https://f.video.weibocdn.com/video-hd.mp4",
+              duration: 12,
+            },
+          },
+        },
+      ],
+    });
+
+    await expect(
+      adapter.callTool({ name: "timeline.home.list", input: { limit: 1 } }, { page: page as never }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: "5281000000000001",
+          text: "带图片和视频的微博",
+          authorName: "jolestar",
+          authorUrl: "https://weibo.com/u/1648815335",
+          url: "https://weibo.com/1648815335/QmediaOne1",
+          images: [
+            {
+              url: "https://wx1.sinaimg.cn/large/a.jpg",
+              width: 1280,
+              height: 720,
+              previewUrl: "https://wx1.sinaimg.cn/thumb/a.jpg",
+              type: "pic",
+            },
+          ],
+          video: {
+            url: "https://f.video.weibocdn.com/video-sd.mp4",
+            hdUrl: "https://f.video.weibocdn.com/video-hd.mp4",
+            coverUrl: "https://wx1.sinaimg.cn/cover/video.jpg",
+            pageUrl: "https://weibo.com/tv/show/1:1",
+            durationSeconds: 12,
+            type: "video",
+          },
         },
       ],
       hasMore: false,
@@ -843,7 +915,9 @@ describe("createAdapter", () => {
         id: "5272327174494361",
         text_raw: "截断微博 一 ​​​",
         longTextContent_raw: "这是完整长微博正文，应该优先返回这一段，而不是截断版本。",
+        mblogid: "QkLongPost1",
         user: {
+          idstr: "1648815335",
           screen_name: "jolestar",
           profile_url: "/u/1648815335",
         },
@@ -858,7 +932,97 @@ describe("createAdapter", () => {
         text: "这是完整长微博正文，应该优先返回这一段，而不是截断版本。",
         authorName: "jolestar",
         authorUrl: "https://weibo.com/u/1648815335",
-        url: "https://weibo.com/jolestar/5272327174494361",
+        url: "https://weibo.com/1648815335/QkLongPost1",
+      },
+      source: "network",
+    });
+  });
+
+  it("returns media fields for post.get", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      networkPost: {
+        id: "5281000000000002",
+        text_raw: "单条微博媒体",
+        mblogid: "QmediaPost2",
+        user: {
+          idstr: "1648815335",
+          screen_name: "jolestar",
+          profile_url: "/u/1648815335",
+        },
+        pic_infos: {
+          a: {
+            original: { url: "https://wx2.sinaimg.cn/orj360/b.jpg", width: 640, height: 640 },
+            bmiddle: { url: "https://wx2.sinaimg.cn/bmiddle/b.jpg" },
+            type: "gif",
+          },
+        },
+        page_info: {
+          object_type: "video",
+          page_pic: "https://wx2.sinaimg.cn/cover/b.jpg",
+          media_info: {
+            mp4_sd_url: "https://f.video.weibocdn.com/b-sd.mp4",
+            mp4_hd_url: "https://f.video.weibocdn.com/b-hd.mp4",
+            duration: "33",
+          },
+        },
+      },
+    });
+
+    await expect(
+      adapter.callTool({ name: "post.get", input: { id: "5281000000000002" } }, { page: page as never }),
+    ).resolves.toEqual({
+      post: {
+        id: "5281000000000002",
+        text: "单条微博媒体",
+        authorName: "jolestar",
+        authorUrl: "https://weibo.com/u/1648815335",
+        url: "https://weibo.com/1648815335/QmediaPost2",
+        images: [
+          {
+            url: "https://wx2.sinaimg.cn/orj360/b.jpg",
+            width: 640,
+            height: 640,
+            previewUrl: "https://wx2.sinaimg.cn/bmiddle/b.jpg",
+            type: "gif",
+          },
+        ],
+        video: {
+          url: "https://f.video.weibocdn.com/b-sd.mp4",
+          hdUrl: "https://f.video.weibocdn.com/b-hd.mp4",
+          coverUrl: "https://wx2.sinaimg.cn/cover/b.jpg",
+          durationSeconds: 33,
+          type: "video",
+        },
+      },
+      source: "network",
+    });
+  });
+
+  it("decodes mblogid urls for post.get network reads", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      networkPost: {
+        id: "5249533040657167",
+        text_raw: "短链接微博",
+        mblogid: "QkMA02KXt",
+        user: {
+          idstr: "1648815335",
+          screen_name: "jolestar",
+          profile_url: "/u/1648815335",
+        },
+      },
+    });
+
+    await expect(
+      adapter.callTool({ name: "post.get", input: { url: "https://weibo.com/1648815335/QkMA02KXt" } }, { page: page as never }),
+    ).resolves.toEqual({
+      post: {
+        id: "5249533040657167",
+        text: "短链接微博",
+        authorName: "jolestar",
+        authorUrl: "https://weibo.com/u/1648815335",
+        url: "https://weibo.com/1648815335/QkMA02KXt",
       },
       source: "network",
     });
