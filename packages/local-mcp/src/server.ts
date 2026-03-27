@@ -80,6 +80,14 @@ export type LocalMcpStdioServer = {
   close: () => Promise<void>;
 };
 
+const SERVICE_INSTRUCTIONS = [
+  "If help only shows bridge.* tools, the site session is not attached to page tools yet.",
+  "Call bridge.session.status first.",
+  "If the session needs sign-in, call bridge.session.bootstrap and finish login in the browser.",
+  "If you already have a signed-in browser or managed profile, call bridge.session.attach.",
+  "After attach succeeds, run help again to see site tools.",
+].join(" ");
+
 class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private static readonly BRIDGE_CLOSE_DELAY_MS = 100;
   private readonly server: Server;
@@ -111,6 +119,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
             subscribe: true,
           },
         },
+        instructions: SERVICE_INSTRUCTIONS,
       },
     );
 

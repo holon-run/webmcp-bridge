@@ -60,6 +60,7 @@ export type McpInitializeResult = {
     name: string;
     version: string;
   };
+  instructions?: string;
 };
 
 export type McpResourceDefinition = {

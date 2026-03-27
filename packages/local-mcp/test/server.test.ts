@@ -224,6 +224,7 @@ describe("createLocalMcpStdioServer", () => {
       serverInfo: {
         name: "webmcp-bridge-local-mcp",
       },
+      instructions: expect.stringContaining("If help only shows bridge.* tools"),
       capabilities: {
         tools: {
           listChanged: true,
