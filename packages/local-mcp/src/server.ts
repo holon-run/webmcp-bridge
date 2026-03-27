@@ -350,6 +350,11 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   }
 
   private bridgeTools(): ReadonlyArray<WebMcpToolDefinition> {
+    return this.bridgeToolsForState();
+  }
+
+  private bridgeToolsForState(state?: LocalBridgeState, pageToolsAvailable = true): ReadonlyArray<WebMcpToolDefinition> {
+    const bridgeOnlySuffix = this.buildBridgeOnlyToolHint(state, pageToolsAvailable);
     return [
       {
         name: "bridge.window.open",
@@ -358,7 +363,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.session.status",
-        description: "Return local-mcp bridge session state for the current site session.",
+        description: `Return local-mcp bridge session state for the current site session.${bridgeOnlySuffix}`,
         inputSchema: { type: "object", additionalProperties: false },
         annotations: {
           readOnlyHint: true,
@@ -366,12 +371,12 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.session.bootstrap",
-        description: "Launch a normal browser for manual sign-in on the managed site profile.",
+        description: `Launch a normal browser for manual sign-in on the managed site profile.${bridgeOnlySuffix}`,
         inputSchema: { type: "object", additionalProperties: false },
       },
       {
         name: "bridge.session.attach",
-        description: "Restart the current local-mcp bridge session in attach mode against an existing Chromium browser.",
+        description: `Restart the current local-mcp bridge session in attach mode against an existing Chromium browser.${bridgeOnlySuffix}`,
         inputSchema: {
           type: "object",
           properties: {
@@ -430,7 +435,34 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
 
   private async listAllTools(options: LocalMcpStdioServerOptions): Promise<ReadonlyArray<WebMcpToolDefinition>> {
     const pageTools = await options.gateway.listTools();
-    return [...this.bridgeTools(), ...pageTools];
+    const state = options.bridgeControl.getState();
+    return [...this.bridgeToolsForState(state, pageTools.length > 0), ...pageTools];
+  }
+
+  private buildBridgeOnlyToolHint(state: LocalBridgeState | undefined, pageToolsAvailable: boolean): string {
+    if (pageToolsAvailable) {
+      return "";
+    }
+    const nextStep = this.resolveBridgeOnlyNextStep(state);
+    return ` Only bridge.* tools are currently available because no page tools are attached yet. Call bridge.session.status first, then ${nextStep}.`;
+  }
+
+  private resolveBridgeOnlyNextStep(state: LocalBridgeState | undefined): string {
+    if (!state) {
+      return "use bridge.session.attach to connect an existing browser or bridge.session.bootstrap to sign in";
+    }
+    if (
+      state.controlMode === "bootstrap" ||
+      state.sessionState === "bootstrap_active" ||
+      state.authState === "auth_required" ||
+      state.authState === "challenge_required"
+    ) {
+      return "complete sign-in in the bootstrap browser, then call bridge.session.attach";
+    }
+    if (state.authPolicyMode === "bootstrap_then_attach") {
+      return "use bridge.session.attach for an existing signed-in browser or bridge.session.bootstrap to start a login browser";
+    }
+    return "use bridge.session.attach to connect a browser session";
   }
 
   private isBridgeToolName(name: string): boolean {

@@ -9,7 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpJsonRpcResponse } from "../src/mcp-types.js";
 import {
   createLocalMcpStdioServer,
+  type LocalBridgeControl,
   type LocalMcpGateway,
+  type LocalBridgeState,
   type LocalMcpStdioServer,
 } from "../src/server.js";
 
@@ -67,8 +69,7 @@ describe("createLocalMcpStdioServer", () => {
     readResource,
     onResourceUpdated,
   } satisfies LocalMcpGateway;
-  const bridgeControl = {
-    getState: vi.fn(() => ({
+  const getState = vi.fn<LocalBridgeControl["getState"]>(() => ({
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
       controlMode: "launch" as const,
@@ -79,9 +80,9 @@ describe("createLocalMcpStdioServer", () => {
       mode: "native" as const,
       presentationMode: "headed" as const,
       preferredPresentationMode: "headed" as const,
-    })),
-    openWindow: vi.fn<() => Promise<"focused" | "opened">>(async () => "focused" as const),
-    bootstrapSession: vi.fn(async () => ({
+    }));
+  const openWindow = vi.fn<LocalBridgeControl["openWindow"]>(async () => "focused" as const);
+  const bootstrapSession = vi.fn<LocalBridgeControl["bootstrapSession"]>(async () => ({
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
       controlMode: "bootstrap" as const,
@@ -93,8 +94,8 @@ describe("createLocalMcpStdioServer", () => {
       presentationMode: "headed" as const,
       preferredPresentationMode: "headed" as const,
       profilePath: "/tmp/board-profile",
-    })),
-    attachSession: vi.fn(async () => ({
+    }));
+  const attachSession = vi.fn<LocalBridgeControl["attachSession"]>(async () => ({
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
       controlMode: "attach" as const,
@@ -106,9 +107,9 @@ describe("createLocalMcpStdioServer", () => {
       mode: "native" as const,
       presentationMode: "headed" as const,
       preferredPresentationMode: "headed" as const,
-    })),
-    getPresentationMode: vi.fn(() => "headed" as const),
-    setPresentationMode: vi.fn(async () => ({
+    }));
+  const getPresentationMode = vi.fn<LocalBridgeControl["getPresentationMode"]>(() => "headed" as const);
+  const setPresentationMode = vi.fn<LocalBridgeControl["setPresentationMode"]>(async () => ({
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
       controlMode: "launch" as const,
@@ -119,8 +120,8 @@ describe("createLocalMcpStdioServer", () => {
       mode: "native" as const,
       presentationMode: "headless" as const,
       preferredPresentationMode: "headless" as const,
-    })),
-    resetProfile: vi.fn(async () => ({
+    }));
+  const resetProfile = vi.fn<LocalBridgeControl["resetProfile"]>(async () => ({
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
       controlMode: "bootstrap" as const,
@@ -133,9 +134,18 @@ describe("createLocalMcpStdioServer", () => {
       preferredPresentationMode: "headed" as const,
       profilePath: "/tmp/board-profile",
       lastBackupPath: "/tmp/board-profile-backup",
-    })),
-    closeBridge: vi.fn(async () => {}),
-  };
+    }));
+  const closeBridge = vi.fn<LocalBridgeControl["closeBridge"]>(async () => {});
+  const bridgeControl = {
+    getState,
+    openWindow,
+    bootstrapSession,
+    attachSession,
+    getPresentationMode,
+    setPresentationMode,
+    resetProfile,
+    closeBridge,
+  } satisfies LocalBridgeControl;
 
   beforeEach(async () => {
     input = new PassThrough();
@@ -147,14 +157,14 @@ describe("createLocalMcpStdioServer", () => {
     listResources.mockClear();
     readResource.mockClear();
     onResourceUpdated.mockClear();
-    bridgeControl.getState.mockClear();
-    bridgeControl.openWindow.mockClear();
-    bridgeControl.bootstrapSession.mockClear();
-    bridgeControl.attachSession.mockClear();
-    bridgeControl.getPresentationMode.mockClear();
-    bridgeControl.setPresentationMode.mockClear();
-    bridgeControl.resetProfile.mockClear();
-    bridgeControl.closeBridge.mockClear();
+    getState.mockClear();
+    openWindow.mockClear();
+    bootstrapSession.mockClear();
+    attachSession.mockClear();
+    getPresentationMode.mockClear();
+    setPresentationMode.mockClear();
+    resetProfile.mockClear();
+    closeBridge.mockClear();
 
     output.on("data", (chunk: Buffer | string) => {
       outputBuffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
@@ -259,6 +269,62 @@ describe("createLocalMcpStdioServer", () => {
         { name: "ping" },
       ],
     });
+  });
+
+  it("adds bridge-only recovery guidance when no page tools are attached", async () => {
+    listTools.mockResolvedValueOnce([]);
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2-tools-empty",
+      method: "tools/list",
+      params: {},
+    });
+
+    const tools =
+      "result" in response
+        ? ((response.result as { tools?: Array<{ name: string; description?: string }> }).tools ?? [])
+        : [];
+    const statusTool = tools.find((tool) => tool.name === "bridge.session.status");
+    const attachTool = tools.find((tool) => tool.name === "bridge.session.attach");
+
+    expect(statusTool?.description).toContain("Only bridge.* tools are currently available");
+    expect(statusTool?.description).toContain("Call bridge.session.status first");
+    expect(attachTool?.description).toContain("bridge.session.attach");
+  });
+
+  it("tells bootstrap sessions to finish sign-in before attaching when only bridge tools are available", async () => {
+    listTools.mockResolvedValueOnce([]);
+    const bootstrapState: LocalBridgeState = {
+      site: "google",
+      targetUrl: "https://gemini.google.com/app",
+      controlMode: "bootstrap",
+      authPolicyMode: "bootstrap_then_attach",
+      authState: "auth_required",
+      sessionState: "bootstrap_active",
+      ownership: "external",
+      mode: "control-only",
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
+      profilePath: "/tmp/google-profile",
+      browserPid: 1234,
+    };
+    bridgeControl.getState.mockReturnValueOnce(bootstrapState);
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2-tools-bootstrap",
+      method: "tools/list",
+      params: {},
+    });
+
+    const tools =
+      "result" in response
+        ? ((response.result as { tools?: Array<{ name: string; description?: string }> }).tools ?? [])
+        : [];
+    const bootstrapTool = tools.find((tool) => tool.name === "bridge.session.bootstrap");
+
+    expect(bootstrapTool?.description).toContain("complete sign-in in the bootstrap browser, then call bridge.session.attach");
   });
 
   it("handles bridge.window.open locally", async () => {
