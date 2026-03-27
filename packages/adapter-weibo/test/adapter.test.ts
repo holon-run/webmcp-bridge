@@ -32,240 +32,35 @@ function createMockPage(options?: {
   let timelinePass = 0;
   let coverLibraryCount = options?.coverLibraryItems ?? 0;
   let coverSelectionEnabled = false;
-  const makeLocator = (selector: string) => {
-    if (selector === ".cover-preview" || selector === ".cover-preview .mask") {
-      return {
-        first: () => ({
-          count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
-          click: vi.fn(async () => {}),
-        }),
-      };
+  let coverDialogVisible = false;
+  let coverCropperVisible = false;
+  let coverPreviewSrc = options?.coverLibraryItems !== undefined ? "https://img.example/original-cover.jpg" : "";
+  let pendingCoverPreviewSrc = "";
+  const readEvaluateSource = (fn: unknown): string => {
+    try {
+      return typeof fn === "function" ? fn.toString() : "";
+    } catch {
+      return "";
     }
-    if (selector === ".image-list .image-item") {
-      return {
-        count: vi.fn(async () => coverLibraryCount),
-        nth: () => ({
-          count: vi.fn(async () => (coverLibraryCount > 0 ? 1 : 0)),
-          click: vi.fn(async () => {
-            if (coverLibraryCount > 0) {
-              coverSelectionEnabled = true;
-            }
-          }),
-        }),
-      };
+  };
+  const evaluateResult = async (fn: unknown, arg?: unknown): Promise<unknown> => {
+    const source = readEvaluateSource(fn);
+    if (!arg && source.includes(".cover-preview .cover-img")) {
+      return coverPreviewSrc;
     }
-    if (selector === "input[type='file']") {
-      return {
-        first: () => ({
-          count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
-          setInputFiles: vi.fn(async () => {
-            coverLibraryCount += 1;
-          }),
-        }),
-        last: () => ({
-          count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
-          setInputFiles: vi.fn(async () => {
-            coverLibraryCount += 1;
-          }),
-        }),
-      };
+    if (!arg && source.includes("textarea[placeholder*='标题']") && source.includes("[contenteditable='true']")) {
+      return true;
     }
-    return {
-      first: () => ({
-        count: vi.fn(async () => 0),
-        click: vi.fn(async () => {}),
-        setInputFiles: vi.fn(async () => {}),
-      }),
-      last: () => ({
-        count: vi.fn(async () => 0),
-        click: vi.fn(async () => {}),
-        setInputFiles: vi.fn(async () => {}),
-        isDisabled: vi.fn(async () => !coverSelectionEnabled),
-      }),
-      nth: () => ({
-        count: vi.fn(async () => 0),
-        click: vi.fn(async () => {}),
-      }),
-      count: vi.fn(async () => 0),
-    };
-  };
-  const makeTextLocator = (text: string) => ({
-    first: () => ({
-      count: vi.fn(async () => {
-        if (options?.coverLibraryItems === undefined) {
-          return 1;
-        }
-        return ["图片库", "上传", "下一步", "取消"].includes(text) ? 1 : 1;
-      }),
-      click: vi.fn(async () => {}),
-    }),
-    last: () => ({
-      count: vi.fn(async () => 1),
-      click: vi.fn(async () => {}),
-      isDisabled: vi.fn(async () => (text.includes("下一步") ? !coverSelectionEnabled : false)),
-    }),
-  });
-  const page: {
-    addInitScript: ReturnType<typeof vi.fn>;
-    goto: ReturnType<typeof vi.fn>;
-    url: ReturnType<typeof vi.fn>;
-    title: ReturnType<typeof vi.fn>;
-    waitForTimeout: ReturnType<typeof vi.fn>;
-    waitForLoadState: ReturnType<typeof vi.fn>;
-    waitForFunction: ReturnType<typeof vi.fn>;
-    waitForEvent: ReturnType<typeof vi.fn>;
-    locator: ReturnType<typeof vi.fn>;
-    getByText: ReturnType<typeof vi.fn>;
-    evaluate: ReturnType<typeof vi.fn>;
-    context?: ReturnType<typeof vi.fn>;
-    __childPage?: {
-      goto: ReturnType<typeof vi.fn>;
-      close: ReturnType<typeof vi.fn>;
-      url: ReturnType<typeof vi.fn>;
-      isClosed: ReturnType<typeof vi.fn>;
-      waitForLoadState: ReturnType<typeof vi.fn>;
-      waitForFunction: ReturnType<typeof vi.fn>;
-      waitForEvent: ReturnType<typeof vi.fn>;
-      locator: ReturnType<typeof vi.fn>;
-      getByText: ReturnType<typeof vi.fn>;
-    };
-    __newPageMock?: ReturnType<typeof vi.fn>;
-  } = {
-    addInitScript: vi.fn(async () => {}),
-    goto: vi.fn(async () => {}),
-    url: vi.fn(() => options?.url ?? "https://weibo.com"),
-    title: vi.fn(async () => options?.title ?? "微博"),
-    waitForTimeout: vi.fn(async () => {}),
-    waitForLoadState: vi.fn(async () => {}),
-    waitForFunction: vi.fn(async () => {}),
-    waitForEvent: vi.fn(async () => null),
-    locator: vi.fn((selector: string) => makeLocator(selector)),
-    getByText: vi.fn((text: string) => makeTextLocator(text)),
-    evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "url" in arg && "title" in arg) {
-        return {
-          state: options?.authState ?? "authenticated",
-          signals: options?.authSignals ?? ["feed-ui"],
-        };
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "collect_timeline") {
-        const timelineArg = arg as unknown as { maxItems: number };
-        const batches = options?.timelineBatches ?? [
-          [
-            { id: "m1", text: "第一条微博", url: "https://weibo.com/detail/m1", authorName: "alice" },
-            { id: "m2", text: "第二条微博", url: "https://weibo.com/detail/m2", authorName: "bob" },
-            { id: "m3", text: "第三条微博", url: "https://weibo.com/detail/m3", authorName: "carol" },
-          ],
-        ];
-        const batch = batches[Math.min(timelinePass, batches.length - 1)] ?? [];
-        timelinePass += 1;
-        return batch.slice(0, timelineArg.maxItems);
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_post") {
-        return options?.post;
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_comments") {
-        const timelineArg = arg as unknown as { maxItems: number };
-        const batches = options?.timelineBatches ?? [];
-        const batch = batches[0] ?? [];
-        return batch.slice(0, timelineArg.maxItems);
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_reposts") {
-        const timelineArg = arg as unknown as { maxItems: number };
-        const batches = options?.timelineBatches ?? [];
-        const batch = batches[0] ?? [];
-        return batch.slice(0, timelineArg.maxItems);
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_search_results") {
-        const timelineArg = arg as unknown as { maxItems: number };
-        const batches = options?.timelineBatches ?? [];
-        const batch = batches[0] ?? [];
-        return batch.slice(0, timelineArg.maxItems);
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_user") {
-        return options?.user;
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "compose_post") {
-        return options?.composeResult ?? { ok: true };
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "confirm_post") {
-        return options?.postConfirmation ?? { confirmed: true, url: "https://weibo.com/detail/mock-post" };
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "compose_comment") {
-        return options?.commentComposeResult ?? { ok: true };
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "confirm_comment") {
-        return options?.commentConfirmation ?? { confirmed: true, url: "https://weibo.com/detail/mock-comment" };
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "labels" in arg) {
-        return true;
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "placeholderNeedle" in arg && "value" in arg) {
-        return true;
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "html" in arg) {
-        return true;
-      }
-      if (arg === undefined) {
-        return options?.articleDrafts ?? true;
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_ai_search") {
-        return options?.aiSummary;
-      }
-      if (arg === undefined) {
-        return true;
-      }
-      return undefined;
-    }),
-  };
-  const childPage = {
-    addInitScript: vi.fn(async () => {}),
-    goto: vi.fn(async () => {}),
-    url: vi.fn(() => options?.childUrl ?? options?.url ?? "https://weibo.com"),
-    title: vi.fn(async () => options?.title ?? "微博"),
-    waitForTimeout: vi.fn(async () => {}),
-    waitForLoadState: vi.fn(async () => {}),
-    waitForFunction: vi.fn(async () => {}),
-    waitForEvent: vi.fn(async () => null),
-    locator: vi.fn((selector: string) => makeLocator(selector)),
-    getByText: vi.fn((text: string) => makeTextLocator(text)),
-    close: vi.fn(async () => {}),
-    isClosed: vi.fn(() => false),
-    evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "labels" in arg) {
-        return true;
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "placeholderNeedle" in arg && "value" in arg) {
-        return true;
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "html" in arg) {
-        return true;
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "inputQuery" in arg) {
-        return { source: "dom", reason: "request_failed" };
-      }
-      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_ai_search") {
-        return options?.aiSummary;
-      }
-      if (arg === undefined) {
-        return true;
-      }
-      return undefined;
-    }),
-  };
-  const articleDrafts = options?.articleDrafts ?? [
-    { id: "168782", title: "现有草稿", updatedAt: "2026-03-25 22:45", editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782", active: true },
-  ];
-  const articleDraft = options?.articleDraft ?? {
-    id: "168782",
-    title: "现有草稿",
-    lead: "草稿导语",
-    bodyText: "草稿正文",
-    bodyHtml: "<p>草稿正文</p>",
-    wordCount: 4,
-    editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
-  };
-  page.evaluate = vi.fn(async (_fn: unknown, arg?: unknown) => {
+    if (!arg && source.includes("正文图片") && source.includes("图片库") && source.includes("取消")) {
+      return coverDialogVisible;
+    }
+    if (!arg && source.includes("图片裁剪") && source.includes("确定")) {
+      return coverCropperVisible;
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "previousCoverSrc" in arg) {
+      const previous = typeof arg.previousCoverSrc === "string" ? arg.previousCoverSrc : "";
+      return !coverDialogVisible && !coverCropperVisible && Boolean(coverPreviewSrc) && (coverPreviewSrc !== previous || coverPreviewSrc.startsWith("blob:"));
+    }
     if (arg && typeof arg === "object" && !Array.isArray(arg) && "url" in arg && "title" in arg) {
       return {
         state: options?.authState ?? "authenticated",
@@ -379,6 +174,12 @@ function createMockPage(options?: {
       return { source: "dom", reason: "request_failed" };
     }
     if (arg && typeof arg === "object" && !Array.isArray(arg) && "labels" in arg) {
+      const labels = Array.isArray(arg.labels) ? arg.labels : [];
+      if (labels.some((label) => ["完成", "确定", "应用", "保存"].includes(String(label))) && (coverSelectionEnabled || coverCropperVisible)) {
+        coverDialogVisible = false;
+        coverCropperVisible = false;
+        coverPreviewSrc = pendingCoverPreviewSrc || "blob:mock-cover";
+      }
       return true;
     }
     if (arg && typeof arg === "object" && !Array.isArray(arg) && "placeholderNeedle" in arg && "value" in arg) {
@@ -391,18 +192,239 @@ function createMockPage(options?: {
       return options?.aiSummary;
     }
     if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_article_drafts") {
+      return options?.articleDrafts ?? [
+        { id: "168782", title: "现有草稿", updatedAt: "2026-03-25 22:45", editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782", active: true },
+      ];
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_article_draft") {
+      return options?.articleDraft ?? {
+        id: "168782",
+        title: "现有草稿",
+        lead: "草稿导语",
+        bodyText: "草稿正文",
+        bodyHtml: "<p>草稿正文</p>",
+        wordCount: 4,
+        editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+      };
+    }
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "article_publish_ready") {
+      return true;
+    }
+    return undefined;
+  };
+  const makeLocator = (selector: string) => {
+    if (selector === ".cover-preview" || selector === ".cover-preview .mask") {
+      return {
+        first: () => ({
+          count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
+          click: vi.fn(async () => {
+            coverDialogVisible = true;
+          }),
+        }),
+      };
+    }
+    if (selector === ".image-item") {
+      return {
+        count: vi.fn(async () => coverLibraryCount),
+        nth: () => ({
+          count: vi.fn(async () => (coverLibraryCount > 0 ? 1 : 0)),
+          click: vi.fn(async () => {
+            if (coverLibraryCount > 0) {
+              coverSelectionEnabled = true;
+            }
+          }),
+        }),
+      };
+    }
+    if (selector === "input[type='file']") {
+      return {
+        first: () => ({
+          count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
+          setInputFiles: vi.fn(async () => {
+            coverLibraryCount += 1;
+            pendingCoverPreviewSrc = `blob:mock-cover-${coverLibraryCount}`;
+          }),
+        }),
+        last: () => ({
+          count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
+          setInputFiles: vi.fn(async () => {
+            coverLibraryCount += 1;
+            pendingCoverPreviewSrc = `blob:mock-cover-${coverLibraryCount}`;
+          }),
+        }),
+      };
+    }
+    return {
+      first: () => ({
+        count: vi.fn(async () => 0),
+        click: vi.fn(async () => {}),
+        setInputFiles: vi.fn(async () => {}),
+      }),
+      last: () => ({
+        count: vi.fn(async () => 0),
+        click: vi.fn(async () => {}),
+        setInputFiles: vi.fn(async () => {}),
+        isDisabled: vi.fn(async () => !coverSelectionEnabled),
+      }),
+      nth: () => ({
+        count: vi.fn(async () => 0),
+        click: vi.fn(async () => {}),
+      }),
+      count: vi.fn(async () => 0),
+    };
+  };
+  const makeTextLocator = (text: string) => ({
+    first: () => ({
+      count: vi.fn(async () => {
+        if (options?.coverLibraryItems === undefined) {
+          return 1;
+        }
+        return ["图片库", "上传", "下一步", "取消"].includes(text) ? 1 : 1;
+      }),
+      click: vi.fn(async () => {
+        if (["图片库", "上传"].includes(text)) {
+          coverDialogVisible = true;
+          coverCropperVisible = false;
+        }
+        if (text.includes("确定") && coverCropperVisible) {
+          coverDialogVisible = false;
+          coverCropperVisible = false;
+          coverPreviewSrc = pendingCoverPreviewSrc || "blob:mock-cover";
+        }
+        if (["完成", "应用", "保存"].includes(text) && coverSelectionEnabled) {
+          coverDialogVisible = false;
+          coverCropperVisible = false;
+          coverPreviewSrc = pendingCoverPreviewSrc || "blob:mock-cover";
+        }
+      }),
+    }),
+    last: () => ({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        if (text.includes("下一步") && coverSelectionEnabled) {
+          coverDialogVisible = false;
+          coverCropperVisible = true;
+        }
+        if (text.includes("确定") && coverCropperVisible) {
+          coverDialogVisible = false;
+          coverCropperVisible = false;
+          coverPreviewSrc = pendingCoverPreviewSrc || "blob:mock-cover";
+        }
+      }),
+      isDisabled: vi.fn(async () => (text.includes("下一步") ? !coverSelectionEnabled : false)),
+    }),
+  });
+  const page: {
+    addInitScript: ReturnType<typeof vi.fn>;
+    goto: ReturnType<typeof vi.fn>;
+    url: ReturnType<typeof vi.fn>;
+    title: ReturnType<typeof vi.fn>;
+    waitForTimeout: ReturnType<typeof vi.fn>;
+    waitForLoadState: ReturnType<typeof vi.fn>;
+    waitForFunction: ReturnType<typeof vi.fn>;
+    waitForEvent: ReturnType<typeof vi.fn>;
+    locator: ReturnType<typeof vi.fn>;
+    getByText: ReturnType<typeof vi.fn>;
+    evaluate: ReturnType<typeof vi.fn>;
+    keyboard: {
+      press: ReturnType<typeof vi.fn>;
+    };
+    context?: ReturnType<typeof vi.fn>;
+    __childPage?: {
+      goto: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+      url: ReturnType<typeof vi.fn>;
+      isClosed: ReturnType<typeof vi.fn>;
+      waitForLoadState: ReturnType<typeof vi.fn>;
+      waitForFunction: ReturnType<typeof vi.fn>;
+      waitForEvent: ReturnType<typeof vi.fn>;
+      locator: ReturnType<typeof vi.fn>;
+      getByText: ReturnType<typeof vi.fn>;
+      keyboard: {
+        press: ReturnType<typeof vi.fn>;
+      };
+    };
+    __newPageMock?: ReturnType<typeof vi.fn>;
+  } = {
+    addInitScript: vi.fn(async () => {}),
+    goto: vi.fn(async () => {}),
+    url: vi.fn(() => options?.url ?? "https://weibo.com"),
+    title: vi.fn(async () => options?.title ?? "微博"),
+    waitForTimeout: vi.fn(async () => {}),
+    waitForLoadState: vi.fn(async () => {}),
+    waitForFunction: vi.fn(async () => {}),
+    waitForEvent: vi.fn(async () => null),
+    locator: vi.fn((selector: string) => makeLocator(selector)),
+    getByText: vi.fn((text: string) => makeTextLocator(text)),
+    evaluate: vi.fn(evaluateResult),
+    keyboard: {
+      press: vi.fn(async () => {}),
+    },
+  };
+  const childPage = {
+    addInitScript: vi.fn(async () => {}),
+    goto: vi.fn(async () => {}),
+    url: vi.fn(() => options?.childUrl ?? options?.url ?? "https://weibo.com"),
+    title: vi.fn(async () => options?.title ?? "微博"),
+    waitForTimeout: vi.fn(async () => {}),
+    waitForLoadState: vi.fn(async () => {}),
+    waitForFunction: vi.fn(async () => {}),
+    waitForEvent: vi.fn(async () => null),
+    locator: vi.fn((selector: string) => makeLocator(selector)),
+    getByText: vi.fn((text: string) => makeTextLocator(text)),
+    close: vi.fn(async () => {}),
+    isClosed: vi.fn(() => false),
+    keyboard: {
+      press: vi.fn(async () => {}),
+    },
+    evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "labels" in arg) {
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "plainTextValue" in arg && "htmlValue" in arg) {
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "placeholderNeedle" in arg && "value" in arg) {
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "html" in arg) {
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "previousCoverSrc" in arg) {
+        return true;
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "inputQuery" in arg) {
+        return { source: "dom", reason: "request_failed" };
+      }
+      if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_ai_search") {
+        return options?.aiSummary;
+      }
+      return undefined;
+    }),
+  };
+  const articleDrafts = options?.articleDrafts ?? [
+    { id: "168782", title: "现有草稿", updatedAt: "2026-03-25 22:45", editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782", active: true },
+  ];
+  const articleDraft = options?.articleDraft ?? {
+    id: "168782",
+    title: "现有草稿",
+    lead: "草稿导语",
+    bodyText: "草稿正文",
+    bodyHtml: "<p>草稿正文</p>",
+    wordCount: 4,
+    editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+  };
+  page.evaluate = vi.fn(async (fn: unknown, arg?: unknown) => {
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_article_drafts") {
       return articleDrafts;
     }
     if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_article_draft") {
       return articleDraft;
     }
-    if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "article_publish_ready") {
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && "plainTextValue" in arg && "htmlValue" in arg) {
       return true;
     }
-    if (arg === undefined) {
-      return true;
-    }
-    return undefined;
+    return evaluateResult(fn, arg);
   });
   childPage.evaluate = page.evaluate;
   const newPageMock = vi.fn(async () => childPage);

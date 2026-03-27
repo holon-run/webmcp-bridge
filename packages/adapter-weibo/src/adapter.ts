@@ -115,6 +115,7 @@ type NormalizedArticleMarkdown = {
 type PreparedArticleMarkdown = {
   markdown: string;
   html: string;
+  plainText: string;
   lead?: string;
 };
 
@@ -1024,7 +1025,7 @@ function sanitizeMarkdownHref(value: string): string | undefined {
   }
 }
 
-function convertMarkdownInlineToHtml(value: string): string {
+function convertMarkdownInlineToWeiboHtml(value: string): string {
   const placeholders: string[] = [];
   const reserve = (html: string): string => {
     const token = `__WEBMCP_HTML_${placeholders.length}__`;
@@ -1041,9 +1042,16 @@ function convertMarkdownInlineToHtml(value: string): string {
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, textRaw: string, hrefRaw: string) => {
       const text = escapeHtml(textRaw.trim() || hrefRaw.trim());
       const href = sanitizeMarkdownHref(hrefRaw);
-      return href
-        ? reserve(`<a href="${escapeHtml(href)}">${text}</a>`)
-        : text;
+      if (!href) {
+        return text;
+      }
+      const normalizedHref = href.replace(/^https?:\/\//i, "");
+      const showVisibleHref = href.startsWith("mailto:") ? false : textRaw.trim() !== hrefRaw.trim() && textRaw.trim() !== normalizedHref;
+      return reserve(
+        showVisibleHref
+          ? `<a href="${escapeHtml(href)}">${text}</a><span>（${escapeHtml(normalizedHref)}）</span>`
+          : `<a href="${escapeHtml(href)}">${text}</a>`,
+      );
     })
     .replace(/`([^`]+)`/g, (_match, codeRaw: string) => reserve(`<code>${escapeHtml(codeRaw)}</code>`))
     .replace(/\*\*([^*]+)\*\*/g, (_match, textRaw: string) => reserve(`<strong>${escapeHtml(textRaw)}</strong>`))
@@ -1056,7 +1064,7 @@ function convertMarkdownInlineToHtml(value: string): string {
   });
 }
 
-function convertMarkdownToHtml(markdown: string): string {
+function convertMarkdownToWeiboArticleHtml(markdown: string): string {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const blocks: string[] = [];
   let index = 0;
@@ -1065,11 +1073,11 @@ function convertMarkdownToHtml(markdown: string): string {
     if (paragraphLines.length === 0) {
       return;
     }
-    const text = paragraphLines.join(" ").trim();
-    if (!text) {
+    const fragments = paragraphLines.map((line) => line.trim()).filter(Boolean);
+    if (fragments.length === 0) {
       return;
     }
-    blocks.push(`<p>${convertMarkdownInlineToHtml(text)}</p>`);
+    blocks.push(`<p>${fragments.map((line) => convertMarkdownInlineToWeiboHtml(line)).join("<br>")}</p>`);
   };
 
   while (index < lines.length) {
@@ -1093,16 +1101,17 @@ function convertMarkdownToHtml(markdown: string): string {
       if (index < lines.length) {
         index += 1;
       }
-      const code = escapeHtml(codeLines.join("\n"));
-      blocks.push(language ? `<pre><code class="language-${language}">${code}</code></pre>` : `<pre><code>${code}</code></pre>`);
+      const codeHtml = codeLines.length
+        ? codeLines.map((codeLine) => `<p><code>${escapeHtml(codeLine || " ")}</code></p>`).join("")
+        : "<p><code></code></p>";
+      blocks.push(language ? `<p><strong>${escapeHtml(language)}</strong></p>${codeHtml}` : codeHtml);
       continue;
     }
 
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
-      const level = Math.min(6, headingMatch[1]!.length);
-      const content = convertMarkdownInlineToHtml(headingMatch[2]!.trim());
-      blocks.push(`<h${level}>${content}</h${level}>`);
+      const content = convertMarkdownInlineToWeiboHtml(headingMatch[2]!.trim());
+      blocks.push(`<p><strong>${content}</strong></p>`);
       index += 1;
       continue;
     }
@@ -1116,10 +1125,10 @@ function convertMarkdownToHtml(markdown: string): string {
         if (!match) {
           break;
         }
-        items.push(`<li>${convertMarkdownInlineToHtml(match[1]!.trim())}</li>`);
+        items.push(`<p>• ${convertMarkdownInlineToWeiboHtml(match[1]!.trim())}</p>`);
         index += 1;
       }
-      blocks.push(`<ul>${items.join("")}</ul>`);
+      blocks.push(items.join(""));
       continue;
     }
 
@@ -1132,10 +1141,10 @@ function convertMarkdownToHtml(markdown: string): string {
         if (!match) {
           break;
         }
-        items.push(`<li>${convertMarkdownInlineToHtml(match[1]!.trim())}</li>`);
+        items.push(`<p>${items.length + 1}. ${convertMarkdownInlineToWeiboHtml(match[1]!.trim())}</p>`);
         index += 1;
       }
-      blocks.push(`<ol>${items.join("")}</ol>`);
+      blocks.push(items.join(""));
       continue;
     }
 
@@ -1155,7 +1164,40 @@ function convertMarkdownToHtml(markdown: string): string {
     flushParagraph(paragraphLines);
   }
 
-  return blocks.join("\n");
+  return blocks.join("<p><br></p>");
+}
+
+function convertMarkdownLineToWeiboPlainText(line: string): string {
+  return line
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .replace(/^>\s+/, "")
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function convertMarkdownToWeiboPlainText(markdown: string): string {
+  const output: string[] = [];
+  let insideFence = false;
+  for (const rawLine of markdown.replace(/\r\n/g, "\n").split("\n")) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      output.push("");
+      continue;
+    }
+    if (/^```/.test(trimmed)) {
+      insideFence = !insideFence;
+      continue;
+    }
+    output.push(insideFence ? trimmed : convertMarkdownLineToWeiboPlainText(trimmed));
+  }
+  return output.join("\n").trim();
 }
 
 function extractMarkdownLead(markdown: string): string | undefined {
@@ -1194,7 +1236,8 @@ function prepareArticleMarkdown(markdown: string, markdownPath: string, explicit
   const lead = typeof explicitLead === "string" && explicitLead.trim() ? explicitLead.trim() : extractMarkdownLead(prepared);
   return {
     markdown: prepared,
-    html: convertMarkdownToHtml(prepared),
+    html: convertMarkdownToWeiboArticleHtml(prepared),
+    plainText: convertMarkdownToWeiboPlainText(prepared),
     ...(lead ? { lead } : {}),
   };
 }
@@ -1284,9 +1327,17 @@ async function clickTextAction(page: Page, labels: string[]): Promise<boolean> {
 }
 
 async function openFreshWeiboArticleEditor(page: Page): Promise<void> {
-  await waitForWeiboArticleEditor(page);
+  const ready = await page.evaluate(() => {
+    return (
+      document.querySelector("textarea[placeholder*='标题']") !== null &&
+      document.querySelector("[contenteditable='true']") !== null
+    );
+  }).catch(() => false);
+  if (ready) {
+    return;
+  }
   await clickTextAction(page, ["写文章"]).catch(() => false);
-  await page.waitForTimeout(800);
+  await waitForWeiboArticleEditor(page);
 }
 
 async function setWeiboArticleTextArea(page: Page, placeholderNeedle: string, value: string): Promise<boolean> {
@@ -1308,18 +1359,89 @@ async function setWeiboArticleTextArea(page: Page, placeholderNeedle: string, va
   }, { placeholderNeedle, value });
 }
 
-async function setWeiboArticleBody(page: Page, html: string): Promise<boolean> {
+async function setWeiboArticleBody(page: Page, html: string, plainText: string): Promise<boolean> {
+  let pasted = false;
+  if (typeof (page as { locator?: unknown }).locator === "function") {
+    const editorLocator = page.locator("[contenteditable='true']").first();
+    const clicked = await editorLocator.click().then(() => true).catch(() => false);
+    if (clicked) {
+      const wroteClipboard = await page.evaluate(async ({ plainTextValue, htmlValue }) => {
+        try {
+          const ClipboardItemCtor = (window as typeof window & { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+          if (typeof navigator.clipboard?.write === "function" && ClipboardItemCtor) {
+            await navigator.clipboard.write([
+              new ClipboardItemCtor({
+                "text/plain": new Blob([plainTextValue], { type: "text/plain" }),
+                "text/html": new Blob([htmlValue], { type: "text/html" }),
+              }),
+            ]);
+            return true;
+          }
+          if (typeof navigator.clipboard?.writeText === "function") {
+            await navigator.clipboard.writeText(plainTextValue);
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      }, { plainTextValue: plainText, htmlValue: html }).catch(() => false);
+      if (wroteClipboard) {
+        const keyboard = page.keyboard as { press?: (value: string) => Promise<void> } | undefined;
+        if (typeof keyboard?.press === "function") {
+          const pasteShortcut = process.platform === "darwin" ? "Meta+V" : "Control+V";
+          pasted = await keyboard.press(pasteShortcut).then(() => true).catch(() => false);
+        }
+      }
+    }
+  }
+  if (pasted) {
+    const pastedOk = await page.waitForFunction(
+      ({ expectedText }) => {
+        const editor = document.querySelector<HTMLElement>("[contenteditable='true']");
+        const rawText = editor?.innerText ?? "";
+        const normalized = rawText.replace(/\s+/g, " ").trim();
+        const looksLikeMarkdown = /\[[^\]]+\]\([^)]+\)/.test(rawText)
+          || /(^|\n)\s*#{1,6}\s+/.test(rawText)
+          || /(^|\n)\s*[-*+]\s+/.test(rawText)
+          || /(^|\n)\s*\d+\.\s+/.test(rawText);
+        return Boolean(normalized) && !looksLikeMarkdown && (!expectedText || normalized.includes(expectedText.slice(0, 16)));
+      },
+      { expectedText: plainText.replace(/\s+/g, " ").trim() },
+      { timeout: 3_000 },
+    ).then(() => true)
+      .catch(() => false);
+    if (pastedOk) {
+      return true;
+    }
+  }
   return await page.evaluate((input) => {
     const editor = document.querySelector<HTMLElement>("[contenteditable='true']");
     if (!editor) {
       return false;
     }
     editor.focus();
-    editor.innerHTML = input.html || "<p></p>";
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    editor.innerHTML = "<p></p>";
+
+    let inserted = false;
+    if (typeof document.execCommand === "function") {
+      inserted = document.execCommand("insertHTML", false, input.html || "<p></p>");
+    }
+    if (!inserted || !editor.innerHTML.trim()) {
+      editor.innerHTML = input.html || "<p></p>";
+    }
     editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: "" }));
     editor.dispatchEvent(new Event("change", { bubbles: true }));
-    return true;
-  }, { html });
+    const normalizedText = (editor.innerText ?? "").replace(/\s+/g, " ").trim();
+    const expectedText = (input.plainText ?? "").replace(/\s+/g, " ").trim();
+    return Boolean(normalizedText) && (!expectedText || normalizedText.includes(expectedText.slice(0, 16)));
+  }, { html, plainText });
 }
 
 async function saveWeiboArticleDraft(page: Page): Promise<boolean> {
@@ -1353,16 +1475,26 @@ async function isWeiboCoverDialogVisible(page: Page): Promise<boolean> {
   }).catch(() => false);
 }
 
+async function isWeiboCoverCropperVisible(page: Page): Promise<boolean> {
+  return await page.evaluate(() => {
+    const text = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
+    return text.includes("图片裁剪") && text.includes("确定");
+  }).catch(() => false);
+}
+
 async function openWeiboCoverDialog(page: Page): Promise<boolean> {
-  const preview = page.locator(".cover-preview").first();
-  if (await preview.count().catch(() => 0)) {
-    await preview.click({ force: true }).catch(() => {});
+  const mask = page.locator(".cover-preview .mask").first();
+  if (await mask.count().catch(() => 0)) {
+    await mask.click({ force: true }).catch(() => {});
   } else {
-    const mask = page.locator(".cover-preview .mask").first();
-    if (await mask.count().catch(() => 0)) {
-      await mask.click({ force: true }).catch(() => {});
+    const preview = page.locator(".cover-preview").first();
+    if (await preview.count().catch(() => 0)) {
+      await preview.click({ force: true }).catch(() => {});
     } else {
-      return false;
+      const clicked = await clickTextAction(page, ["替换封面图", "设置文章封面", "设置封面"]).catch(() => false);
+      if (!clicked) {
+        return false;
+      }
     }
   }
   await page.waitForTimeout(800);
@@ -1370,7 +1502,7 @@ async function openWeiboCoverDialog(page: Page): Promise<boolean> {
 }
 
 async function selectWeiboCoverLibraryItem(page: Page, index: number): Promise<boolean> {
-  const item = page.locator(".image-list .image-item").nth(index);
+  const item = page.locator(".image-item").nth(index);
   if (!(await item.count().catch(() => 0))) {
     return false;
   }
@@ -1383,6 +1515,10 @@ async function selectWeiboCoverLibraryItem(page: Page, index: number): Promise<b
 }
 
 async function chooseWeiboCoverFromLibrary(page: Page, coverImagePath: string): Promise<boolean> {
+  const previousCoverSrc = await page.evaluate(() => {
+    const coverImage = document.querySelector<HTMLImageElement>(".cover-preview .cover-img");
+    return typeof coverImage?.src === "string" ? coverImage.src.trim() : "";
+  }).catch(() => "");
   const dialogOpened = await openWeiboCoverDialog(page);
   if (!dialogOpened) {
     return false;
@@ -1400,7 +1536,7 @@ async function chooseWeiboCoverFromLibrary(page: Page, coverImagePath: string): 
     await page.waitForTimeout(300);
   }
 
-  const items = page.locator(".image-list .image-item");
+  const items = page.locator(".image-item");
   const beforeCount = await items.count().catch(() => 0);
   const input = page.locator("input[type='file']").last();
   if (!(await input.count().catch(() => 0))) {
@@ -1412,7 +1548,7 @@ async function chooseWeiboCoverFromLibrary(page: Page, coverImagePath: string): 
   const waitForUploadedItem = beforeCount > 0
     ? await page.waitForFunction(
         ({ selector, minCount }) => document.querySelectorAll(selector).length > minCount,
-        { selector: ".image-list .image-item", minCount: beforeCount },
+        { selector: ".image-item", minCount: beforeCount },
         { timeout: 8_000 },
       ).then(() => true)
         .catch(() => false)
@@ -1430,16 +1566,34 @@ async function chooseWeiboCoverFromLibrary(page: Page, coverImagePath: string): 
   if (await nextButton.count().catch(() => 0)) {
     await nextButton.click({ force: true }).catch(() => {});
   }
-  await page.waitForTimeout(1_500);
+  await page.waitForTimeout(800);
 
-  return await page.evaluate(() => {
+  const cropperVisible = await isWeiboCoverCropperVisible(page);
+  if (cropperVisible) {
+    const confirmButton = page.getByText("确定", { exact: false }).last();
+    if (await confirmButton.count().catch(() => 0)) {
+      await confirmButton.click({ force: true }).catch(() => {});
+    } else {
+      await clickTextAction(page, ["确定", "完成", "应用", "保存"]).catch(() => false);
+    }
+    await page.waitForTimeout(1_500);
+  } else {
+    await clickTextAction(page, ["完成", "确定", "应用", "保存"]).catch(() => false);
+    await page.waitForTimeout(1_500);
+  }
+
+  return await page.evaluate((input: { previousCoverSrc: string }) => {
     const dialogVisible = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
     if (dialogVisible.includes("正文图片") && dialogVisible.includes("图片库") && dialogVisible.includes("取消")) {
       return false;
     }
     const coverImage = document.querySelector<HTMLImageElement>(".cover-preview .cover-img");
-    return Boolean(coverImage && typeof coverImage.src === "string" && coverImage.src.trim());
-  }).catch(() => false);
+    const coverSrc = typeof coverImage?.src === "string" ? coverImage.src.trim() : "";
+    if (!coverSrc) {
+      return false;
+    }
+    return !input.previousCoverSrc || coverSrc !== input.previousCoverSrc || coverSrc.startsWith("blob:");
+  }, { previousCoverSrc }).catch(() => false);
 }
 
 async function uploadWeiboArticleCover(page: Page, coverImagePath: string): Promise<boolean> {
@@ -1509,7 +1663,7 @@ async function createWeiboArticleFromMarkdown(
     await openFreshWeiboArticleEditor(articlePage);
     const titleSet = await setWeiboArticleTextArea(articlePage, "标题", normalized.title);
     const leadSet = prepared.lead ? await setWeiboArticleTextArea(articlePage, "导语", prepared.lead) : true;
-    const bodySet = await setWeiboArticleBody(articlePage, prepared.html);
+    const bodySet = await setWeiboArticleBody(articlePage, prepared.html, prepared.plainText);
     if (!titleSet || !leadSet || !bodySet) {
       return errorResult("UPSTREAM_CHANGED", "article editor controls not found");
     }
