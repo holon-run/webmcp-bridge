@@ -48,6 +48,9 @@ function createMockPage(options?: {
     if (!arg && source.includes(".cover-preview .cover-img")) {
       return coverPreviewSrc;
     }
+    if (!arg && source.includes("textarea[placeholder*='标题']") && source.includes("[contenteditable='true']")) {
+      return true;
+    }
     if (!arg && source.includes("正文图片") && source.includes("图片库") && source.includes("取消")) {
       return coverDialogVisible;
     }
@@ -205,9 +208,6 @@ function createMockPage(options?: {
       };
     }
     if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "article_publish_ready") {
-      return true;
-    }
-    if (arg === undefined) {
       return true;
     }
     return undefined;
@@ -398,9 +398,6 @@ function createMockPage(options?: {
       }
       if (arg && typeof arg === "object" && !Array.isArray(arg) && "op" in arg && arg.op === "extract_ai_search") {
         return options?.aiSummary;
-      }
-      if (arg === undefined) {
-        return true;
       }
       return undefined;
     }),

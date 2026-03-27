@@ -1046,7 +1046,7 @@ function convertMarkdownInlineToWeiboHtml(value: string): string {
         return text;
       }
       const normalizedHref = href.replace(/^https?:\/\//i, "");
-      const showVisibleHref = href.startsWith("mailto:") ? false : textRaw.trim() !== hrefRaw.trim() || textRaw.trim() !== normalizedHref;
+      const showVisibleHref = href.startsWith("mailto:") ? false : textRaw.trim() !== hrefRaw.trim() && textRaw.trim() !== normalizedHref;
       return reserve(
         showVisibleHref
           ? `<a href="${escapeHtml(href)}">${text}</a><span>（${escapeHtml(normalizedHref)}）</span>`
@@ -1167,6 +1167,39 @@ function convertMarkdownToWeiboArticleHtml(markdown: string): string {
   return blocks.join("<p><br></p>");
 }
 
+function convertMarkdownLineToWeiboPlainText(line: string): string {
+  return line
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .replace(/^>\s+/, "")
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function convertMarkdownToWeiboPlainText(markdown: string): string {
+  const output: string[] = [];
+  let insideFence = false;
+  for (const rawLine of markdown.replace(/\r\n/g, "\n").split("\n")) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      output.push("");
+      continue;
+    }
+    if (/^```/.test(trimmed)) {
+      insideFence = !insideFence;
+      continue;
+    }
+    output.push(insideFence ? trimmed : convertMarkdownLineToWeiboPlainText(trimmed));
+  }
+  return output.join("\n").trim();
+}
+
 function extractMarkdownLead(markdown: string): string | undefined {
   for (const line of markdown.replace(/\r\n/g, "\n").split("\n")) {
     const trimmed = line.trim();
@@ -1204,7 +1237,7 @@ function prepareArticleMarkdown(markdown: string, markdownPath: string, explicit
   return {
     markdown: prepared,
     html: convertMarkdownToWeiboArticleHtml(prepared),
-    plainText: prepared,
+    plainText: convertMarkdownToWeiboPlainText(prepared),
     ...(lead ? { lead } : {}),
   };
 }
