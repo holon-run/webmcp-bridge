@@ -182,6 +182,8 @@ function trimTrailingSlash(value: string): string {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
+const CDP_VERSION_FETCH_TIMEOUT_MS = 3000;
+
 export function resolveCdpVersionEndpoint(browserUrl: string): string {
   const normalized = browserUrl.trim();
   if (!normalized) {
@@ -192,9 +194,10 @@ export function resolveCdpVersionEndpoint(browserUrl: string): string {
     return normalized;
   }
   if (parsed.pathname.endsWith("/json/version") || parsed.pathname.endsWith("/json/version/")) {
-    return trimTrailingSlash(parsed.toString());
+    parsed.pathname = trimTrailingSlash(parsed.pathname);
+  } else {
+    parsed.pathname = `${trimTrailingSlash(parsed.pathname)}/json/version`.replace(/\/{2,}/g, "/");
   }
-  parsed.pathname = `${trimTrailingSlash(parsed.pathname)}/json/version`.replace(/\/{2,}/g, "/");
   parsed.search = "";
   parsed.hash = "";
   return parsed.toString();
@@ -223,13 +226,17 @@ export async function resolveCdpConnectUrl(
   if (versionEndpoint.startsWith("ws://") || versionEndpoint.startsWith("wss://")) {
     return versionEndpoint;
   }
+  const abortController = new AbortController();
+  const abortTimer = setTimeout(() => abortController.abort(), CDP_VERSION_FETCH_TIMEOUT_MS);
   let response: Response;
   try {
-    response = await fetchImpl(versionEndpoint);
+    response = await fetchImpl(versionEndpoint, { signal: abortController.signal } as RequestInit);
   } catch (error) {
     throw new Error(
       `INVALID_BROWSER_URL: failed to query DevTools version at ${versionEndpoint}: ${extractErrorMessage(error)}`,
     );
+  } finally {
+    clearTimeout(abortTimer);
   }
   if (!response.ok) {
     throw new Error(

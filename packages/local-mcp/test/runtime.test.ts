@@ -88,7 +88,7 @@ describe("resolveCdpVersionEndpoint", () => {
     expect(resolveCdpVersionEndpoint("http://127.0.0.1:9222")).toBe("http://127.0.0.1:9222/json/version");
   });
 
-  it("preserves explicit /json/version endpoints without a trailing slash", () => {
+  it("normalizes explicit /json/version endpoints with a trailing slash", () => {
     expect(resolveCdpVersionEndpoint("http://127.0.0.1:9222/json/version/")).toBe(
       "http://127.0.0.1:9222/json/version",
     );

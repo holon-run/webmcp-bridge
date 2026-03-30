@@ -1034,6 +1034,7 @@ describe("startLocalMcpBridge", () => {
     });
     runtimeQueue = [initialRuntime, relaunchedRuntime];
     startedRuntimeHandles = [];
+    runningPids.add(41002);
 
     const { startLocalMcpBridge } = await import("../src/bridge.js");
     await startLocalMcpBridge({
