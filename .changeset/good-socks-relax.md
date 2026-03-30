@@ -1,3 +1,4 @@
+---
 "@webmcp-bridge/local-mcp": patch
 ---
 
