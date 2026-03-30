@@ -566,6 +566,23 @@ function spawnDetachedBrowser(executable: string, args: string[]): number | unde
   return child.pid ?? undefined;
 }
 
+function sendProcessSignal(pid: number, signal: NodeJS.Signals): void {
+  if (process.platform === "win32") {
+    void signal;
+    return;
+  }
+  try {
+    process.kill(-pid, signal);
+    return;
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // Ignore missing/stale processes during cleanup.
+    }
+  }
+}
+
 async function waitForProcessExitInternal(pid: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -652,22 +669,21 @@ export async function stopBrowserProcess(pid: number | undefined): Promise<void>
     });
     return;
   }
-  try {
-    process.kill(-(pid as number), "SIGTERM");
-  } catch {
-    try {
-      process.kill(pid as number, "SIGTERM");
-    } catch {
-      // Ignore missing/stale processes during cleanup.
-    }
-  }
+  sendProcessSignal(pid as number, "SIGTERM");
 }
 
 export async function waitForProcessExit(pid: number | undefined, timeoutMs = PROCESS_EXIT_TIMEOUT_MS): Promise<boolean> {
   if (!pid) {
     return true;
   }
-  return await waitForProcessExitInternal(pid, timeoutMs);
+  if (await waitForProcessExitInternal(pid, timeoutMs)) {
+    return true;
+  }
+  if (process.platform !== "win32" && (await isProcessRunning(pid))) {
+    sendProcessSignal(pid, "SIGKILL");
+    return await waitForProcessExitInternal(pid, PROCESS_EXIT_TIMEOUT_MS);
+  }
+  return false;
 }
 
 export async function focusBrowserWindow(browserChannel: BrowserChannel | undefined): Promise<boolean> {
@@ -692,10 +708,15 @@ export async function findBrowserProcessForProfile(userDataDir: string): Promise
 }
 
 export async function stopManagedBrowser(metadata: SessionMetadata): Promise<void> {
-  if (metadata.ownership !== "managed" || !(await isProcessRunning(metadata.browserPid))) {
+  if (metadata.ownership !== "managed") {
     return;
   }
-  await stopBrowserProcess(metadata.browserPid);
+  const browserPid = metadata.browserPid ?? (await findBrowserProcessForProfile(metadata.profilePath));
+  if (!(await isProcessRunning(browserPid))) {
+    return;
+  }
+  await stopBrowserProcess(browserPid);
+  await waitForProcessExit(browserPid);
 }
 
 export function assertAuthSensitiveBrowserSupport(

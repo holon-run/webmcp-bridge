@@ -4,6 +4,7 @@
  */
 
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,7 +12,9 @@ import {
   backupAndResetProfile,
   readSessionMetadata,
   resolveAuthPolicy,
+  stopBrowserProcess,
   updateSessionMetadata,
+  waitForProcessExit,
 } from "../src/session.js";
 
 const tempDirs: string[] = [];
@@ -127,5 +130,27 @@ describe("session metadata helpers", () => {
     const metadata = await readSessionMetadata(profileDir, fallback);
     expect(metadata.sessionState).toBe("profile_missing");
     expect(metadata.lastBackupPath).toBe(result.backupPath);
+  });
+
+  it("escalates to a forced kill when a browser process ignores SIGTERM", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+      ],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    expect(child.pid).toBeDefined();
+    await stopBrowserProcess(child.pid);
+    await expect(waitForProcessExit(child.pid, 100)).resolves.toBe(true);
+    expect(() => process.kill(child.pid as number, 0)).toThrow();
   });
 });

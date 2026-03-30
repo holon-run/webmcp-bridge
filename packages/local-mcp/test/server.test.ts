@@ -6,7 +6,7 @@
 import { PassThrough } from "node:stream";
 import type { JsonValue } from "@webmcp-bridge/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { McpJsonRpcResponse } from "../src/mcp-types.js";
+import type { McpCanReapResult, McpJsonRpcResponse } from "../src/mcp-types.js";
 import {
   createLocalMcpStdioServer,
   type LocalMcpGateway,
@@ -136,6 +136,7 @@ describe("createLocalMcpStdioServer", () => {
     })),
     closeBridge: vi.fn(async () => {}),
   };
+  type BridgeState = ReturnType<typeof bridgeControl.getState>;
 
   beforeEach(async () => {
     input = new PassThrough();
@@ -232,6 +233,103 @@ describe("createLocalMcpStdioServer", () => {
         resources: {
           subscribe: true,
         },
+      },
+    });
+  });
+
+  it("reports headed interactive sessions as not reapable", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "1-can-reap",
+      method: "uxc/can_reap",
+      params: {
+        idle_for_secs: 650,
+        idle_ttl_secs: 600,
+      },
+    });
+
+    expect("result" in response ? (response.result as McpCanReapResult) : undefined).toEqual({
+      can_reap: false,
+      reason: "interactive_headed_session",
+      retry_after_secs: 30,
+      state: {
+        interactive: true,
+        owns_external_resource: true,
+        waiting_for_human: false,
+      },
+    });
+  });
+
+  it("reports bootstrap sessions as waiting for human input", async () => {
+    bridgeControl.getState.mockReturnValueOnce({
+      site: "google",
+      targetUrl: "https://gemini.google.com/app",
+      controlMode: "bootstrap",
+      authPolicyMode: "bootstrap_then_attach",
+      authState: "auth_required",
+      sessionState: "bootstrap_active",
+      ownership: "external",
+      mode: "control-only",
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
+      profilePath: "/tmp/google-profile",
+      browserPid: 1234,
+    } as unknown as BridgeState);
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2-can-reap",
+      method: "uxc/can_reap",
+      params: {
+        idle_for_secs: 650,
+        idle_ttl_secs: 600,
+      },
+    });
+
+    expect("result" in response ? (response.result as McpCanReapResult) : undefined).toEqual({
+      can_reap: false,
+      reason: "waiting_for_human",
+      retry_after_secs: 30,
+      state: {
+        interactive: true,
+        owns_external_resource: true,
+        waiting_for_human: true,
+      },
+    });
+  });
+
+  it("allows idle headless sessions to be reaped", async () => {
+    bridgeControl.getState.mockReturnValueOnce({
+      site: "board",
+      targetUrl: "http://127.0.0.1:4173",
+      controlMode: "launch",
+      authPolicyMode: "none",
+      authState: "authenticated",
+      sessionState: "runtime_active",
+      ownership: "managed",
+      mode: "native",
+      presentationMode: "headless",
+      preferredPresentationMode: "headless",
+      browserPid: 4321,
+    } as unknown as BridgeState);
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "3-can-reap",
+      method: "uxc/can_reap",
+      params: {
+        idle_for_secs: 650,
+        idle_ttl_secs: 600,
+      },
+    });
+
+    expect("result" in response ? (response.result as McpCanReapResult) : undefined).toEqual({
+      can_reap: true,
+      reason: "idle_headless_session",
+      state: {
+        interactive: false,
+        owns_external_resource: true,
+        waiting_for_human: false,
       },
     });
   });

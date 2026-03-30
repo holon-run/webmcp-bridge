@@ -63,6 +63,17 @@ export type McpInitializeResult = {
   instructions?: string;
 };
 
+export type McpCanReapResult = {
+  can_reap: boolean;
+  reason?: string;
+  retry_after_secs?: number;
+  state?: {
+    interactive?: boolean;
+    owns_external_resource?: boolean;
+    waiting_for_human?: boolean;
+  };
+};
+
 export type McpResourceDefinition = {
   uri: string;
   name?: string;
