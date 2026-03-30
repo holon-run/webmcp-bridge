@@ -10,6 +10,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
+  RequestSchema,
   ReadResourceRequestSchema,
   SubscribeRequestSchema,
   UnsubscribeRequestSchema,
@@ -17,7 +18,8 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { WebMcpResourceDefinition, WebMcpToolDefinition } from "@webmcp-bridge/playwright";
 import type { Readable, Writable } from "node:stream";
-import type { McpToolDefinition } from "./mcp-types.js";
+import { z } from "zod";
+import type { McpCanReapResult, McpToolDefinition } from "./mcp-types.js";
 import type {
   BridgeAuthState,
   BridgeControlMode,
@@ -87,6 +89,17 @@ const SERVICE_INSTRUCTIONS = [
   "If you already have a signed-in browser or managed profile, call bridge.session.attach.",
   "After attach succeeds, run help again to see site tools.",
 ].join(" ");
+const CAN_REAP_RETRY_AFTER_SECS = 30;
+
+const UxcCanReapRequestSchema = RequestSchema.extend({
+  method: z.literal("uxc/can_reap"),
+  params: z
+    .object({
+      idle_for_secs: z.number().int().nonnegative(),
+      idle_ttl_secs: z.number().int().nonnegative(),
+    })
+    .optional(),
+});
 
 class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private static readonly BRIDGE_CLOSE_DELAY_MS = 100;
@@ -174,6 +187,10 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       this.subscribedResourceUris.delete(request.params.uri);
       return {};
     });
+
+    this.server.setRequestHandler(UxcCanReapRequestSchema, async () => {
+      return this.resolveCanReapResult(options.bridgeControl.getState());
+    });
   }
 
   async start(): Promise<void> {
@@ -214,6 +231,53 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       return value as Record<string, unknown>;
     }
     return {};
+  }
+
+  private resolveCanReapResult(state: LocalBridgeState): McpCanReapResult {
+    const ownsExternalResource = state.ownership !== "none";
+    const waitingForHuman =
+      state.controlMode === "bootstrap" ||
+      state.authState === "auth_required" ||
+      state.authState === "challenge_required" ||
+      state.sessionState === "auth_required" ||
+      state.sessionState === "challenge_required" ||
+      state.sessionState === "bootstrap_active";
+
+    if (waitingForHuman) {
+      return {
+        can_reap: false,
+        reason: "waiting_for_human",
+        retry_after_secs: CAN_REAP_RETRY_AFTER_SECS,
+        state: {
+          interactive: true,
+          owns_external_resource: ownsExternalResource,
+          waiting_for_human: true,
+        },
+      };
+    }
+
+    if (state.presentationMode === "headed") {
+      return {
+        can_reap: false,
+        reason: "interactive_headed_session",
+        retry_after_secs: CAN_REAP_RETRY_AFTER_SECS,
+        state: {
+          interactive: true,
+          owns_external_resource: ownsExternalResource,
+          waiting_for_human: false,
+        },
+      };
+    }
+
+    return {
+      can_reap: true,
+      reason: state.mode === "control-only" ? "idle_control_plane" : "idle_headless_session",
+      state: {
+        interactive: false,
+        owns_external_resource: ownsExternalResource,
+        waiting_for_human: false,
+      },
+    };
   }
 
   private toMcpResourceDefinition(resource: WebMcpResourceDefinition): Record<string, unknown> {

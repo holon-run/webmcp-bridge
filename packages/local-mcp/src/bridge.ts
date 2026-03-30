@@ -363,9 +363,14 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     }
     closed = true;
     unsubscribeRuntimeResourceUpdates?.();
+    const activeMetadata = metadata;
     const activeRuntime = runtime;
     clearRuntime();
-    const results = await Promise.allSettled([server?.close(), activeRuntime?.close()]);
+    const results = await Promise.allSettled([
+      server?.close(),
+      activeRuntime?.close(),
+      activeMetadata?.ownership === "managed" ? stopManagedBrowser(activeMetadata) : undefined,
+    ]);
     const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
     if (firstFailure) {
       throw firstFailure.reason;
