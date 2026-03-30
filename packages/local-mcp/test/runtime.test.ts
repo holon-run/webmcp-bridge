@@ -9,6 +9,8 @@ import {
   isRecoverableGatewayError,
   isUrlAllowed,
   mapNavigationError,
+  resolveCdpConnectUrl,
+  resolveCdpVersionEndpoint,
   resolveRecoveryNavigationUrl,
   resolveTargetUrl,
   selectPreferredPage,
@@ -78,6 +80,60 @@ describe("mapNavigationError", () => {
     );
 
     expect(error.message).toContain("NAVIGATION_TIMEOUT");
+  });
+});
+
+describe("resolveCdpVersionEndpoint", () => {
+  it("appends /json/version for root HTTP endpoints", () => {
+    expect(resolveCdpVersionEndpoint("http://127.0.0.1:9222")).toBe("http://127.0.0.1:9222/json/version");
+  });
+
+  it("normalizes explicit /json/version endpoints with a trailing slash", () => {
+    expect(resolveCdpVersionEndpoint("http://127.0.0.1:9222/json/version/")).toBe(
+      "http://127.0.0.1:9222/json/version",
+    );
+  });
+
+  it("leaves websocket endpoints unchanged", () => {
+    expect(resolveCdpVersionEndpoint("ws://127.0.0.1:9222/devtools/browser/abc")).toBe(
+      "ws://127.0.0.1:9222/devtools/browser/abc",
+    );
+  });
+});
+
+describe("resolveCdpConnectUrl", () => {
+  it("returns websocket endpoints unchanged", async () => {
+    await expect(resolveCdpConnectUrl("ws://127.0.0.1:9222/devtools/browser/abc")).resolves.toBe(
+      "ws://127.0.0.1:9222/devtools/browser/abc",
+    );
+  });
+
+  it("resolves HTTP endpoints to webSocketDebuggerUrl", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
+      }),
+    })) as unknown as typeof fetch;
+
+    await expect(resolveCdpConnectUrl("http://127.0.0.1:9222", fetchMock)).resolves.toBe(
+      "ws://127.0.0.1:9222/devtools/browser/abc",
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222/json/version",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("throws a structured error when the HTTP endpoint does not expose websocket metadata", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({}),
+    })) as unknown as typeof fetch;
+
+    await expect(resolveCdpConnectUrl("http://127.0.0.1:9222", fetchMock)).rejects.toThrow(
+      "INVALID_BROWSER_URL: DevTools endpoint at http://127.0.0.1:9222/json/version did not expose webSocketDebuggerUrl",
+    );
   });
 });
 

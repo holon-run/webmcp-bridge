@@ -499,9 +499,10 @@ async function reservePort(): Promise<number> {
 
 async function waitForCdp(browserUrl: string, timeoutMs = CDP_READY_TIMEOUT_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  const versionEndpoint = `${browserUrl}/json/version`;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${browserUrl}/json/version`);
+      const response = await fetch(versionEndpoint);
       if (response.ok) {
         return;
       }
