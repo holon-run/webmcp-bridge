@@ -665,7 +665,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
         coverImagePath: {
           type: "string",
-          description: "Optional absolute local image path for the article cover image.",
+          description: "Optional absolute local image path for the article cover image. X article covers work best when pre-cropped close to the editor's 5:2 aspect ratio.",
           minLength: 1,
           "x-uxc-kind": "file-path",
         },
@@ -705,7 +705,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
         coverImagePath: {
           type: "string",
-          description: "Optional absolute local image path for the article cover image when creating a new draft.",
+          description: "Optional absolute local image path for the article cover image when creating a new draft. X article covers work best when pre-cropped close to the editor's 5:2 aspect ratio.",
           minLength: 1,
           "x-uxc-kind": "file-path",
         },
@@ -735,7 +735,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
         coverImagePath: {
           type: "string",
-          description: "Optional absolute local image path for the article cover image.",
+          description: "Optional absolute local image path for the article cover image. X article covers work best when pre-cropped close to the editor's 5:2 aspect ratio.",
           minLength: 1,
           "x-uxc-kind": "file-path",
         },
@@ -788,7 +788,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
         coverImagePath: {
           type: "string",
-          description: "Absolute local image path for the article cover image.",
+          description: "Absolute local image path for the article cover image. X article covers work best when pre-cropped close to the editor's 5:2 aspect ratio.",
           minLength: 1,
           "x-uxc-kind": "file-path",
         },
@@ -4476,6 +4476,10 @@ function buildArticlePreviewUrl(articleId: string): string {
   return `https://x.com/i/articles/${encodeURIComponent(articleId)}/preview`;
 }
 
+function buildArticlePublicUrl(articleId: string): string {
+  return `https://x.com/i/articles/${encodeURIComponent(articleId)}`;
+}
+
 function isArticlePreviewUrl(url: string): boolean {
   try {
     const parsed = new URL(url, "https://x.com");
@@ -5692,6 +5696,10 @@ async function publishArticleEditor(
   | { ok: true; articleId?: string; articleUrl?: string; editUrl: string }
   | { ok: false; reason: string; details?: Record<string, JsonValue> }
 > {
+  const isTimeoutError = (error: unknown): boolean => {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    return /timeout/i.test(message);
+  };
   const editUrl = page.url();
   await page
     .evaluate(() => {
@@ -5772,6 +5780,7 @@ async function publishArticleEditor(
   await page.waitForTimeout(1_000);
   await clickPrimaryPublish().catch(() => false);
 
+  let publishTimedOut = false;
   try {
     await page.waitForFunction(
       ({ previousUrl }) => {
@@ -5787,8 +5796,17 @@ async function publishArticleEditor(
       { previousUrl: editUrl },
       { timeout: timeoutMs },
     );
-  } catch {
-    return { ok: false, reason: "publish_not_confirmed" };
+  } catch (error) {
+    if (!isTimeoutError(error)) {
+      return {
+        ok: false,
+        reason: "publish_wait_failed",
+        details: {
+          message: error instanceof Error ? error.message : String(error ?? ""),
+        },
+      };
+    }
+    publishTimedOut = true;
   }
 
   const details = await page.evaluate(({ op }) => {
@@ -5816,12 +5834,33 @@ async function publishArticleEditor(
     parseArticleIdFromUrl(details.currentUrl) ??
     (typeof details.editUrl === "string" ? parseArticleIdFromUrl(details.editUrl) : undefined) ??
     undefined;
-  const articleUrl =
+  let articleUrl =
     typeof details.publicUrl === "string" && details.publicUrl.length > 0
       ? details.publicUrl
       : !details.currentUrl.includes("/compose/articles/edit/")
         ? details.currentUrl
         : undefined;
+
+  if (!articleUrl && articleId) {
+    const publicUrl = buildArticlePublicUrl(articleId);
+    const readback = await readArticleByUrl(page, publicUrl);
+    if (!parseArticleReadErrorCode(readback)) {
+      articleUrl = publicUrl;
+    }
+  }
+
+  if (publishTimedOut && !articleUrl) {
+    return {
+      ok: false,
+      reason: "publish_not_confirmed",
+      details: {
+        currentUrl: details.currentUrl,
+        ...(typeof details.editUrl === "string" ? { editUrl: details.editUrl } : {}),
+        ...(typeof details.publicUrl === "string" ? { publicUrl: details.publicUrl } : {}),
+        ...(articleId ? { articleId } : {}),
+      },
+    };
+  }
 
   const output: { ok: true; articleId?: string; articleUrl?: string; editUrl: string } = {
     ok: true,

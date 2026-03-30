@@ -47,6 +47,9 @@ type Behavior = {
   articleInlineTriggerOk: boolean;
   articlePlaceMarkerOk: boolean;
   articlePublishConfirmed: boolean;
+  articlePublishKeepsEditorUrl: boolean;
+  articlePublishWaitTimeout: boolean;
+  articlePublishDetailsOmitPublicUrl: boolean;
   articleDeleteConfirmed: boolean;
   tweetDeleteConfirmed: boolean;
 };
@@ -121,6 +124,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     articleInlineTriggerOk: true,
     articlePlaceMarkerOk: true,
     articlePublishConfirmed: true,
+    articlePublishKeepsEditorUrl: false,
+    articlePublishWaitTimeout: false,
+    articlePublishDetailsOmitPublicUrl: false,
     articleDeleteConfirmed: true,
     tweetDeleteConfirmed: true,
     ...partial,
@@ -314,7 +320,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         if (!behavior.articlePublishConfirmed) {
           return false;
         }
-        currentUrl = behavior.articlePublicUrl;
+        if (!behavior.articlePublishKeepsEditorUrl) {
+          currentUrl = behavior.articlePublicUrl;
+        }
         return true;
       }
 
@@ -322,7 +330,10 @@ function createMockPage(partial: Partial<Behavior> = {}) {
         return {
           currentUrl,
           editUrl: behavior.articleEditUrl,
-          publicUrl: behavior.articlePublishConfirmed ? behavior.articlePublicUrl : undefined,
+          publicUrl:
+            behavior.articlePublishConfirmed && !behavior.articlePublishDetailsOmitPublicUrl
+              ? behavior.articlePublicUrl
+              : undefined,
         };
       }
 
@@ -516,6 +527,9 @@ function createMockPage(partial: Partial<Behavior> = {}) {
     keyboard: {
       press: vi.fn(async () => {}),
     },
+    context: vi.fn(() => ({
+      newPage,
+    })),
   };
   const newPage = vi.fn(async () => readPage);
 
@@ -665,6 +679,17 @@ function createMockPage(partial: Partial<Behavior> = {}) {
       }
       if (arg && typeof arg === "object" && !Array.isArray(arg) && (arg as Record<string, unknown>).op === "article_wait_editor") {
         if (!behavior.articleOpenOk) {
+          throw new Error("timeout");
+        }
+        return true;
+      }
+      if (
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        "previousUrl" in (arg as Record<string, unknown>)
+      ) {
+        if (behavior.articlePublishWaitTimeout) {
           throw new Error("timeout");
         }
         return true;
@@ -1673,6 +1698,40 @@ describe("createXAdapter", () => {
     expect(draftState.html).not.toContain("<h1>Mock title</h1>");
     expect(draftState.html).toContain("<p>Body text before image.</p>");
     expect(draftState.html).toContain("<p>[[WEBMCP_INLINE_IMAGE_1]]</p>");
+  });
+
+  it("falls back to one public read when publish keeps the editor url", async () => {
+    const adapter = createXAdapter();
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-x-article-publish-fallback-"));
+    tempDirs.add(tempDir);
+    const markdownPath = join(tempDir, "post.md");
+    await writeFile(markdownPath, "# Mock title\n\nBody text.\n");
+    const { page } = createMockPage({
+      articlePublishConfirmed: true,
+      articlePublishKeepsEditorUrl: true,
+      articlePublishWaitTimeout: true,
+      articlePublishDetailsOmitPublicUrl: true,
+    });
+
+    const result = await adapter.callTool(
+      { name: "article.publishMarkdown", input: { markdownPath } },
+      { page: page as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      confirmed: true,
+      title: "Mock title",
+      articleId: "2035000000000000000",
+      draftId: "2035000000000000000",
+      articleUrl: "https://x.com/i/articles/2035000000000000000",
+      editUrl: "https://x.com/compose/articles/edit/2035000000000000000",
+      previewUrl: "https://x.com/i/articles/2035000000000000000/preview",
+      persisted: true,
+      sessionScoped: false,
+      inlineImageCount: 0,
+      hasCoverImage: false,
+    });
   });
 
   it("creates one article draft from markdown with cover and inline images", async () => {

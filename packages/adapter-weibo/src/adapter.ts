@@ -333,7 +333,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
         coverImagePath: {
           type: "string",
-          description: "Optional absolute path to a cover image file.",
+          description: "Optional absolute path to a cover image file. Weibo applies a separate select-and-crop step after upload, so a wide cover image is recommended.",
         },
         dryRun: {
           type: "boolean",
@@ -365,7 +365,7 @@ const TOOL_DEFINITIONS: WebMcpToolDefinition[] = [
         },
         coverImagePath: {
           type: "string",
-          description: "Optional absolute path to a cover image file.",
+          description: "Optional absolute path to a cover image file. Weibo applies a separate select-and-crop step after upload, so a wide cover image is recommended.",
         },
         dryRun: {
           type: "boolean",
@@ -1582,9 +1582,11 @@ async function chooseWeiboCoverFromLibrary(page: Page, coverImagePath: string): 
     await page.waitForTimeout(1_500);
   }
 
-  return await page.evaluate((input: { previousCoverSrc: string }) => {
-    const dialogVisible = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
-    if (dialogVisible.includes("正文图片") && dialogVisible.includes("图片库") && dialogVisible.includes("取消")) {
+  return await page.waitForFunction(({ previousCoverSrc, allowUnchangedPreview }) => {
+    const text = (document.body?.innerText ?? "").replace(/\s+/g, " ").trim();
+    const dialogVisible = text.includes("正文图片") && text.includes("图片库") && text.includes("取消");
+    const cropperVisibleNow = text.includes("图片裁剪") && text.includes("确定");
+    if (dialogVisible || cropperVisibleNow) {
       return false;
     }
     const coverImage = document.querySelector<HTMLImageElement>(".cover-preview .cover-img");
@@ -1592,8 +1594,11 @@ async function chooseWeiboCoverFromLibrary(page: Page, coverImagePath: string): 
     if (!coverSrc) {
       return false;
     }
-    return !input.previousCoverSrc || coverSrc !== input.previousCoverSrc || coverSrc.startsWith("blob:");
-  }, { previousCoverSrc }).catch(() => false);
+    if (!previousCoverSrc || coverSrc !== previousCoverSrc || coverSrc.startsWith("blob:")) {
+      return true;
+    }
+    return allowUnchangedPreview === true;
+  }, { previousCoverSrc, allowUnchangedPreview: cropperVisible }, { timeout: 8_000 }).then(() => true).catch(() => false);
 }
 
 async function uploadWeiboArticleCover(page: Page, coverImagePath: string): Promise<boolean> {

@@ -28,6 +28,8 @@ function createMockPage(options?: {
   articleDraft?: Record<string, unknown>;
   childUrl?: string;
   coverLibraryItems?: number;
+  preserveCoverPreviewSrcAfterUpload?: boolean;
+  waitForFunctionValidatesCoverPreview?: boolean;
 }) {
   let timelinePass = 0;
   let coverLibraryCount = options?.coverLibraryItems ?? 0;
@@ -242,14 +244,18 @@ function createMockPage(options?: {
           count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
           setInputFiles: vi.fn(async () => {
             coverLibraryCount += 1;
-            pendingCoverPreviewSrc = `blob:mock-cover-${coverLibraryCount}`;
+            pendingCoverPreviewSrc = options?.preserveCoverPreviewSrcAfterUpload
+              ? coverPreviewSrc
+              : `blob:mock-cover-${coverLibraryCount}`;
           }),
         }),
         last: () => ({
           count: vi.fn(async () => (options?.coverLibraryItems !== undefined ? 1 : 0)),
           setInputFiles: vi.fn(async () => {
             coverLibraryCount += 1;
-            pendingCoverPreviewSrc = `blob:mock-cover-${coverLibraryCount}`;
+            pendingCoverPreviewSrc = options?.preserveCoverPreviewSrcAfterUpload
+              ? coverPreviewSrc
+              : `blob:mock-cover-${coverLibraryCount}`;
           }),
         }),
       };
@@ -352,7 +358,31 @@ function createMockPage(options?: {
     title: vi.fn(async () => options?.title ?? "微博"),
     waitForTimeout: vi.fn(async () => {}),
     waitForLoadState: vi.fn(async () => {}),
-    waitForFunction: vi.fn(async () => {}),
+    waitForFunction: vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (
+        options?.waitForFunctionValidatesCoverPreview &&
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        "previousCoverSrc" in arg
+      ) {
+        const previous = typeof (arg as Record<string, unknown>).previousCoverSrc === "string"
+          ? ((arg as Record<string, unknown>).previousCoverSrc as string)
+          : "";
+        const allowUnchangedPreview = (arg as Record<string, unknown>).allowUnchangedPreview === true;
+        if (coverDialogVisible || coverCropperVisible) {
+          throw new Error("timeout");
+        }
+        if (!coverPreviewSrc) {
+          throw new Error("timeout");
+        }
+        if (!previous || coverPreviewSrc !== previous || coverPreviewSrc.startsWith("blob:") || allowUnchangedPreview) {
+          return true;
+        }
+        throw new Error("timeout");
+      }
+      return undefined;
+    }),
     waitForEvent: vi.fn(async () => null),
     locator: vi.fn((selector: string) => makeLocator(selector)),
     getByText: vi.fn((text: string) => makeTextLocator(text)),
@@ -368,7 +398,31 @@ function createMockPage(options?: {
     title: vi.fn(async () => options?.title ?? "微博"),
     waitForTimeout: vi.fn(async () => {}),
     waitForLoadState: vi.fn(async () => {}),
-    waitForFunction: vi.fn(async () => {}),
+    waitForFunction: vi.fn(async (_fn: unknown, arg?: unknown) => {
+      if (
+        options?.waitForFunctionValidatesCoverPreview &&
+        arg &&
+        typeof arg === "object" &&
+        !Array.isArray(arg) &&
+        "previousCoverSrc" in arg
+      ) {
+        const previous = typeof (arg as Record<string, unknown>).previousCoverSrc === "string"
+          ? ((arg as Record<string, unknown>).previousCoverSrc as string)
+          : "";
+        const allowUnchangedPreview = (arg as Record<string, unknown>).allowUnchangedPreview === true;
+        if (coverDialogVisible || coverCropperVisible) {
+          throw new Error("timeout");
+        }
+        if (!coverPreviewSrc) {
+          throw new Error("timeout");
+        }
+        if (!previous || coverPreviewSrc !== previous || coverPreviewSrc.startsWith("blob:") || allowUnchangedPreview) {
+          return true;
+        }
+        throw new Error("timeout");
+      }
+      return undefined;
+    }),
     waitForEvent: vi.fn(async () => null),
     locator: vi.fn((selector: string) => makeLocator(selector)),
     getByText: vi.fn((text: string) => makeTextLocator(text)),
@@ -812,6 +866,42 @@ describe("createAdapter", () => {
       coverLibraryItems: 2,
     });
     const tempDir = await mkdtemp(join(tmpdir(), "adapter-weibo-article-"));
+    const markdownPath = join(tempDir, "publish-cover.md");
+    const coverPath = join(tempDir, "cover.png");
+    await writeFile(markdownPath, "# 封面发布测试\n\n这是一段正文。", "utf8");
+    await writeFile(coverPath, "fake-image", "utf8");
+
+    try {
+      await expect(
+        adapter.callTool(
+          { name: "article.publishMarkdown", input: { markdownPath, coverImagePath: coverPath, dryRun: true } },
+          { page: page as never },
+        ),
+      ).resolves.toEqual({
+        ok: true,
+        title: "封面发布测试",
+        lead: "这是一段正文。",
+        editUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+        draftId: "168782",
+        saved: true,
+        hasCoverImage: true,
+        dryRun: true,
+        canPublish: true,
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts one uploaded cover when the preview url stays unchanged after crop", async () => {
+    const adapter = createAdapter();
+    const page = createMockPage({
+      childUrl: "https://card.weibo.com/article/v5/editor#/draft/168782",
+      coverLibraryItems: 2,
+      preserveCoverPreviewSrcAfterUpload: true,
+      waitForFunctionValidatesCoverPreview: true,
+    });
+    const tempDir = await mkdtemp(join(tmpdir(), "adapter-weibo-article-same-cover-src-"));
     const markdownPath = join(tempDir, "publish-cover.md");
     const coverPath = join(tempDir, "cover.png");
     await writeFile(markdownPath, "# 封面发布测试\n\n这是一段正文。", "utf8");
