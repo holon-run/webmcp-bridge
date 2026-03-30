@@ -148,9 +148,22 @@ describe("session metadata helpers", () => {
       },
     );
 
-    expect(child.pid).toBeDefined();
-    await stopBrowserProcess(child.pid);
-    await expect(waitForProcessExit(child.pid, 100)).resolves.toBe(true);
-    expect(() => process.kill(child.pid as number, 0)).toThrow();
+    try {
+      expect(child.pid).toBeDefined();
+      await stopBrowserProcess(child.pid);
+      await expect(waitForProcessExit(child.pid, 100)).resolves.toBe(true);
+      expect(() => process.kill(child.pid as number, 0)).toThrow();
+    } finally {
+      if (child.pid) {
+        try {
+          process.kill(child.pid, "SIGKILL");
+        } catch {
+          // Ignore already-exited processes during test cleanup.
+        }
+        await waitForProcessExit(child.pid, 1000).catch(() => {
+          // Ignore cleanup failures so the original assertion error is preserved.
+        });
+      }
+    }
   });
 });
