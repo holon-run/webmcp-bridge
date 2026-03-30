@@ -1,5 +1,18 @@
 # @webmcp-bridge/local-mcp
 
+## 0.5.4
+
+### Patch Changes
+
+- 490cb45: Add MCP service-level recovery instructions so clients that only see `bridge.*` tools know to check session status, bootstrap sign-in when needed, and attach again to expose site tools.
+- bbc36b6: Improve `local-mcp` session recovery and process lifecycle management by exposing the `uxc/can_reap` contract, cleaning up managed Chromium processes more aggressively, and recovering Google attach sessions from stale persisted CDP metadata.
+  - @webmcp-bridge/core@0.5.4
+  - @webmcp-bridge/playwright@0.5.4
+  - @webmcp-bridge/adapter-google@0.5.4
+  - @webmcp-bridge/adapter-x@0.5.4
+  - @webmcp-bridge/adapter-fixture@0.5.4
+  - @webmcp-bridge/adapter-weibo@0.6.1
+
 ## 0.5.3
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @webmcp-bridge/adapter-weibo
 
+## 0.6.1
+
+### Patch Changes
+
+- @webmcp-bridge/core@0.5.4
+- @webmcp-bridge/playwright@0.5.4
+- @webmcp-bridge/adapter-utils@0.5.4
+
 ## 0.6.0
 
 ### Minor Changes
