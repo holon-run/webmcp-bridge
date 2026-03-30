@@ -17,6 +17,20 @@ If the target site does not expose native WebMCP and does not already have a fal
 - On a fresh machine, or under an isolated `HOME`, install Playwright browsers first with `npx playwright install`.
 - For local repo development, you may replace the default `npx -y @webmcp-bridge/local-mcp` launcher with `WEBMCP_LOCAL_MCP_COMMAND='node packages/local-mcp/dist/cli.js'`.
 
+## Docs Search
+
+Use the docs site search when you need current bridge docs before guessing:
+
+- site: `https://webmcp-bridge.holon.run`
+- API: `https://webmcp-bridge.holon.run/api/search?q=<query>`
+
+Typical searches:
+
+- `session lifecycle`
+- `bridge.session.attach`
+- `weibo article`
+- `x article`
+
 ## Core Workflow
 
 1. Identify the bridge source mode before creating any link:
@@ -120,3 +134,5 @@ Do not treat one command invocation as a guarantee that the current runtime has 
   - `references/troubleshooting.md`
 - Concrete creation script:
   - `scripts/ensure-links.sh`
+- If the behavior still looks like a bridge or adapter bug after local verification:
+  - open an issue at `https://github.com/holon-run/webmcp-bridge/issues`

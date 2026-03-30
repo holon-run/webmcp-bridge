@@ -154,3 +154,22 @@ Re-run tool help after the page stabilizes:
 ```
 
 If the page changed meaningfully, refresh the bridge session by invoking the link again.
+
+## Still looks broken after verification
+
+Before filing an issue, gather:
+
+- the exact command you ran
+- `bridge.session.status`
+- the failing tool name and payload shape
+- whether the session was `headless`, `headed`, `bootstrap`, or `attach`
+
+Check the docs search first for the latest behavior:
+
+```bash
+curl 'https://webmcp-bridge.holon.run/api/search?q=<query>'
+```
+
+If it still looks like a real bridge or adapter bug, open an issue:
+
+- `https://github.com/holon-run/webmcp-bridge/issues`

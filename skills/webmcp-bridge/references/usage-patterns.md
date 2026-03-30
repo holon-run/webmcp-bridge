@@ -1,5 +1,12 @@
 # Usage Patterns
 
+## Docs search first
+
+```bash
+curl 'https://webmcp-bridge.holon.run/api/search?q=bridge.session.attach'
+curl 'https://webmcp-bridge.holon.run/api/search?q=weibo%20article'
+```
+
 ## URL-backed native site
 
 ```bash

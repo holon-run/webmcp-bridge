@@ -31,6 +31,8 @@ rg -q '<site>-webmcp-cli <operation> field=value' "$SKILL_FILE" || fail 'missing
 rg -q "<site>-webmcp-cli <operation> '\{" "$SKILL_FILE" || fail 'missing positional JSON example'
 rg -q 'bridge.session.mode.set' "$SKILL_FILE" || fail 'missing explicit mode switch guidance'
 rg -q '~/.uxc/webmcp-profile/<site>' "$SKILL_FILE" || fail 'missing profile convention'
+rg -q 'webmcp-bridge\.holon\.run/api/search' "$SKILL_FILE" "${SKILL_DIR}/references/usage-patterns.md" || fail 'missing docs search guidance'
+rg -q 'github\.com/holon-run/webmcp-bridge/issues' "$SKILL_FILE" "${SKILL_DIR}/references/troubleshooting.md" || fail 'missing issue reporting guidance'
 
 if rg -q -- '^[[:space:]]*(list|describe|call)([[:space:]]|$)|--input-json|--args[[:space:]]+\S' "$SKILL_FILE" "${SKILL_DIR}/references"; then
   fail 'found banned legacy invocation patterns'
