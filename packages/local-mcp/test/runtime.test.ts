@@ -119,7 +119,10 @@ describe("resolveCdpConnectUrl", () => {
     await expect(resolveCdpConnectUrl("http://127.0.0.1:9222", fetchMock)).resolves.toBe(
       "ws://127.0.0.1:9222/devtools/browser/abc",
     );
-    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:9222/json/version");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222/json/version",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("throws a structured error when the HTTP endpoint does not expose websocket metadata", async () => {
