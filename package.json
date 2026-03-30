@@ -29,17 +29,18 @@
     "test": "vitest run",
     "lint": "eslint .",
     "format": "prettier --check .",
-    "docs:dev": "pnpm exec mdorigin dev --root docs/site",
+    "docs:dev": "pnpm docs:build:search && pnpm exec mdorigin dev --root docs/site --search dist/search",
     "docs:build:index": "pnpm exec mdorigin build index --root docs/site",
-    "docs:build:cloudflare": "pnpm exec mdorigin build cloudflare --root docs/site",
-    "docs:build": "pnpm docs:build:index && pnpm docs:build:cloudflare"
+    "docs:build:search": "pnpm exec mdorigin build search --root docs/site --out dist/search",
+    "docs:build:cloudflare": "pnpm exec mdorigin build cloudflare --root docs/site --search dist/search",
+    "docs:build": "pnpm docs:build:index && pnpm docs:build:search && pnpm docs:build:cloudflare"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.6",
     "@eslint/js": "^9.35.0",
     "@types/node": "^22.18.6",
     "eslint": "^9.35.0",
-    "mdorigin": "^0.1.2",
+    "mdorigin": "^0.4.0",
     "prettier": "^3.6.2",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.43.0",

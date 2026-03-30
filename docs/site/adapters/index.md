@@ -29,15 +29,19 @@ This repo also includes a dedicated authoring workflow:
 <!-- INDEX:START -->
 
 - [Adapter: Fixture](./fixture.md)
-  `@webmcp-bridge/adapter-fixture` provides deterministic fallback behavior for integration and contract tests.
+  `@webmcp-bridge/adapter-fixture` is a deterministic fallback adapter for integration and contract tests.
+  <!-- mdorigin:index kind=article -->
 
 - [Adapter: Google And Gemini](./google.md)
   `@webmcp-bridge/adapter-google` handles Google and Gemini fallback automation when native WebMCP is unavailable.
+  <!-- mdorigin:index kind=article -->
 
 - [Adapter: Weibo](./weibo.md)
-  `@webmcp-bridge/adapter-weibo` supports Weibo reads, writes, article workflows, and search when native WebMCP is unavailable.
+  `@webmcp-bridge/adapter-weibo` supports Weibo when native browser WebMCP is unavailable.
+  <!-- mdorigin:index kind=article -->
 
 - [Adapter: X](./x.md)
   `@webmcp-bridge/adapter-x` supports X and Twitter when native WebMCP is unavailable.
+  <!-- mdorigin:index kind=article -->
 
 <!-- INDEX:END -->

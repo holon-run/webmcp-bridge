@@ -18,5 +18,6 @@ These pages complement automated tests with browser-level flows that are hard to
 
 - [Manual Test: X Article Draft Lifecycle](./x-article-draft-lifecycle.md)
   This page summarizes the real-world regression flow used to verify X Articles support.
+  <!-- mdorigin:index kind=article -->
 
 <!-- INDEX:END -->

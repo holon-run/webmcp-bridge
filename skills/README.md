@@ -40,20 +40,26 @@ Each skill usually contains:
 
 - [board-webmcp](./board-webmcp/)
   Connect to the native board demo through local-mcp and one fixed UXC link. Use when the user wants to inspect or edit the shared board at board.holon.run or a local board instance through browser WebMCP.
+  <!-- mdorigin:index kind=article -->
 
 - [google-webmcp](./google-webmcp/)
   Connect to Google Search and Gemini through the built-in local-mcp Google adapter and one fixed UXC link. Use when the user wants to run Google searches, chat with Gemini, or download generated Gemini images from an authenticated browser profile.
+  <!-- mdorigin:index kind=article -->
 
 - [webmcp-adapter-creator](./webmcp-adapter-creator/)
   Create fallback site adapters for websites that do not expose native WebMCP. Use when a site needs a new adapter module, tool schema design, browser-side request execution, or request-template extraction from observed page behavior.
+  <!-- mdorigin:index kind=article -->
 
 - [webmcp-bridge](./webmcp-bridge/)
   Connect a website to the local-mcp browser bridge through a fixed UXC link. Use when the user needs to operate native WebMCP sites or adapter-backed sites through local-mcp, manage per-site browser profiles, or switch bridge presentation modes explicitly.
+  <!-- mdorigin:index kind=article -->
 
 - [weibo-webmcp](./weibo-webmcp/)
   Connect to Weibo through the built-in local-mcp Weibo adapter and one fixed UXC link. Use when the user wants to read timelines, inspect posts, publish posts or comments, manage Weibo articles, or run Weibo search from an authenticated browser profile.
+  <!-- mdorigin:index kind=article -->
 
 - [x-webmcp](./x-webmcp/)
   Connect to X and Grok through the built-in local-mcp X adapter and one fixed UXC link. Use when the user wants to read timelines, inspect tweets, post on X, or chat with Grok from an authenticated browser profile.
+  <!-- mdorigin:index kind=article -->
 
 <!-- INDEX:END -->

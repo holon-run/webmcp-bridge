@@ -51,5 +51,6 @@ When only bridge tools are visible, use the recovery flow in:
 <!-- INDEX:START -->
 
 - [Repository Skills](./repo/)
+  <!-- mdorigin:index kind=directory -->
 
 <!-- INDEX:END -->

@@ -2,8 +2,6 @@
   "siteTitle": "webmcp-bridge",
   "siteDescription": "Bridge local MCP clients to browser WebMCP tools through native-first browser runtimes and thin fallback adapters.",
   "siteUrl": "https://webmcp-bridge.holon.run",
-  "theme": "atlas",
-  "template": "document",
   "showHomeIndex": true,
   "topNav": [
     { "label": "Start", "href": "/getting-started/" },

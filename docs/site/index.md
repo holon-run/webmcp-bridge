@@ -57,9 +57,18 @@ Go to [Skills](./skills/).
 <!-- INDEX:START -->
 
 - [Adapters](./adapters/)
+  <!-- mdorigin:index kind=directory -->
+
 - [Getting Started](./getting-started/)
+  <!-- mdorigin:index kind=directory -->
+
 - [Reference](./reference/)
+  <!-- mdorigin:index kind=directory -->
+
 - [Skills](./skills/)
+  <!-- mdorigin:index kind=directory -->
+
 - [Tests And Validation](./tests/)
+  <!-- mdorigin:index kind=directory -->
 
 <!-- INDEX:END -->

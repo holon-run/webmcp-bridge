@@ -21,8 +21,8 @@ importers:
         specifier: ^9.35.0
         version: 9.39.3
       mdorigin:
-        specifier: ^0.1.2
-        version: 0.1.2
+        specifier: ^0.4.0
+        version: 0.4.0
       prettier:
         specifier: ^3.6.2
         version: 3.8.1
@@ -34,7 +34,7 @@ importers:
         version: 8.56.1(eslint@9.39.3)(typescript@5.9.3)
       vitest:
         specifier: ^3.2.4
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.13)
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.13)(tsx@4.21.0)
       wrangler:
         specifier: ^4.62.0
         version: 4.72.0
@@ -68,13 +68,13 @@ importers:
         version: 18.3.7(@types/react@18.3.28)
       '@vitejs/plugin-react':
         specifier: ^5.0.2
-        version: 5.1.4(vite@7.3.1(@types/node@22.19.13))
+        version: 5.1.4(vite@7.3.1(@types/node@22.19.13)(tsx@4.21.0))
       playwright:
         specifier: ^1.58.2
         version: 1.58.2
       vite:
         specifier: ^7.1.5
-        version: 7.3.1(@types/node@22.19.13)
+        version: 7.3.1(@types/node@22.19.13)(tsx@4.21.0)
 
   packages/adapter-fixture:
     dependencies:
@@ -111,7 +111,7 @@ importers:
     devDependencies:
       vitest:
         specifier: ^3.2.4
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.13)
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.13)(tsx@4.21.0)
 
   packages/adapter-weibo:
     dependencies:
@@ -774,18 +774,18 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@indexbind/native-darwin-arm64@0.2.2':
-    resolution: {integrity: sha512-Agzw/ghn5BciEmwlKSewopkrgpEDMnm/BaYRJIySqY7Cvrxz5kt0jtHtOEJvs1wDZSeaHZrObSCcz0uQxlSoSw==}
+  '@indexbind/native-darwin-arm64@0.5.1':
+    resolution: {integrity: sha512-fXp3JIhaer5TJh8ciHwZVh1/EtHN4rQ6qlDlKQqEcyCgrEOPZiNoWtn4oQ+wYD0fC+6koChiG+JushR/XhCAJg==}
     cpu: [arm64]
     os: [darwin]
 
-  '@indexbind/native-darwin-x64@0.2.2':
-    resolution: {integrity: sha512-1QGizV2FDzRAj7ZfJdJY4CjyMWrWGF0RwgO52+vzI1qpzMCR6M3xOOkrl33Du5CUzLOb3k+egmEnM+SJPX2l4Q==}
+  '@indexbind/native-darwin-x64@0.5.1':
+    resolution: {integrity: sha512-BfLGuo5gwz5OO8jBU9++MW01y0BII/EpHUK2Oq2ZgQEoWABimk2F9SETLaATQMUKDn9PlrvewiaCxB3qhQp8bg==}
     cpu: [x64]
     os: [darwin]
 
-  '@indexbind/native-linux-x64-gnu@0.2.2':
-    resolution: {integrity: sha512-WN8hBXvNv32GGChTpAwI7mKn2iLkFV//FtkWvwjdjX+rq6Blp4MXYuB8GEBnQITsd4+PoSwJN8JGY9A7PYWtcQ==}
+  '@indexbind/native-linux-x64-gnu@0.5.1':
+    resolution: {integrity: sha512-9h5IR5DhdjOirrUBw38bH5hsF35OuDPa2tXP2oiRBbEX3cxH/MtzlRL/55b+oBK50u3y5r3Urg+S0OPIaleF/A==}
     cpu: [x64]
     os: [linux]
 
@@ -1916,6 +1916,10 @@ packages:
     resolution: {integrity: sha512-rRqJg/6gd538VHvR3PSrdRBb/1Vy2YfzHqzvbhGIQpDRKIa4FgV/54b5Q1xYSxOOwKvjXweS26E0Q+nAMwp2pQ==}
     engines: {node: '>=8.6'}
 
+  entities@6.0.1:
+    resolution: {integrity: sha512-aN97NXWF6AWBTahfVOIrB/NShkzi5H7F9r1s9mD3cDj4Ko5f2qhhVoYMibXF7GlLveb/D2ioWay8lxI97Ven3g==}
+    engines: {node: '>=0.12'}
+
   error-stack-parser-es@1.0.5:
     resolution: {integrity: sha512-5qucVt2XcuGMcEGgWI7i+yZpmpByQ8J1lHhcL7PwqCwu9FPP3VUXzT4ltHe5i2z9dePwEHcDVOAfSnHsOlCXRA==}
 
@@ -2156,6 +2160,9 @@ packages:
     resolution: {integrity: sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g==}
     engines: {node: '>= 0.4'}
 
+  get-tsconfig@4.13.7:
+    resolution: {integrity: sha512-7tN6rFgBlMgpBML5j8typ92BKFi2sFQvIdpAqLA2beia5avZDrMs0FLZiM5etShWq5irVyGcGMEA1jcDaK7A/Q==}
+
   glob-parent@5.1.2:
     resolution: {integrity: sha512-AOIgSQCepiJYwP3ARnGx+5VnTu2HBYdzbGP45eLw1vr3zB3vZLeyed1sC9hnbcOc9/SrMyM5RPQrkGz4aS9Zow==}
     engines: {node: '>= 6'}
@@ -2201,14 +2208,26 @@ packages:
     resolution: {integrity: sha512-0hJU9SCPvmMzIBdZFqNPXWa6dqh7WdH0cII9y+CyS8rG3nL48Bclra9HmKhVVUHyPWNH5Y7xDwAB7bfgSjkUMQ==}
     engines: {node: '>= 0.4'}
 
-  hast-util-sanitize@5.0.2:
-    resolution: {integrity: sha512-3yTWghByc50aGS7JlGhk61SPenfE/p1oaFeNwkOOyrscaOkMGrcW9+Cy/QAIOBpZxP1yqDIzFMR0+Np0i0+usg==}
+  hast-util-from-parse5@8.0.3:
+    resolution: {integrity: sha512-3kxEVkEKt0zvcZ3hCRYI8rqrgwtlIOFMWkbclACvjlDw8Li9S2hk/d51OI0nr/gIpdMHNepwgOKqZ/sy0Clpyg==}
+
+  hast-util-parse-selector@4.0.0:
+    resolution: {integrity: sha512-wkQCkSYoOGCRKERFWcxMVMOcYE2K1AaNLU8DXS9arxnLOUEWbOXKXiJUNzEpqZ3JOKpnha3jkFrumEjVliDe7A==}
+
+  hast-util-raw@9.1.0:
+    resolution: {integrity: sha512-Y8/SBAHkZGoNkpzqqfCldijcuUKh7/su31kEBp67cFY09Wy0mTRgtsLYsiIxMJxlu0f6AA5SUTbDR8K0rxnbUw==}
 
   hast-util-to-html@9.0.5:
     resolution: {integrity: sha512-OguPdidb+fbHQSU4Q4ZiLKnzWo8Wwsf5bZfbvu7//a9oTYoqD/fWpe96NuHkoS9h0ccGOTe0C4NGXdtS0iObOw==}
 
+  hast-util-to-parse5@8.0.1:
+    resolution: {integrity: sha512-MlWT6Pjt4CG9lFCjiz4BH7l9wmrMkfkJYCxFwKQic8+RTZgWPuWxwAfjJElsXkex7DJjfSJsQIt931ilUgmwdA==}
+
   hast-util-whitespace@3.0.0:
     resolution: {integrity: sha512-88JUN06ipLwsnv+dVn+OIYOvAuvBMy/Qoi6O7mQHxdPXpjy+Cd6xRkWwux7DKO+4sYILtLBRIKgsdpS2gQc7qw==}
+
+  hastscript@9.0.1:
+    resolution: {integrity: sha512-g7df9rMFX/SPi34tyGCyUBREQoKkapwdY/T04Qn9TDWfHhAYt4/I0gMVirzK5wEzeUqIjEB+LXC/ypb7Aqno5w==}
 
   hono@4.12.3:
     resolution: {integrity: sha512-SFsVSjp8sj5UumXOOFlkZOG6XS9SJDKw0TbwFeV+AJ8xlST8kxK5Z/5EYa111UY8732lK2S/xB653ceuaoGwpg==}
@@ -2255,9 +2274,10 @@ packages:
     resolution: {integrity: sha512-JmXMZ6wuvDmLiHEml9ykzqO6lwFbof0GG4IkcGaENdCRDDmMVnny7s5HsIgHCbaq0w2MyPhDqkhTUgS2LU2PHA==}
     engines: {node: '>=0.8.19'}
 
-  indexbind@0.2.2:
-    resolution: {integrity: sha512-3iJhqbHHWjBWydJvsefkCuxCEBjpinOTRxX1+bLEdtucGMfsP9VXRl/wE0pySLCcMbnPKO8R4PnHjPuMFNB3Nw==}
+  indexbind@0.5.1:
+    resolution: {integrity: sha512-T/Pojf43SICf7driBbu5BP7ozX5MFQHQFAQNRT/CWBCV9QUhTr86wXhtpmuRU3ir1+y090E0z9VN8gPtBf2zKg==}
     engines: {node: '>=20'}
+    hasBin: true
 
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
@@ -2491,8 +2511,8 @@ packages:
   mdast-util-to-string@4.0.0:
     resolution: {integrity: sha512-0H44vDimn51F0YwvxSJSm0eCDOJTRlmN0R1yBh4HLj9wiV1Dn0QoXGbvFAWj2hSItVTlCmBF1hqKlIyUBVFLPg==}
 
-  mdorigin@0.1.2:
-    resolution: {integrity: sha512-pH7rsEJpm7QyVqOcOq9RuOgYHYSS91m0unwPTPL5ap1DU6Ytnv4nsv9XhmcTaIOHqc9jx6VGBK/OrAVMDyiyHw==}
+  mdorigin@0.4.0:
+    resolution: {integrity: sha512-RF/JQCAKgBeC7OqQ2/i5L6ym83a7VYUELkJFaqwavFzrYbha9dU8aLQWJsbYYe0nG8il2MNyttAvGmRQ/y0tJQ==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -2787,6 +2807,9 @@ packages:
     resolution: {integrity: sha512-GQ2EWRpQV8/o+Aw8YqtfZZPfNRWZYkbidE9k5rpl/hC3vtHHBfGm2Ifi6qWV+coDGkrUKZAxE3Lot5kcsRlh+g==}
     engines: {node: '>=6'}
 
+  parse5@7.3.0:
+    resolution: {integrity: sha512-IInvU7fabl34qmi9gY8XOVxhYyMyuH2xUNpb2q8/Y+7552KlejkRvqvD19nMoUW/uQGGbqNpA6Tufu5FL5BZgw==}
+
   parseurl@1.3.3:
     resolution: {integrity: sha512-CiyeOxFT/JZyN5m0z9PfXw4SCBJ6Sygz1Dpl0wqjlhDEGGBP1GnsUVEL0p63hoG1fcj3fHynXi9NYO4nWOL+qQ==}
     engines: {node: '>= 0.8'}
@@ -2973,14 +2996,20 @@ packages:
     resolution: {integrity: sha512-hOS089on8RduqdbhvQ5Z37A0ESjsqz6qnRcffsMU3495FuTdqSm+7bhJ29JvIOsBDEEnan5DPu9t3To9VRlMzA==}
     engines: {node: '>=8.10.0'}
 
+  rehype-raw@7.0.0:
+    resolution: {integrity: sha512-/aE8hCfKlQeA8LmyeyQvQF3eBiLRGNlfBJEvWH7ivp9sBqs7TNqBL5X3v157rM4IFETqDnIOO+z5M/biZbo9Ww==}
+
+  rehype-stringify@10.0.1:
+    resolution: {integrity: sha512-k9ecfXHmIPuFVI61B9DeLPN0qFHfawM6RsuX48hoqlaKSF61RskNjSm1lI8PhBEM0MRdLxVVm4WmTqJQccH9mA==}
+
   remark-gfm@4.0.1:
     resolution: {integrity: sha512-1quofZ2RQ9EWdeN34S79+KExV1764+wCUGop5CPL1WGdD0ocPpu91lzPGbwWMECpEpd42kJGQwzRfyov9j4yNg==}
 
-  remark-html@16.0.1:
-    resolution: {integrity: sha512-B9JqA5i0qZe0Nsf49q3OXyGvyXuZFDzAP2iOFLEumymuYJITVpiH1IgsTEwTpdptDmZlMDMWeDmSawdaJIGCXQ==}
-
   remark-parse@11.0.0:
     resolution: {integrity: sha512-FCxlKLNGknS5ba/1lmpYijMUzX2esxW5xQqjWxw2eHFfS2MSdaHVINFmhjo+qN1WhZhNimq0dZATN9pH0IDrpA==}
+
+  remark-rehype@11.1.2:
+    resolution: {integrity: sha512-Dh7l57ianaEoIpzbp0PC9UKAdCSVklD8E5Rpw7ETfbTl3FqcOOgq5q2LVDhgGCkaBv7p24JXikPdvhhmHvKMsw==}
 
   remark-stringify@11.0.0:
     resolution: {integrity: sha512-1OSmLd3awB/t8qdoEOMazZkNsfVTeY4fTsgzcQFdXNq8ToTN4ZGwrMnlda4K6smTFKD+GRV6O48i6Z4iKgPPpw==}
@@ -2999,6 +3028,9 @@ packages:
   resolve-from@5.0.0:
     resolution: {integrity: sha512-qYg9KP24dD5qka9J47d0aVky0N+b4fTU89LN9iDnjB5waksiC49rvMB0PrUJQGoTmH50XPiqOvAjDfaijGxYZw==}
     engines: {node: '>=8'}
+
+  resolve-pkg-maps@1.0.0:
+    resolution: {integrity: sha512-seS2Tj26TBVOC2NIc2rOe2y2ZO7efxITtLZcGSOnHHNOQ7CkiUBfw0Iw2ck6xkIhPwLhKNLS8BO+hEpngQlqzw==}
 
   reusify@1.1.0:
     resolution: {integrity: sha512-g6QUff04oZpHs0eG5p83rFLhHeV00ug/Yf9nZM6fLeUrPguBTkTQOdpAWWspMh55TZfVQDPaN3NQJfbVRAxdIw==}
@@ -3215,6 +3247,11 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
+  tsx@4.21.0:
+    resolution: {integrity: sha512-5C1sg4USs1lfG0GFb2RLXsdpXqBSEhAaA/0kPL01wxzpMqLILNxIxIOKiILz+cdg/pLnOUxFYOR5yhHU666wbw==}
+    engines: {node: '>=18.0.0'}
+    hasBin: true
+
   tunnel-rat@0.1.2:
     resolution: {integrity: sha512-lR5VHmkPhzdhrM092lI2nACsLO4QubF0/yoOhzX7c+wIpbN1GjHNzCc91QlpxBi+cnx8vVJ+Ur6vL5cEoQPFpQ==}
 
@@ -3324,6 +3361,9 @@ packages:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
 
+  vfile-location@5.0.3:
+    resolution: {integrity: sha512-5yXvWDEgqeiYiBe1lbxYF7UMAIm/IcopxMHrMQDq3nvKcjPKIhZklUKL+AE7J7uApI4kwe2snsK+eI6UTj9EHg==}
+
   vfile-message@4.0.3:
     resolution: {integrity: sha512-QTHzsGd1EhbZs4AsQ20JX1rC3cOlt/IWJruk893DfLRr57lcnOeMaWG4K0JrRta4mIJZKth2Au3mM3u03/JWKw==}
 
@@ -3402,6 +3442,9 @@ packages:
         optional: true
       jsdom:
         optional: true
+
+  web-namespaces@2.0.1:
+    resolution: {integrity: sha512-bKr1DkiNa2krS7qxNtdrtHAmzuYGFQLiQ13TsorsdT6ULTkPLKuu5+GsFpDlg6JFjUTwX2DyhMPG2be8uPrqsQ==}
 
   web-worker@1.5.0:
     resolution: {integrity: sha512-RiMReJrTAiA+mBjGONMnjVDP2u3p9R1vkcGz6gDIrOMT3oGuYwX2WRMYI9ipkphSuE5XKEhydbhNEJh4NY9mlw==}
@@ -4093,13 +4136,13 @@ snapshots:
   '@img/sharp-win32-x64@0.34.5':
     optional: true
 
-  '@indexbind/native-darwin-arm64@0.2.2':
+  '@indexbind/native-darwin-arm64@0.5.1':
     optional: true
 
-  '@indexbind/native-darwin-x64@0.2.2':
+  '@indexbind/native-darwin-x64@0.5.1':
     optional: true
 
-  '@indexbind/native-linux-x64-gnu@0.2.2':
+  '@indexbind/native-linux-x64-gnu@0.5.1':
     optional: true
 
   '@inquirer/external-editor@1.0.3(@types/node@22.19.13)':
@@ -4603,7 +4646,7 @@ snapshots:
 
   '@types/hast@3.0.4':
     dependencies:
-      '@types/unist': 2.0.11
+      '@types/unist': 3.0.3
 
   '@types/json-schema@7.0.15': {}
 
@@ -4613,7 +4656,7 @@ snapshots:
 
   '@types/mdast@4.0.4':
     dependencies:
-      '@types/unist': 2.0.11
+      '@types/unist': 3.0.3
 
   '@types/ms@2.1.0': {}
 
@@ -4731,7 +4774,7 @@ snapshots:
 
   '@ungap/structured-clone@1.3.0': {}
 
-  '@vitejs/plugin-react@5.1.4(vite@7.3.1(@types/node@22.19.13))':
+  '@vitejs/plugin-react@5.1.4(vite@7.3.1(@types/node@22.19.13)(tsx@4.21.0))':
     dependencies:
       '@babel/core': 7.29.0
       '@babel/plugin-transform-react-jsx-self': 7.27.1(@babel/core@7.29.0)
@@ -4739,7 +4782,7 @@ snapshots:
       '@rolldown/pluginutils': 1.0.0-rc.3
       '@types/babel__core': 7.20.5
       react-refresh: 0.18.0
-      vite: 7.3.1(@types/node@22.19.13)
+      vite: 7.3.1(@types/node@22.19.13)(tsx@4.21.0)
     transitivePeerDependencies:
       - supports-color
 
@@ -4751,13 +4794,13 @@ snapshots:
       chai: 5.3.3
       tinyrainbow: 2.0.0
 
-  '@vitest/mocker@3.2.4(vite@7.3.1(@types/node@22.19.13))':
+  '@vitest/mocker@3.2.4(vite@7.3.1(@types/node@22.19.13)(tsx@4.21.0))':
     dependencies:
       '@vitest/spy': 3.2.4
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 7.3.1(@types/node@22.19.13)
+      vite: 7.3.1(@types/node@22.19.13)(tsx@4.21.0)
 
   '@vitest/pretty-format@3.2.4':
     dependencies:
@@ -5242,6 +5285,8 @@ snapshots:
       ansi-colors: 4.1.3
       strip-ansi: 6.0.1
 
+  entities@6.0.1: {}
+
   error-stack-parser-es@1.0.5: {}
 
   es-define-property@1.0.1: {}
@@ -5533,6 +5578,10 @@ snapshots:
       dunder-proto: 1.0.1
       es-object-atoms: 1.1.1
 
+  get-tsconfig@4.13.7:
+    dependencies:
+      resolve-pkg-maps: 1.0.0
+
   glob-parent@5.1.2:
     dependencies:
       is-glob: 4.0.3
@@ -5575,11 +5624,36 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hast-util-sanitize@5.0.2:
+  hast-util-from-parse5@8.0.3:
     dependencies:
       '@types/hast': 3.0.4
+      '@types/unist': 3.0.3
+      devlop: 1.1.0
+      hastscript: 9.0.1
+      property-information: 7.1.0
+      vfile: 6.0.3
+      vfile-location: 5.0.3
+      web-namespaces: 2.0.1
+
+  hast-util-parse-selector@4.0.0:
+    dependencies:
+      '@types/hast': 3.0.4
+
+  hast-util-raw@9.1.0:
+    dependencies:
+      '@types/hast': 3.0.4
+      '@types/unist': 3.0.3
       '@ungap/structured-clone': 1.3.0
+      hast-util-from-parse5: 8.0.3
+      hast-util-to-parse5: 8.0.1
+      html-void-elements: 3.0.0
+      mdast-util-to-hast: 13.2.1
+      parse5: 7.3.0
       unist-util-position: 5.0.0
+      unist-util-visit: 5.1.0
+      vfile: 6.0.3
+      web-namespaces: 2.0.1
+      zwitch: 2.0.4
 
   hast-util-to-html@9.0.5:
     dependencies:
@@ -5595,9 +5669,27 @@ snapshots:
       stringify-entities: 4.0.4
       zwitch: 2.0.4
 
+  hast-util-to-parse5@8.0.1:
+    dependencies:
+      '@types/hast': 3.0.4
+      comma-separated-tokens: 2.0.3
+      devlop: 1.1.0
+      property-information: 7.1.0
+      space-separated-tokens: 2.0.2
+      web-namespaces: 2.0.1
+      zwitch: 2.0.4
+
   hast-util-whitespace@3.0.0:
     dependencies:
       '@types/hast': 3.0.4
+
+  hastscript@9.0.1:
+    dependencies:
+      '@types/hast': 3.0.4
+      comma-separated-tokens: 2.0.3
+      hast-util-parse-selector: 4.0.0
+      property-information: 7.1.0
+      space-separated-tokens: 2.0.2
 
   hono@4.12.3: {}
 
@@ -5638,13 +5730,13 @@ snapshots:
 
   imurmurhash@0.1.4: {}
 
-  indexbind@0.2.2:
+  indexbind@0.5.1:
     dependencies:
       '@noble/hashes': 2.0.1
     optionalDependencies:
-      '@indexbind/native-darwin-arm64': 0.2.2
-      '@indexbind/native-darwin-x64': 0.2.2
-      '@indexbind/native-linux-x64-gnu': 0.2.2
+      '@indexbind/native-darwin-arm64': 0.5.1
+      '@indexbind/native-darwin-x64': 0.5.1
+      '@indexbind/native-linux-x64-gnu': 0.5.1
     optional: true
 
   inherits@2.0.4: {}
@@ -5920,14 +6012,17 @@ snapshots:
     dependencies:
       '@types/mdast': 4.0.4
 
-  mdorigin@0.1.2:
+  mdorigin@0.4.0:
     dependencies:
       gray-matter: 4.0.3
+      rehype-raw: 7.0.0
+      rehype-stringify: 10.0.1
       remark: 15.0.1
       remark-gfm: 4.0.1
-      remark-html: 16.0.1
+      remark-rehype: 11.1.2
+      tsx: 4.21.0
     optionalDependencies:
-      indexbind: 0.2.2
+      indexbind: 0.5.1
     transitivePeerDependencies:
       - supports-color
 
@@ -6401,6 +6496,10 @@ snapshots:
     dependencies:
       callsites: 3.1.0
 
+  parse5@7.3.0:
+    dependencies:
+      entities: 6.0.1
+
   parseurl@1.3.3: {}
 
   path-data-parser@0.1.0: {}
@@ -6557,6 +6656,18 @@ snapshots:
     dependencies:
       picomatch: 2.3.1
 
+  rehype-raw@7.0.0:
+    dependencies:
+      '@types/hast': 3.0.4
+      hast-util-raw: 9.1.0
+      vfile: 6.0.3
+
+  rehype-stringify@10.0.1:
+    dependencies:
+      '@types/hast': 3.0.4
+      hast-util-to-html: 9.0.5
+      unified: 11.0.5
+
   remark-gfm@4.0.1:
     dependencies:
       '@types/mdast': 4.0.4
@@ -6568,14 +6679,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  remark-html@16.0.1:
-    dependencies:
-      '@types/mdast': 4.0.4
-      hast-util-sanitize: 5.0.2
-      hast-util-to-html: 9.0.5
-      mdast-util-to-hast: 13.2.1
-      unified: 11.0.5
-
   remark-parse@11.0.0:
     dependencies:
       '@types/mdast': 4.0.4
@@ -6584,6 +6687,14 @@ snapshots:
       unified: 11.0.5
     transitivePeerDependencies:
       - supports-color
+
+  remark-rehype@11.1.2:
+    dependencies:
+      '@types/hast': 3.0.4
+      '@types/mdast': 4.0.4
+      mdast-util-to-hast: 13.2.1
+      unified: 11.0.5
+      vfile: 6.0.3
 
   remark-stringify@11.0.0:
     dependencies:
@@ -6605,6 +6716,8 @@ snapshots:
   resolve-from@4.0.0: {}
 
   resolve-from@5.0.0: {}
+
+  resolve-pkg-maps@1.0.0: {}
 
   reusify@1.1.0: {}
 
@@ -6868,6 +6981,13 @@ snapshots:
 
   tslib@2.8.1: {}
 
+  tsx@4.21.0:
+    dependencies:
+      esbuild: 0.27.3
+      get-tsconfig: 4.13.7
+    optionalDependencies:
+      fsevents: 2.3.3
+
   tunnel-rat@0.1.2(@types/react@18.3.28)(react@18.3.1):
     dependencies:
       zustand: 4.5.7(@types/react@18.3.28)(react@18.3.1)
@@ -6988,6 +7108,11 @@ snapshots:
 
   vary@1.1.2: {}
 
+  vfile-location@5.0.3:
+    dependencies:
+      '@types/unist': 3.0.3
+      vfile: 6.0.3
+
   vfile-message@4.0.3:
     dependencies:
       '@types/unist': 3.0.3
@@ -6998,13 +7123,13 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite-node@3.2.4(@types/node@22.19.13):
+  vite-node@3.2.4(@types/node@22.19.13)(tsx@4.21.0):
     dependencies:
       cac: 6.7.14
       debug: 4.4.3
       es-module-lexer: 1.7.0
       pathe: 2.0.3
-      vite: 7.3.1(@types/node@22.19.13)
+      vite: 7.3.1(@types/node@22.19.13)(tsx@4.21.0)
     transitivePeerDependencies:
       - '@types/node'
       - jiti
@@ -7019,7 +7144,7 @@ snapshots:
       - tsx
       - yaml
 
-  vite@7.3.1(@types/node@22.19.13):
+  vite@7.3.1(@types/node@22.19.13)(tsx@4.21.0):
     dependencies:
       esbuild: 0.27.3
       fdir: 6.5.0(picomatch@4.0.3)
@@ -7030,12 +7155,13 @@ snapshots:
     optionalDependencies:
       '@types/node': 22.19.13
       fsevents: 2.3.3
+      tsx: 4.21.0
 
-  vitest@3.2.4(@types/debug@4.1.12)(@types/node@22.19.13):
+  vitest@3.2.4(@types/debug@4.1.12)(@types/node@22.19.13)(tsx@4.21.0):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/expect': 3.2.4
-      '@vitest/mocker': 3.2.4(vite@7.3.1(@types/node@22.19.13))
+      '@vitest/mocker': 3.2.4(vite@7.3.1(@types/node@22.19.13)(tsx@4.21.0))
       '@vitest/pretty-format': 3.2.4
       '@vitest/runner': 3.2.4
       '@vitest/snapshot': 3.2.4
@@ -7053,8 +7179,8 @@ snapshots:
       tinyglobby: 0.2.15
       tinypool: 1.1.1
       tinyrainbow: 2.0.0
-      vite: 7.3.1(@types/node@22.19.13)
-      vite-node: 3.2.4(@types/node@22.19.13)
+      vite: 7.3.1(@types/node@22.19.13)(tsx@4.21.0)
+      vite-node: 3.2.4(@types/node@22.19.13)(tsx@4.21.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/debug': 4.1.12
@@ -7072,6 +7198,8 @@ snapshots:
       - terser
       - tsx
       - yaml
+
+  web-namespaces@2.0.1: {}
 
   web-worker@1.5.0: {}
 
