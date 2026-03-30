@@ -165,7 +165,7 @@ async function connectToExternalBrowserContext(browserUrl: string): Promise<{
   browser: Browser;
   context: BrowserContext;
 }> {
-  const browser = await chromium.connectOverCDP(browserUrl);
+  const browser = await chromium.connectOverCDP(await resolveCdpConnectUrl(browserUrl));
   const context = browser.contexts()[0];
   if (context) {
     return { browser, context };
@@ -176,6 +176,74 @@ async function connectToExternalBrowserContext(browserUrl: string): Promise<{
   throw new Error(
     "SESSION_NOT_AVAILABLE: no persistent browser context found at --browser-url. Open the target Chromium profile with remote debugging enabled before starting local-mcp.",
   );
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+export function resolveCdpVersionEndpoint(browserUrl: string): string {
+  const normalized = browserUrl.trim();
+  if (!normalized) {
+    throw new Error("INVALID_BROWSER_URL: browser URL must be a non-empty string");
+  }
+  const parsed = new URL(normalized);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return normalized;
+  }
+  if (parsed.pathname.endsWith("/json/version") || parsed.pathname.endsWith("/json/version/")) {
+    return trimTrailingSlash(parsed.toString());
+  }
+  parsed.pathname = `${trimTrailingSlash(parsed.pathname)}/json/version`.replace(/\/{2,}/g, "/");
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function readWebSocketDebuggerUrl(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = (value as { webSocketDebuggerUrl?: unknown }).webSocketDebuggerUrl;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : undefined;
+}
+
+export async function resolveCdpConnectUrl(
+  browserUrl: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  const normalized = browserUrl.trim();
+  if (!normalized) {
+    throw new Error("INVALID_BROWSER_URL: browser URL must be a non-empty string");
+  }
+  if (normalized.startsWith("ws://") || normalized.startsWith("wss://")) {
+    return normalized;
+  }
+  const versionEndpoint = resolveCdpVersionEndpoint(normalized);
+  if (versionEndpoint.startsWith("ws://") || versionEndpoint.startsWith("wss://")) {
+    return versionEndpoint;
+  }
+  let response: Response;
+  try {
+    response = await fetchImpl(versionEndpoint);
+  } catch (error) {
+    throw new Error(
+      `INVALID_BROWSER_URL: failed to query DevTools version at ${versionEndpoint}: ${extractErrorMessage(error)}`,
+    );
+  }
+  if (!response.ok) {
+    throw new Error(
+      `INVALID_BROWSER_URL: failed to query DevTools version at ${versionEndpoint} (status ${response.status})`,
+    );
+  }
+  const payload = (await response.json()) as unknown;
+  const webSocketDebuggerUrl = readWebSocketDebuggerUrl(payload);
+  if (!webSocketDebuggerUrl) {
+    throw new Error(
+      `INVALID_BROWSER_URL: DevTools endpoint at ${versionEndpoint} did not expose webSocketDebuggerUrl`,
+    );
+  }
+  return webSocketDebuggerUrl;
 }
 
 function normalizeHost(value: string): string {

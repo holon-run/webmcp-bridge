@@ -13,6 +13,7 @@ import {
   type LocalMcpStdioServerOptions,
 } from "./server.js";
 import {
+  resolveCdpConnectUrl,
   startLocalMcpRuntime,
   type BrowserChannel,
   type BrowserEngine,
@@ -207,6 +208,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     authPolicy.mode === "bootstrap_then_attach" ? "profile_missing" : "runtime_active";
   let browserUrl = options.browserUrl;
   let browserPid: number | undefined;
+  const configuredPreferredPresentationMode = options.preferredPresentationMode;
   let preferredPresentationMode: BridgePresentationMode =
     options.preferredPresentationMode ?? "headed";
   let presentationMode: BridgePresentationMode = preferredPresentationMode;
@@ -257,7 +259,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     sessionState = nextMetadata.sessionState;
     ownership = nextMetadata.ownership;
     presentationMode = nextMetadata.presentationMode;
-    preferredPresentationMode = nextMetadata.preferredPresentationMode;
+    preferredPresentationMode = configuredPreferredPresentationMode ?? nextMetadata.preferredPresentationMode;
     if (nextMetadata.lastBackupPath !== undefined) {
       lastBackupPath = nextMetadata.lastBackupPath;
     }
@@ -544,6 +546,45 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
 
     let managedAttachPid: number | undefined;
     let attachBrowserUrl = activeBrowserUrl;
+
+    if (!explicitBrowserUrl && attachBrowserUrl && ownership === "managed") {
+      const managedBrowserPid =
+        browserPid ?? (profilePath ? await findBrowserProcessForProfile(profilePath) : undefined);
+      const managedBrowserRunning = await isProcessRunning(managedBrowserPid);
+      let managedBrowserUrlHealthy = managedBrowserRunning;
+      if (managedBrowserRunning) {
+        try {
+          await resolveCdpConnectUrl(attachBrowserUrl);
+        } catch {
+          managedBrowserUrlHealthy = false;
+        }
+      }
+      if (!managedBrowserRunning || !managedBrowserUrlHealthy) {
+        if (managedBrowserRunning) {
+          await stopBrowserProcess(managedBrowserPid);
+          if (managedBrowserPid) {
+            const didExit = await waitForProcessExit(managedBrowserPid, BOOTSTRAP_BROWSER_CLOSE_TIMEOUT_MS);
+            if (!didExit) {
+              throw new Error(
+                `BROWSER_CLOSE_TIMEOUT: timed out waiting for stale managed browser ${String(managedBrowserPid)} to exit`,
+              );
+            }
+            await new Promise((resolve) => setTimeout(resolve, BOOTSTRAP_PROFILE_RELEASE_DELAY_MS));
+          }
+        }
+        if (profilePath && metadataFallback) {
+          await updateSessionMetadata(profilePath, metadataFallback, {
+            controlMode: "none",
+            ownership: "none",
+            browserUrl: null,
+            browserPid: null,
+          });
+        }
+        attachBrowserUrl = undefined;
+        browserUrl = undefined;
+        browserPid = undefined;
+      }
+    }
 
     if (!attachBrowserUrl) {
       if (authPolicy.mode !== "bootstrap_then_attach" || !profilePath) {

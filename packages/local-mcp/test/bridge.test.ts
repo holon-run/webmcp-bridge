@@ -81,6 +81,7 @@ function createRuntimeHandle(
 
 let runtimeQueue: MockRuntimeHandle[] = [createRuntimeHandle()];
 let startedRuntimeHandles: MockRuntimeHandle[] = [];
+const resolveCdpConnectUrlMock = vi.fn(async (browserUrl: string) => browserUrl);
 
 const serverHandle = {
   start: vi.fn(async () => {}),
@@ -112,6 +113,7 @@ vi.mock("../src/runtime.js", () => ({
     startedRuntimeHandles.push(nextHandle);
     return nextHandle;
   }),
+  resolveCdpConnectUrl: resolveCdpConnectUrlMock,
 }));
 
 vi.mock("../src/server.js", () => ({
@@ -258,6 +260,8 @@ describe("startLocalMcpBridge", () => {
     runningPids.clear();
     runtimeQueue = [createRuntimeHandle()];
     startedRuntimeHandles = [];
+    resolveCdpConnectUrlMock.mockReset();
+    resolveCdpConnectUrlMock.mockImplementation(async (browserUrl: string) => browserUrl);
     serverHandle.start.mockClear();
     serverHandle.close.mockClear();
     launchBootstrapBrowserMock.mockClear();
@@ -870,6 +874,70 @@ describe("startLocalMcpBridge", () => {
       preferredPresentationMode: "headless",
       authState: "authenticated",
       sessionState: "runtime_active",
+    });
+  });
+
+  it("relaunches managed attach when persisted metadata points to a stale browser URL", async () => {
+    mockSessionMetadata = {
+      version: 2,
+      site: "x",
+      profilePath: "/tmp/mock-profile",
+      targetUrl: "https://x.com/home",
+      authPolicyMode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
+      sessionState: "runtime_active",
+      authState: "authenticated",
+      controlMode: "attach",
+      ownership: "managed",
+      browserUrl: "http://127.0.0.1:54415",
+      browserPid: 41002,
+      updatedAt: new Date().toISOString(),
+    };
+    runningPids.add(41002);
+    resolveCdpConnectUrlMock.mockRejectedValueOnce(
+      new Error("INVALID_BROWSER_URL: failed to query DevTools version at http://127.0.0.1:54415/json/version"),
+    );
+    const attachRuntime = createRuntimeHandle({
+      site: "x",
+      targetUrl: "https://x.com/home",
+      controlMode: "attach",
+      presentationMode: "headed",
+      gateway: {
+        callTool: vi.fn(async () => ({ state: "authenticated" })),
+      },
+    });
+    runtimeQueue = [attachRuntime];
+    startedRuntimeHandles = [];
+
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    await startLocalMcpBridge({
+      site: "x",
+      browserChannel: "chrome",
+      userDataDir: "/tmp/mock-profile",
+      preferredPresentationMode: "headless",
+      serviceVersion: "0.1.0-test",
+      input: new PassThrough(),
+    });
+
+    expect(stopBrowserProcessMock).toHaveBeenCalledWith(41002);
+    expect(waitForProcessExitMock).toHaveBeenCalledWith(41002, 5000);
+    expect(launchManagedAttachBrowserMock).toHaveBeenCalledOnce();
+    expect(launchManagedAttachBrowserMock).toHaveBeenCalledWith({
+      targetUrl: "https://x.com/home",
+      userDataDir: "/tmp/mock-profile",
+      presentationMode: "headless",
+      browserChannel: "chrome",
+    });
+    expect(capturedServerOptions?.bridgeControl.getState()).toMatchObject({
+      controlMode: "attach",
+      ownership: "managed",
+      browserUrl: "http://127.0.0.1:9333",
+      preferredPresentationMode: "headless",
+      sessionState: "runtime_active",
+      authState: "authenticated",
     });
   });
 
