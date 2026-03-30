@@ -1,5 +1,11 @@
 # @webmcp-bridge/testkit
 
+## 0.5.4
+
+### Patch Changes
+
+- @webmcp-bridge/core@0.5.4
+
 ## 0.5.3
 
 ### Patch Changes
