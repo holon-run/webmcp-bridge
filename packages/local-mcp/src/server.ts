@@ -106,6 +106,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private static readonly BRIDGE_CLOSE_DELAY_MS = 100;
   private readonly server: Server;
   private readonly transport: StdioServerTransport;
+  private readonly onError: ((error: unknown) => void) | undefined;
   private started = false;
   private closed = false;
   private lastToolsSignature: string | undefined;
@@ -116,6 +117,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private toolsetNotification = Promise.resolve();
 
   constructor(options: LocalMcpStdioServerOptions) {
+    this.onError = options.onError;
     this.transport = new StdioServerTransport(options.input, options.output);
     this.transport.onerror = (error) => {
       options.onError?.(error);
@@ -409,7 +411,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         if (this.lastToolsSignature === undefined) {
           return;
         }
-        await this.notifyIfToolsChanged(gateway, this.lastToolsSignature);
+        await this.notifyIfToolsChanged(gateway, this.lastToolsSignature).catch((error) => {
+          this.onError?.(error);
+        });
       });
     await this.toolsetNotification;
   }
