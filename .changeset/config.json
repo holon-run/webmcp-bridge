@@ -9,6 +9,7 @@
       "@webmcp-bridge/local-mcp",
       "@webmcp-bridge/adapter-google",
       "@webmcp-bridge/adapter-x",
+      "@webmcp-bridge/adapter-weibo",
       "@webmcp-bridge/adapter-utils",
       "@webmcp-bridge/adapter-fixture",
       "@webmcp-bridge/testkit"
