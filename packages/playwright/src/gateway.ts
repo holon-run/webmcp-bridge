@@ -208,7 +208,8 @@ export async function createWebMcpPageGateway(
 
   const exposedName = `__WEBMCP_BRIDGE_CALL__${randomUUID().replaceAll("-", "")}`;
   const resourceUpdatedName = `__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED__${randomUUID().replaceAll("-", "")}`;
-  await page.exposeFunction(exposedName, async (name: string, input: JsonValue) => {
+  await page.exposeFunction(exposedName, async (...args: unknown[]) => {
+    const [name, input] = args as [string, JsonValue];
     if (!fallbackAdapter) {
       return {
         error: {
@@ -220,7 +221,8 @@ export async function createWebMcpPageGateway(
     await ensureFallbackStarted();
     return await fallbackAdapter.callTool({ name, input }, { page });
   });
-  await page.exposeFunction(resourceUpdatedName, async (uri: string) => {
+  await page.exposeFunction(resourceUpdatedName, async (...args: unknown[]) => {
+    const [uri] = args as [string];
     for (const listener of resourceUpdatedListeners) {
       try {
         listener(uri);
@@ -232,13 +234,16 @@ export async function createWebMcpPageGateway(
 
   const bindScript = `window.__WEBMCP_BRIDGE_CALL__ = window.${exposedName};`;
   const bindResourceUpdatedScript = `window.__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED__ = window.${resourceUpdatedName};`;
+  const bindNamesScript = `window.__WEBMCP_BRIDGE_CALL_NAME__ = ${JSON.stringify(exposedName)}; window.__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED_NAME__ = ${JSON.stringify(resourceUpdatedName)};`;
 
   await page.addInitScript(INJECT_SCRIPT);
   await page.addInitScript(bindScript);
   await page.addInitScript(bindResourceUpdatedScript);
+  await page.addInitScript(bindNamesScript);
   await page.evaluate(INJECT_SCRIPT);
   await page.evaluate(bindScript);
   await page.evaluate(bindResourceUpdatedScript);
+  await page.evaluate(bindNamesScript);
 
   const detectedMode = await page.evaluate(() => {
     const globalAny = window as unknown as { __WEBMCP_BRIDGE_MODE__?: "native" | "polyfill" };
