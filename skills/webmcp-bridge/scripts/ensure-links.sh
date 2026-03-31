@@ -39,7 +39,7 @@ adapter_module=""
 profile=""
 browser=""
 link_dir=""
-local_mcp_command="${WEBMCP_LOCAL_MCP_COMMAND:-npx -y @webmcp-bridge/local-mcp}"
+local_mcp_command="${WEBMCP_LOCAL_MCP_COMMAND:-npx -y @webmcp-bridge/local-mcp@latest}"
 daemon_idle_ttl="${WEBMCP_DAEMON_IDLE_TTL:-}"
 
 while [[ $# -gt 0 ]]; do
