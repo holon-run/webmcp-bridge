@@ -2721,11 +2721,50 @@ async function withEphemeralPage<T>(page: Page, url: string, run: (ephemeralPage
   const context = page.context();
   const ephemeralPage = await context.newPage();
   try {
+    await installEphemeralBridgeStubs(page, ephemeralPage);
     await ensureNetworkCaptureInstalled(ephemeralPage);
     await ephemeralPage.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
     return await run(ephemeralPage);
   } finally {
     await ephemeralPage.close().catch(() => {});
+  }
+}
+
+async function installEphemeralBridgeStubs(ownerPage: Page, targetPage: Page): Promise<void> {
+  const names = (await ownerPage
+    .evaluate(() => {
+      const globalAny = window as unknown as {
+        __WEBMCP_BRIDGE_CALL_NAME__?: string;
+        __WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED_NAME__?: string;
+      };
+      return {
+        callName: typeof globalAny.__WEBMCP_BRIDGE_CALL_NAME__ === "string" ? globalAny.__WEBMCP_BRIDGE_CALL_NAME__ : "",
+        resourceUpdatedName:
+          typeof globalAny.__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED_NAME__ === "string"
+            ? globalAny.__WEBMCP_BRIDGE_NOTIFY_RESOURCE_UPDATED_NAME__
+            : "",
+      };
+    })
+    .catch(() => ({ callName: "", resourceUpdatedName: "" }))) as
+    | { callName?: string; resourceUpdatedName?: string }
+    | undefined;
+
+  const callName = typeof names?.callName === "string" ? names.callName : "";
+  const resourceUpdatedName = typeof names?.resourceUpdatedName === "string" ? names.resourceUpdatedName : "";
+
+  if (callName) {
+    await targetPage
+      .exposeFunction(callName, async () => ({
+        error: {
+          code: "NOT_SUPPORTED",
+          message: "bridge call is unavailable on ephemeral pages",
+        },
+      }))
+      .catch(() => {});
+  }
+
+  if (resourceUpdatedName) {
+    await targetPage.exposeFunction(resourceUpdatedName, async () => undefined).catch(() => {});
   }
 }
 
@@ -4010,14 +4049,21 @@ async function waitForArticleDraftPersisted(page: Page, articleId: string, title
   return await page
     .waitForFunction(
       ({ targetId, expectedTitle }) => {
-        const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
-        const draftAnchor = anchors.find((anchor) => anchor.href.includes(`/compose/articles/edit/${targetId}`));
-        const containerText = draftAnchor?.closest("article, li, div")?.textContent || draftAnchor?.textContent || "";
-        const normalized = containerText.replace(/\s+/g, " ").trim();
-        return normalized.includes(expectedTitle) && !normalized.includes("(Needs title)");
+        const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+        const currentUrl = window.location.href;
+        const titleValue =
+          document.querySelector<HTMLTextAreaElement>("textarea[placeholder='Add a title']")?.value ??
+          document.querySelector<HTMLTextAreaElement>("textarea")?.value ??
+          "";
+        const bodyText = normalize(document.body?.innerText || "");
+        const onExpectedEditor = currentUrl.includes(`/compose/articles/edit/${targetId}`);
+        const titleMatches = normalize(titleValue) === expectedTitle;
+        const autosaveVisible =
+          bodyText.includes("Last saved") || bodyText.includes("Saved") || bodyText.includes("Just now");
+        return onExpectedEditor && titleMatches && autosaveVisible;
       },
       { targetId: articleId, expectedTitle: title.trim() },
-      { timeout: 20_000 },
+      { timeout: 4_000 },
     )
     .then(() => true)
     .catch(() => false);
@@ -6034,6 +6080,7 @@ async function draftArticleMarkdown(
   const articlePage = await page.context().newPage();
   let shouldClose = true;
   try {
+    await installEphemeralBridgeStubs(page, articlePage);
     await ensureNetworkCaptureInstalled(articlePage);
     await articlePage.goto("https://x.com/compose/articles", { waitUntil: "domcontentloaded", timeout: 60_000 });
     const started = await openNewArticleEditor(articlePage);
@@ -7496,12 +7543,16 @@ export function createXAdapter(options?: CreateXAdapterOptions): SiteAdapter {
         }
         const explicitTitle = typeof args.title === "string" ? args.title.trim() : "";
         const coverImagePath = typeof args.coverImagePath === "string" ? args.coverImagePath.trim() : "";
-        return await draftArticleMarkdown(
-          page,
-          markdownPath,
-          explicitTitle || undefined,
-          coverImagePath || undefined,
-        );
+        try {
+          return await draftArticleMarkdown(
+            page,
+            markdownPath,
+            explicitTitle || undefined,
+            coverImagePath || undefined,
+          );
+        } catch (error) {
+          return errorResult("EXECUTION_FAILED", error instanceof Error ? error.message : String(error ?? ""));
+        }
       }
 
       if (name === "article.upsertDraftMarkdown") {
