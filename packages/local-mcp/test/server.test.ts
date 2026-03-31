@@ -59,6 +59,7 @@ describe("createLocalMcpStdioServer", () => {
     items: [],
   }));
   const onResourceUpdated = vi.fn<LocalMcpGateway["onResourceUpdated"]>(() => () => {});
+  let toolsetChangedListener: (() => void) | undefined;
 
   const gateway = {
     listTools,
@@ -174,6 +175,14 @@ describe("createLocalMcpStdioServer", () => {
       gateway,
       bridgeControl,
       serviceVersion: "0.1.0-test",
+      onToolsetMayHaveChanged: (listener) => {
+        toolsetChangedListener = listener;
+        return () => {
+          if (toolsetChangedListener === listener) {
+            toolsetChangedListener = undefined;
+          }
+        };
+      },
       input,
       output,
     });
@@ -235,6 +244,58 @@ describe("createLocalMcpStdioServer", () => {
         },
       },
     });
+  });
+
+  it("sends tools/list_changed when the bridge runtime changes the toolset", async () => {
+    await request({
+      jsonrpc: "2.0",
+      id: "init-1",
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: {
+          name: "test-client",
+          version: "0.1.0-test",
+        },
+      },
+    });
+    listTools.mockResolvedValueOnce([
+      {
+        name: "ping",
+        description: "ping",
+      },
+    ]);
+    await request({
+      jsonrpc: "2.0",
+      id: "tools-1",
+      method: "tools/list",
+      params: {},
+    });
+
+    listTools.mockResolvedValueOnce([
+      {
+        name: "ping",
+        description: "ping",
+      },
+      {
+        name: "pong",
+        description: "pong",
+      },
+    ]);
+
+    const beforeCount = frames.length;
+    toolsetChangedListener?.();
+
+    await waitFor(() =>
+      frames.slice(beforeCount).some((frame) => frame.method === "notifications/tools/list_changed"),
+    );
+
+    expect(frames.slice(beforeCount)).toContainEqual(
+      expect.objectContaining({
+        method: "notifications/tools/list_changed",
+      }),
+    );
   });
 
   it("reports headed interactive sessions as not reapable", async () => {
