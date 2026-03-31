@@ -218,6 +218,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
   let closed = false;
   let lifecycleTransition = Promise.resolve();
   const resourceUpdatedListeners = new Set<(uri: string) => void>();
+  const toolsetChangedListeners = new Set<() => void>();
   let unsubscribeRuntimeResourceUpdates: (() => void) | undefined;
   let ownerSessionGeneration = 0;
 
@@ -277,6 +278,16 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     syncFromMetadata(nextMetadata);
   };
 
+  const notifyToolsetMayHaveChanged = (): void => {
+    for (const listener of toolsetChangedListeners) {
+      try {
+        listener();
+      } catch (error) {
+        options.onError?.(error);
+      }
+    }
+  };
+
   const hasRunningBootstrapBrowser = async (sourceMetadata?: SessionMetadata): Promise<boolean> => {
     const activeMetadata = sourceMetadata ?? metadata;
     if (!activeMetadata) {
@@ -319,6 +330,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         listener(uri);
       }
     });
+    notifyToolsetMayHaveChanged();
     ownerSessionGeneration += 1;
     const generation = ownerSessionGeneration;
     void nextRuntime.ownerSessionEnded.then(() => {
@@ -336,6 +348,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     runtimeMode = "control-only";
     unsubscribeRuntimeResourceUpdates?.();
     unsubscribeRuntimeResourceUpdates = undefined;
+    notifyToolsetMayHaveChanged();
   };
 
   const closeRuntime = async (): Promise<void> => {
@@ -439,6 +452,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       bootstrapPatch.browserPid = launchResult.pid;
     }
     await writeMetadata(bootstrapPatch);
+    notifyToolsetMayHaveChanged();
     return refreshStatus();
   };
 
@@ -462,6 +476,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     }
     preferredPresentationMode = "headed";
     await writeMetadata(bootstrapPatch);
+    notifyToolsetMayHaveChanged();
     return refreshStatus();
   };
 
@@ -771,6 +786,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     const resetResult = await backupAndResetProfile(profilePath, metadataFallback);
     syncFromMetadata(resetResult.metadata);
     lastBackupPath = resetResult.backupPath;
+    notifyToolsetMayHaveChanged();
     if (authPolicy.mode === "bootstrap_then_attach") {
       return await bootstrapSessionInternal();
     }
@@ -911,6 +927,12 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         },
       },
       serviceVersion: options.serviceVersion,
+      onToolsetMayHaveChanged: (listener) => {
+        toolsetChangedListeners.add(listener);
+        return () => {
+          toolsetChangedListeners.delete(listener);
+        };
+      },
     };
     if (options.input !== undefined) {
       serverOptions.input = options.input;

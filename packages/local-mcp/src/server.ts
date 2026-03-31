@@ -72,6 +72,7 @@ export type LocalMcpStdioServerOptions = {
   gateway: LocalMcpGateway;
   bridgeControl: LocalBridgeControl;
   serviceVersion: string;
+  onToolsetMayHaveChanged?: (listener: () => void) => () => void;
   input?: Readable;
   output?: Writable;
   onError?: (error: unknown) => void;
@@ -105,14 +106,18 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private static readonly BRIDGE_CLOSE_DELAY_MS = 100;
   private readonly server: Server;
   private readonly transport: StdioServerTransport;
+  private readonly onError: ((error: unknown) => void) | undefined;
   private started = false;
   private closed = false;
   private lastToolsSignature: string | undefined;
   private readonly subscribedResourceUris = new Set<string>();
   private readonly resourceMimeTypes = new Map<string, string | undefined>();
   private readonly unsubscribeResourceUpdates: () => void;
+  private readonly unsubscribeToolsetChanges: () => void;
+  private toolsetNotification = Promise.resolve();
 
   constructor(options: LocalMcpStdioServerOptions) {
+    this.onError = options.onError;
     this.transport = new StdioServerTransport(options.input, options.output);
     this.transport.onerror = (error) => {
       options.onError?.(error);
@@ -139,6 +144,10 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     this.unsubscribeResourceUpdates = options.gateway.onResourceUpdated((uri) => {
       void this.notifyResourceUpdated(uri);
     });
+    this.unsubscribeToolsetChanges =
+      options.onToolsetMayHaveChanged?.(() => {
+        void this.notifyCurrentToolListChanged(options.gateway);
+      }) ?? (() => {});
 
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       const tools = await this.listAllTools(options);
@@ -207,6 +216,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     this.closed = true;
     this.unsubscribeResourceUpdates();
+    this.unsubscribeToolsetChanges();
     await this.server.close();
   }
 
@@ -390,6 +400,22 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     await this.server.sendToolListChanged().catch(() => {
       // Ignore when client does not advertise listChanged support or session is not notification-ready.
     });
+  }
+
+  private async notifyCurrentToolListChanged(gateway: LocalMcpGateway): Promise<void> {
+    this.toolsetNotification = this.toolsetNotification
+      .catch(() => {
+        // Keep the chain alive after previous notification failures.
+      })
+      .then(async () => {
+        if (this.lastToolsSignature === undefined) {
+          return;
+        }
+        await this.notifyIfToolsChanged(gateway, this.lastToolsSignature).catch((error) => {
+          this.onError?.(error);
+        });
+      });
+    await this.toolsetNotification;
   }
 
   private async resolveResourceMimeType(
