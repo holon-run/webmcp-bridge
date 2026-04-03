@@ -45,6 +45,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@webmcp-bridge/agent-browser-core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@webmcp-bridge/adapter-fixture": "workspace:*",
     "@webmcp-bridge/adapter-google": "workspace:*",

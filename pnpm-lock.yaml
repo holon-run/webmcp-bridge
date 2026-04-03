@@ -143,6 +143,12 @@ importers:
         specifier: ^1.58.2
         version: 1.58.2
 
+  packages/agent-browser-core:
+    dependencies:
+      '@webmcp-bridge/playwright':
+        specifier: workspace:*
+        version: link:../playwright
+
   packages/core: {}
 
   packages/local-mcp:
@@ -162,6 +168,9 @@ importers:
       '@webmcp-bridge/adapter-x':
         specifier: workspace:*
         version: link:../adapter-x
+      '@webmcp-bridge/agent-browser-core':
+        specifier: workspace:*
+        version: link:../agent-browser-core
       '@webmcp-bridge/core':
         specifier: workspace:*
         version: link:../core

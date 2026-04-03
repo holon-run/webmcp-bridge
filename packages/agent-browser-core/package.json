@@ -1,0 +1,45 @@
+{
+  "name": "@webmcp-bridge/agent-browser-core",
+  "version": "0.5.4",
+  "type": "module",
+  "description": "Browser session and profile control primitives for agent-managed browser workflows.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "homepage": "https://github.com/holon-run/webmcp-bridge/tree/main/packages/agent-browser-core",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holon-run/webmcp-bridge.git",
+    "directory": "packages/agent-browser-core"
+  },
+  "bugs": {
+    "url": "https://github.com/holon-run/webmcp-bridge/issues"
+  },
+  "keywords": [
+    "webmcp",
+    "browser",
+    "session",
+    "profile",
+    "agent-browser"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@webmcp-bridge/playwright": "workspace:*"
+  },
+  "license": "MIT"
+}
