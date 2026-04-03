@@ -182,8 +182,10 @@ vi.mock("../src/sites.js", () => ({
   }),
 }));
 
-vi.mock("../src/session.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/session.js")>("../src/session.js");
+vi.mock("../../agent-browser-core/src/session.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agent-browser-core/src/session.js")>(
+    "../../agent-browser-core/src/session.js",
+  );
   return {
     ...actual,
     assertAuthSensitiveBrowserSupport: vi.fn(() => {}),
