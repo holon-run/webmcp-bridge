@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 async function createTempProfileDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "local-mcp-session-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "agent-browser-core-session-test-"));
   tempDirs.push(dir);
   return dir;
 }

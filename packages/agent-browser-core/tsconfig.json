@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "rootDir": "../..",
+    "paths": {
+      "@webmcp-bridge/agent-browser-core": ["packages/agent-browser-core/src/index.ts"],
+      "@webmcp-bridge/core": ["packages/core/src/index.ts"],
+      "@webmcp-bridge/playwright": ["packages/playwright/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
