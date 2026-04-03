@@ -8,6 +8,7 @@
     "types": ["vite/client", "vitest/globals"],
     "noEmit": true,
     "paths": {
+      "@webmcp-bridge/agent-browser-core": ["packages/agent-browser-core/src/index.ts"],
       "@webmcp-bridge/adapter-utils": ["packages/adapter-utils/src/index.ts"],
       "@webmcp-bridge/core": ["packages/core/src/index.ts"],
       "@webmcp-bridge/playwright": ["packages/playwright/src/index.ts"],

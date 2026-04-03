@@ -8,6 +8,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@webmcp-bridge/agent-browser-core": new URL(
+        "../../packages/agent-browser-core/src/index.ts",
+        import.meta.url,
+      ).pathname,
       "@webmcp-bridge/adapter-utils": new URL("../../packages/adapter-utils/src/index.ts", import.meta.url).pathname,
       "@webmcp-bridge/core": new URL("../../packages/core/src/index.ts", import.meta.url).pathname,
       "@webmcp-bridge/playwright": new URL("../../packages/playwright/src/index.ts", import.meta.url).pathname,
