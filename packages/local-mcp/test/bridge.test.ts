@@ -182,8 +182,10 @@ vi.mock("../src/sites.js", () => ({
   }),
 }));
 
-vi.mock("../src/session.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/session.js")>("../src/session.js");
+vi.mock("../../agent-browser-core/src/session.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agent-browser-core/src/session.js")>(
+    "../../agent-browser-core/src/session.js",
+  );
   return {
     ...actual,
     assertAuthSensitiveBrowserSupport: vi.fn(() => {}),
@@ -334,6 +336,27 @@ describe("startLocalMcpBridge", () => {
     });
   });
 
+  it("closes resources when the owner window has already ended during startup", async () => {
+    runtimeQueue = [
+      createRuntimeHandle({
+        ownerSessionEnded: Promise.resolve(),
+      }),
+    ];
+    startedRuntimeHandles = [];
+
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    await startLocalMcpBridge({
+      url: "http://127.0.0.1:4173",
+      serviceVersion: "0.1.0-test",
+      input: new PassThrough(),
+    });
+
+    await vi.waitFor(() => {
+      expect(serverHandle.close).toHaveBeenCalledOnce();
+      expect(startedRuntimeHandles[0]?.close).toHaveBeenCalledOnce();
+    });
+  });
+
   it("restarts the active runtime in attach mode and updates the gateway proxy", async () => {
     const launchRuntime = createRuntimeHandle();
     const attachRuntime = createRuntimeHandle({
@@ -464,6 +487,62 @@ describe("startLocalMcpBridge", () => {
         input: new PassThrough(),
       }),
     ).rejects.toThrow("CONFIG_ERROR: --browser-url cannot be combined with --browser-channel");
+  });
+
+  it("ignores a blank browserUrl when managed attach startup is selected", async () => {
+    mockSessionMetadata = {
+      version: 2,
+      site: "x",
+      profilePath: "/tmp/mock-profile",
+      targetUrl: "https://x.com/home",
+      authPolicyMode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
+      sessionState: "authenticated",
+      authState: "authenticated",
+      controlMode: "none",
+      ownership: "none",
+      updatedAt: new Date().toISOString(),
+    };
+    runtimeQueue = [
+      createRuntimeHandle({
+        site: "x",
+        targetUrl: "https://x.com/home",
+        controlMode: "attach",
+        gateway: {
+          callTool: vi.fn(async () => ({ state: "authenticated" })),
+        },
+      }),
+    ];
+    startedRuntimeHandles = [];
+
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    await startLocalMcpBridge({
+      site: "x",
+      browserUrl: "   ",
+      browserChannel: "chrome",
+      userDataDir: "/tmp/mock-profile",
+      serviceVersion: "0.1.0-test",
+      input: new PassThrough(),
+    });
+
+    expect(launchManagedAttachBrowserMock).toHaveBeenCalledWith({
+      targetUrl: "https://x.com/home",
+      userDataDir: "/tmp/mock-profile",
+      presentationMode: "headed",
+      browserChannel: "chrome",
+    });
+    expect(startedRuntimeHandles[0]).toMatchObject({
+      controlMode: "attach",
+      targetUrl: "https://x.com/home",
+    });
+    expect(capturedServerOptions?.bridgeControl.getState()).toMatchObject({
+      controlMode: "attach",
+      ownership: "managed",
+      browserUrl: "http://127.0.0.1:9333",
+    });
   });
 
   it("keeps auth-sensitive bridges in control-only mode when a bootstrap browser is already running", async () => {
