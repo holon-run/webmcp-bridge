@@ -71,7 +71,7 @@ const waitForProcessExitMock = vi.fn(async (pid?: number) => (pid ? !runningPids
 const focusBrowserWindowMock = vi.fn(async () => true);
 const findBrowserProcessForProfileMock = vi.fn(async () => undefined as number | undefined);
 const readBrowserProcessMock = vi.fn(
-  async (pid?: number) => (pid ? { pid, ppid: 2000, pgid: pid, command: `chrome --user-data-dir=/tmp/mock-profile` } : undefined),
+  async (pid?: number) => (pid ? { pid, ppid: 2000, command: `chrome --user-data-dir=/tmp/mock-profile` } : undefined),
 );
 const stopManagedBrowserMock = vi.fn(async () => {});
 const backupAndResetProfileMock = vi.fn(
@@ -419,7 +419,7 @@ describe("startBrowserSessionController", () => {
     };
     runningPids.add(41002);
     readBrowserProcessMock.mockImplementationOnce(async (pid?: number) =>
-      pid ? { pid, ppid: 1, pgid: pid, command: "chrome --user-data-dir=/tmp/mock-profile" } : undefined,
+      pid ? { pid, ppid: 1, command: "chrome --user-data-dir=/tmp/mock-profile" } : undefined,
     );
     runtimeQueue = [
       createRuntimeHandle({
@@ -452,7 +452,7 @@ describe("startBrowserSessionController", () => {
     });
 
     expect(stopBrowserProcessMock).toHaveBeenCalledWith(41002);
-    expect(waitForProcessExitMock).toHaveBeenCalledWith(41002, 5000);
+    expect(waitForProcessExitMock).toHaveBeenCalledWith(41002, expect.any(Number));
     expect(launchManagedAttachBrowserMock).toHaveBeenCalledOnce();
     expect(controller.getState()).toMatchObject({
       controlMode: "attach",

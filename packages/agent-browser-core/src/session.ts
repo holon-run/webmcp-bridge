@@ -514,10 +514,9 @@ async function waitForCdp(browserUrl: string, timeoutMs = CDP_READY_TIMEOUT_MS):
   throw new Error(`BROWSER_ATTACH_TIMEOUT: timed out waiting for remote debugging at ${browserUrl}`);
 }
 
-export type BrowserProcessEntry = {
+type BrowserProcessEntry = {
   pid: number;
   ppid: number;
-  pgid: number;
   command: string;
 };
 
@@ -527,7 +526,7 @@ async function listBrowserProcesses(): Promise<BrowserProcessEntry[]> {
   }
   return await new Promise<BrowserProcessEntry[]>((resolve) => {
     let stdout = "";
-    const child = spawn("ps", ["-ax", "-o", "pid=,ppid=,pgid=,command="], {
+    const child = spawn("ps", ["-ax", "-o", "pid=,ppid=,command="], {
       stdio: ["ignore", "pipe", "ignore"],
     });
     child.stdout?.setEncoding("utf8");
@@ -541,23 +540,21 @@ async function listBrowserProcesses(): Promise<BrowserProcessEntry[]> {
         .map((line) => line.trim())
         .filter(Boolean)
         .map((line) => {
-          const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
+          const match = line.match(/^(\d+)\s+(\d+)\s+(.*)$/);
           if (!match) {
             return undefined;
           }
           return {
             pid: Number.parseInt(match[1] ?? "", 10),
             ppid: Number.parseInt(match[2] ?? "", 10),
-            pgid: Number.parseInt(match[3] ?? "", 10),
-            command: match[4] ?? "",
+            command: match[3] ?? "",
           };
         })
         .filter(
           (entry): entry is BrowserProcessEntry =>
             entry !== undefined &&
             Number.isInteger(entry.pid) &&
-            Number.isInteger(entry.ppid) &&
-            Number.isInteger(entry.pgid),
+            Number.isInteger(entry.ppid),
         );
       resolve(entries);
     });

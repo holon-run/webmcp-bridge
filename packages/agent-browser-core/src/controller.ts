@@ -481,8 +481,8 @@ export async function startBrowserSessionController<
     if (relaunchManagedAttachBrowser) {
       const managedBrowserPid =
         browserPid ?? (options.profilePath ? await findBrowserProcessForProfile(options.profilePath) : undefined);
-      await clearManagedBrowserMetadata();
       await reapManagedBrowserProcess(managedBrowserPid, "BROWSER_CLOSE_TIMEOUT");
+      await clearManagedBrowserMetadata();
     }
 
     let managedAttachPid: number | undefined;
