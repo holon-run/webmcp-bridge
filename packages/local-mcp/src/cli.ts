@@ -299,8 +299,24 @@ export async function runCli(args = process.argv.slice(2)): Promise<number> {
       });
   };
 
+  const fatalHandler = (error: unknown): void => {
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    void shutdown()
+      .catch((shutdownError: unknown) => {
+        const shutdownMessage =
+          shutdownError instanceof Error ? shutdownError.stack ?? shutdownError.message : String(shutdownError);
+        process.stderr.write(`${shutdownMessage}\n`);
+      })
+      .finally(() => {
+        process.exit(1);
+      });
+  };
+
   process.once("SIGINT", signalHandler);
   process.once("SIGTERM", signalHandler);
+  process.once("uncaughtException", fatalHandler);
+  process.once("unhandledRejection", fatalHandler);
   return 0;
 }
 

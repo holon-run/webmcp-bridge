@@ -70,6 +70,9 @@ const stopBrowserProcessMock = vi.fn(async (pid?: number) => {
 const waitForProcessExitMock = vi.fn(async (pid?: number) => (pid ? !runningPids.has(pid) : true));
 const focusBrowserWindowMock = vi.fn(async () => true);
 const findBrowserProcessForProfileMock = vi.fn(async () => undefined as number | undefined);
+const readBrowserProcessMock = vi.fn(
+  async (pid?: number) => (pid ? { pid, ppid: 2000, pgid: pid, command: `chrome --user-data-dir=/tmp/mock-profile` } : undefined),
+);
 const stopManagedBrowserMock = vi.fn(async () => {});
 const backupAndResetProfileMock = vi.fn(
   async (
@@ -190,6 +193,7 @@ vi.mock("../src/session.js", async () => {
     launchManagedAttachBrowser: launchManagedAttachBrowserMock,
     isProcessRunning: isProcessRunningMock,
     findBrowserProcessForProfile: findBrowserProcessForProfileMock,
+    readBrowserProcess: readBrowserProcessMock,
     stopBrowserProcess: stopBrowserProcessMock,
     waitForProcessExit: waitForProcessExitMock,
     focusBrowserWindow: focusBrowserWindowMock,
@@ -210,6 +214,7 @@ describe("startBrowserSessionController", () => {
     waitForProcessExitMock.mockClear();
     focusBrowserWindowMock.mockClear();
     findBrowserProcessForProfileMock.mockClear();
+    readBrowserProcessMock.mockClear();
     stopManagedBrowserMock.mockClear();
     backupAndResetProfileMock.mockClear();
   });
@@ -390,6 +395,70 @@ describe("startBrowserSessionController", () => {
       presentationMode: "headless",
       preferredPresentationMode: "headless",
       sessionState: "runtime_active",
+    });
+  });
+
+  it("reaps an orphaned managed attach browser before restoring the session", async () => {
+    mockSessionMetadata = {
+      version: 2,
+      site: "x",
+      profilePath: "/tmp/mock-profile",
+      targetUrl: "https://x.com/home",
+      authPolicyMode: "bootstrap_then_attach",
+      authProbeTool: "auth.get",
+      allowAnonymousTools: true,
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
+      sessionState: "runtime_active",
+      authState: "authenticated",
+      controlMode: "attach",
+      ownership: "managed",
+      browserUrl: "http://127.0.0.1:9222",
+      browserPid: 41002,
+      updatedAt: new Date().toISOString(),
+    };
+    runningPids.add(41002);
+    readBrowserProcessMock.mockImplementationOnce(async (pid?: number) =>
+      pid ? { pid, ppid: 1, pgid: pid, command: "chrome --user-data-dir=/tmp/mock-profile" } : undefined,
+    );
+    runtimeQueue = [
+      createRuntimeHandle({
+        controlMode: "attach",
+        presentationMode: "headed",
+        gateway: {
+          callTool: vi.fn(async () => ({ state: "authenticated" })),
+        },
+      }),
+    ];
+
+    const { startBrowserSessionController } = await import("../src/controller.js");
+    const controller = await startBrowserSessionController({
+      site: "x",
+      targetUrl: "https://x.com/home",
+      authPolicy: {
+        mode: "bootstrap_then_attach",
+        authProbeTool: "auth.get",
+        allowAnonymousTools: true,
+      },
+      profilePath: "/tmp/mock-profile",
+      browserChannel: "chrome",
+      runtimeFactory: async () => {
+        const nextHandle = runtimeQueue.shift();
+        if (!nextHandle) {
+          throw new Error("missing mocked runtime handle");
+        }
+        return nextHandle;
+      },
+    });
+
+    expect(stopBrowserProcessMock).toHaveBeenCalledWith(41002);
+    expect(waitForProcessExitMock).toHaveBeenCalledWith(41002, 5000);
+    expect(launchManagedAttachBrowserMock).toHaveBeenCalledOnce();
+    expect(controller.getState()).toMatchObject({
+      controlMode: "attach",
+      ownership: "managed",
+      browserUrl: "http://127.0.0.1:9333",
+      browserPid: 41002,
     });
   });
 
