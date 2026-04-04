@@ -113,6 +113,7 @@ function buildRuntimeStartOptions(
   preferredPresentationMode: BridgePresentationMode,
   browserUrl?: string,
 ): RuntimeStartOptions {
+  const configuredBrowserUrl = baseOptions.browserUrl?.trim() || undefined;
   const nextOptions: RuntimeStartOptions = {
     siteDefinition,
     preferredPresentationMode,
@@ -136,7 +137,7 @@ function buildRuntimeStartOptions(
     if (!browserUrl) {
       throw new Error("CONFIG_ERROR: attach mode requires a browserUrl");
     }
-    const explicitAttach = baseOptions.browserUrl !== undefined;
+    const explicitAttach = configuredBrowserUrl !== undefined;
     if (explicitAttach && baseOptions.browserChannel !== undefined) {
       throw new Error("CONFIG_ERROR: --browser-url cannot be combined with --browser-channel");
     }
@@ -173,7 +174,17 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
   }
 
   let server: LocalMcpStdioServer | undefined;
+  let closeRequested = false;
   let closeResources: () => Promise<void> = async () => {};
+  const requestClose = (): void => {
+    closeRequested = true;
+    if (server === undefined) {
+      return;
+    }
+    void closeResources().catch((error) => {
+      options.onError?.(error);
+    });
+  };
   const controller = await startBrowserSessionController<LocalMcpRuntime>({
     site: siteDefinition.id,
     targetUrl,
@@ -191,11 +202,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     browserUrlHealthCheck: async (browserUrl) => {
       await resolveCdpConnectUrl(browserUrl);
     },
-    onCloseRequested: () => {
-      void closeResources().catch((error) => {
-        options.onError?.(error);
-      });
-    },
+    onCloseRequested: requestClose,
     ...(options.onError !== undefined ? { onError: options.onError } : {}),
   });
   let closed = false;
@@ -291,6 +298,9 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
 
     server = createLocalMcpStdioServer(serverOptions);
     await server.start();
+    if (closeRequested) {
+      await closeResources();
+    }
   } catch (error) {
     await closeResources().catch(options.onError);
     throw error;

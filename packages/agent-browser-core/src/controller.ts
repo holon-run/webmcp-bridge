@@ -127,6 +127,7 @@ export async function startBrowserSessionController<
 >(
   options: StartBrowserSessionControllerOptions<TRuntime>,
 ): Promise<BrowserSessionController<TRuntime>> {
+  const configuredBrowserUrl = options.browserUrl?.trim() || undefined;
   let runtime: TRuntime | undefined;
   let runtimeMode: BrowserSessionStatus["mode"] = "control-only";
   let controlMode: BridgeControlMode = "none";
@@ -134,7 +135,7 @@ export async function startBrowserSessionController<
   let authState: BridgeAuthState = "unknown";
   let sessionState: BridgeSessionState =
     options.authPolicy.mode === "bootstrap_then_attach" ? "profile_missing" : "runtime_active";
-  let browserUrl = options.browserUrl?.trim() || undefined;
+  let browserUrl = configuredBrowserUrl;
   let browserPid: number | undefined;
   const configuredPreferredPresentationMode = options.preferredPresentationMode;
   let preferredPresentationMode: BridgePresentationMode = options.preferredPresentationMode ?? "headed";
@@ -430,7 +431,7 @@ export async function startBrowserSessionController<
     requestedBrowserUrl?: string,
     requestedPresentationMode: BridgePresentationMode = preferredPresentationMode,
   ): Promise<BrowserSessionStatus> => {
-    const explicitBrowserUrl = requestedBrowserUrl?.trim() || options.browserUrl;
+    const explicitBrowserUrl = requestedBrowserUrl?.trim() || configuredBrowserUrl;
     const relaunchManagedAttachBrowser =
       !explicitBrowserUrl &&
       controlMode === "attach" &&
@@ -685,13 +686,17 @@ export async function startBrowserSessionController<
 
   const initializeControlPlane = async (): Promise<void> => {
     if (options.authPolicy.mode !== "bootstrap_then_attach") {
-      const nextControlMode = options.browserUrl ? "attach" : "launch";
+      const nextControlMode = configuredBrowserUrl ? "attach" : "launch";
       const nextRuntime = await options.runtimeFactory({
         controlMode: nextControlMode,
         preferredPresentationMode,
-        ...(options.browserUrl !== undefined ? { browserUrl: options.browserUrl } : {}),
+        ...(configuredBrowserUrl !== undefined ? { browserUrl: configuredBrowserUrl } : {}),
       });
-      await activateRuntime(nextRuntime, nextControlMode === "attach" ? "external" : "managed", options.browserUrl);
+      await activateRuntime(
+        nextRuntime,
+        nextControlMode === "attach" ? "external" : "managed",
+        configuredBrowserUrl,
+      );
       return;
     }
 
@@ -699,8 +704,8 @@ export async function startBrowserSessionController<
     metadata = await readSessionMetadata(managedProfilePath, metadataFallback as NonNullable<typeof metadataFallback>);
     syncFromMetadata(metadata);
 
-    if (options.browserUrl) {
-      await attachSessionInternal(options.browserUrl);
+    if (configuredBrowserUrl) {
+      await attachSessionInternal(configuredBrowserUrl);
       return;
     }
 
