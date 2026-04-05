@@ -516,6 +516,7 @@ async function waitForCdp(browserUrl: string, timeoutMs = CDP_READY_TIMEOUT_MS):
 
 type BrowserProcessEntry = {
   pid: number;
+  ppid: number;
   command: string;
 };
 
@@ -525,7 +526,7 @@ async function listBrowserProcesses(): Promise<BrowserProcessEntry[]> {
   }
   return await new Promise<BrowserProcessEntry[]>((resolve) => {
     let stdout = "";
-    const child = spawn("ps", ["-ax", "-o", "pid=,command="], {
+    const child = spawn("ps", ["-ax", "-o", "pid=,ppid=,command="], {
       stdio: ["ignore", "pipe", "ignore"],
     });
     child.stdout?.setEncoding("utf8");
@@ -539,16 +540,22 @@ async function listBrowserProcesses(): Promise<BrowserProcessEntry[]> {
         .map((line) => line.trim())
         .filter(Boolean)
         .map((line) => {
-          const match = line.match(/^(\d+)\s+(.*)$/);
+          const match = line.match(/^(\d+)\s+(\d+)\s+(.*)$/);
           if (!match) {
             return undefined;
           }
           return {
             pid: Number.parseInt(match[1] ?? "", 10),
-            command: match[2] ?? "",
+            ppid: Number.parseInt(match[2] ?? "", 10),
+            command: match[3] ?? "",
           };
         })
-        .filter((entry): entry is BrowserProcessEntry => entry !== undefined && Number.isInteger(entry.pid));
+        .filter(
+          (entry): entry is BrowserProcessEntry =>
+            entry !== undefined &&
+            Number.isInteger(entry.pid) &&
+            Number.isInteger(entry.ppid),
+        );
       resolve(entries);
     });
   });
@@ -706,6 +713,14 @@ export async function findBrowserProcessForProfile(userDataDir: string): Promise
   return entries
     .filter((entry) => isRootBrowserProcessForProfile(entry.command, userDataDir))
     .sort((left, right) => right.pid - left.pid)[0]?.pid;
+}
+
+export async function readBrowserProcess(pid: number | undefined): Promise<BrowserProcessEntry | undefined> {
+  if (!pid) {
+    return undefined;
+  }
+  const entries = await listBrowserProcesses();
+  return entries.find((entry) => entry.pid === pid);
 }
 
 export async function stopManagedBrowser(metadata: SessionMetadata): Promise<void> {

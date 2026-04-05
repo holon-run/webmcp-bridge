@@ -12,6 +12,7 @@ import {
   isProcessRunning,
   launchBootstrapBrowser,
   launchManagedAttachBrowser,
+  readBrowserProcess,
   readSessionMetadata,
   stopBrowserProcess,
   stopManagedBrowser,
@@ -250,6 +251,39 @@ export async function startBrowserSessionController<
     return true;
   };
 
+  const isOrphanedManagedBrowser = async (pid: number | undefined): Promise<boolean> => {
+    const processInfo = await readBrowserProcess(pid);
+    return processInfo?.ppid === 1;
+  };
+
+  const reapManagedBrowserProcess = async (pid: number | undefined, timeoutErrorPrefix: string): Promise<boolean> => {
+    if (!(await isProcessRunning(pid))) {
+      return false;
+    }
+    await stopBrowserProcess(pid);
+    if (pid) {
+      const didExit = await waitForProcessExit(pid, BOOTSTRAP_BROWSER_CLOSE_TIMEOUT_MS);
+      if (!didExit) {
+        throw new Error(`${timeoutErrorPrefix}: timed out waiting for managed browser ${String(pid)} to exit`);
+      }
+      await delay(BOOTSTRAP_PROFILE_RELEASE_DELAY_MS);
+    }
+    return true;
+  };
+
+  const clearManagedBrowserMetadata = async (): Promise<void> => {
+    if (options.profilePath && metadataFallback) {
+      await updateSessionMetadata(options.profilePath, metadataFallback, {
+        controlMode: "none",
+        ownership: "none",
+        browserUrl: null,
+        browserPid: null,
+      });
+    }
+    browserUrl = undefined;
+    browserPid = undefined;
+  };
+
   const bindRuntime = (nextRuntime: TRuntime, nextOwnership: BridgeSessionOwnership): void => {
     runtime = nextRuntime;
     runtimeMode = nextRuntime.mode;
@@ -447,26 +481,8 @@ export async function startBrowserSessionController<
     if (relaunchManagedAttachBrowser) {
       const managedBrowserPid =
         browserPid ?? (options.profilePath ? await findBrowserProcessForProfile(options.profilePath) : undefined);
-      if (options.profilePath && metadataFallback) {
-        await updateSessionMetadata(options.profilePath, metadataFallback, {
-          controlMode: "none",
-          ownership: "none",
-          browserUrl: null,
-          browserPid: null,
-        });
-      }
-      await stopBrowserProcess(managedBrowserPid);
-      if (managedBrowserPid) {
-        const didExit = await waitForProcessExit(managedBrowserPid, BOOTSTRAP_BROWSER_CLOSE_TIMEOUT_MS);
-        if (!didExit) {
-          throw new Error(
-            `BROWSER_CLOSE_TIMEOUT: timed out waiting for managed browser ${String(managedBrowserPid)} to exit`,
-          );
-        }
-        await delay(BOOTSTRAP_PROFILE_RELEASE_DELAY_MS);
-      }
-      browserUrl = undefined;
-      browserPid = undefined;
+      await reapManagedBrowserProcess(managedBrowserPid, "BROWSER_CLOSE_TIMEOUT");
+      await clearManagedBrowserMetadata();
     }
 
     let managedAttachPid: number | undefined;
@@ -476,38 +492,21 @@ export async function startBrowserSessionController<
       const managedBrowserPid =
         browserPid ?? (options.profilePath ? await findBrowserProcessForProfile(options.profilePath) : undefined);
       const managedBrowserRunning = await isProcessRunning(managedBrowserPid);
+      const managedBrowserOrphaned = managedBrowserRunning && (await isOrphanedManagedBrowser(managedBrowserPid));
       let managedBrowserUrlHealthy = managedBrowserRunning;
-      if (managedBrowserRunning && options.browserUrlHealthCheck) {
+      if (managedBrowserRunning && !managedBrowserOrphaned && options.browserUrlHealthCheck) {
         try {
           await options.browserUrlHealthCheck(attachBrowserUrl);
         } catch {
           managedBrowserUrlHealthy = false;
         }
       }
-      if (!managedBrowserRunning || !managedBrowserUrlHealthy) {
+      if (!managedBrowserRunning || managedBrowserOrphaned || !managedBrowserUrlHealthy) {
         if (managedBrowserRunning) {
-          await stopBrowserProcess(managedBrowserPid);
-          if (managedBrowserPid) {
-            const didExit = await waitForProcessExit(managedBrowserPid, BOOTSTRAP_BROWSER_CLOSE_TIMEOUT_MS);
-            if (!didExit) {
-              throw new Error(
-                `BROWSER_CLOSE_TIMEOUT: timed out waiting for stale managed browser ${String(managedBrowserPid)} to exit`,
-              );
-            }
-            await delay(BOOTSTRAP_PROFILE_RELEASE_DELAY_MS);
-          }
+          await reapManagedBrowserProcess(managedBrowserPid, "BROWSER_CLOSE_TIMEOUT");
         }
-        if (options.profilePath && metadataFallback) {
-          await updateSessionMetadata(options.profilePath, metadataFallback, {
-            controlMode: "none",
-            ownership: "none",
-            browserUrl: null,
-            browserPid: null,
-          });
-        }
+        await clearManagedBrowserMetadata();
         attachBrowserUrl = undefined;
-        browserUrl = undefined;
-        browserPid = undefined;
       }
     }
 
@@ -703,6 +702,14 @@ export async function startBrowserSessionController<
     const managedProfilePath = options.profilePath as string;
     metadata = await readSessionMetadata(managedProfilePath, metadataFallback as NonNullable<typeof metadataFallback>);
     syncFromMetadata(metadata);
+
+    if (metadata.ownership === "managed" && metadata.controlMode === "attach") {
+      const managedBrowserPid = metadata.browserPid ?? (await findBrowserProcessForProfile(managedProfilePath));
+      if (managedBrowserPid && (await isOrphanedManagedBrowser(managedBrowserPid))) {
+        await reapManagedBrowserProcess(managedBrowserPid, "BROWSER_CLOSE_TIMEOUT");
+        await clearManagedBrowserMetadata();
+      }
+    }
 
     if (configuredBrowserUrl) {
       await attachSessionInternal(configuredBrowserUrl);
