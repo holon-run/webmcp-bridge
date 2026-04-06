@@ -108,6 +108,9 @@ Run directly from npm against the public native WebMCP demo:
 npx -y @webmcp-bridge/local-mcp --url https://board.holon.run --headless
 ```
 
+When `--browser-url` is not used, local-mcp now defaults to a stable managed profile under
+`~/.uxc/webmcp-profile/<site-or-host>` even if `--user-data-dir` is omitted.
+
 To open a visible browser window for collaboration:
 
 ```bash
@@ -209,6 +212,13 @@ The bridge uses native WebMCP when available, and falls back to injected adapter
 - non-native sites execute through injected WebMCP shim paths
 
 Both paths return standard JSON-serializable MCP payloads to the local caller.
+
+If a page exposes neither native WebMCP nor a configured adapter, local-mcp starts in
+`overlay-bootstrap` mode instead of failing immediately. In that mode:
+
+- `bridge.debug.eval` can inspect or prototype page-context scripts
+- `bridge.overlay.*` can persist draft namespaced overlay tools
+- installed overlay tools appear as `overlay.<id>.<tool>`
 
 ## Collaborative board demo
 

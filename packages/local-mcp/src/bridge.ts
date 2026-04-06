@@ -4,6 +4,7 @@
  */
 
 import type { Readable, Writable } from "node:stream";
+import type { JsonValue } from "@webmcp-bridge/core";
 import {
   assertAuthSensitiveBrowserSupport,
   resolveAuthPolicy,
@@ -27,6 +28,16 @@ import {
   type BrowserEngine,
   type LocalMcpRuntime,
 } from "./runtime.js";
+import {
+  evaluateDebugScript,
+  evaluateOverlayTool,
+  OverlayStore,
+  type InstallOverlayOptions,
+  type OverlayListResult,
+  type OverlayRecord,
+  type UpdateOverlayOptions,
+} from "./overlays.js";
+import { resolveDefaultUserDataDir } from "./profiles.js";
 import {
   createNativeSiteDefinition,
   resolveSiteSource,
@@ -57,7 +68,7 @@ export type LocalMcpBridgeHandle = {
   site: string;
   targetUrl: string;
   controlMode: BridgeControlMode;
-  mode: "native" | "polyfill" | "adapter-shim" | "control-only";
+  mode: "native" | "polyfill" | "adapter-shim" | "overlay-bootstrap" | "control-only";
   presentationMode: BridgePresentationMode;
   preferredPresentationMode: BridgePresentationMode;
   close: () => Promise<void>;
@@ -109,6 +120,7 @@ async function startRuntime(options: RuntimeStartOptions): Promise<LocalMcpRunti
 function buildRuntimeStartOptions(
   baseOptions: StartLocalMcpBridgeOptions,
   siteDefinition: SiteDefinition,
+  userDataDir: string | undefined,
   controlMode: "launch" | "attach",
   preferredPresentationMode: BridgePresentationMode,
   browserUrl?: string,
@@ -124,8 +136,8 @@ function buildRuntimeStartOptions(
   if (baseOptions.browser !== undefined) {
     nextOptions.browser = baseOptions.browser;
   }
-  if (baseOptions.userDataDir !== undefined) {
-    nextOptions.userDataDir = baseOptions.userDataDir;
+  if (userDataDir !== undefined) {
+    nextOptions.userDataDir = userDataDir;
   }
   if (baseOptions.preferNative !== undefined) {
     nextOptions.preferNative = baseOptions.preferNative;
@@ -168,14 +180,31 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
   if (!targetUrl) {
     throw new Error("CONFIG_ERROR: no target url provided (missing --url and manifest.defaultUrl)");
   }
+  const configuredBrowserUrl = options.browserUrl?.trim() || undefined;
+  const managedUserDataDir =
+    configuredBrowserUrl === undefined
+      ? (options.userDataDir ?? resolveDefaultUserDataDir(siteDefinition, targetUrl))
+      : undefined;
 
   if (authPolicy.mode === "bootstrap_then_attach") {
-    assertAuthSensitiveBrowserSupport(options.browser, options.userDataDir);
+    assertAuthSensitiveBrowserSupport(options.browser, managedUserDataDir);
   }
+  const overlayStore = new OverlayStore(siteDefinition.id, managedUserDataDir);
+  await overlayStore.load();
 
   let server: LocalMcpStdioServer | undefined;
   let closeRequested = false;
   let closeResources: () => Promise<void> = async () => {};
+  const toolsetListeners = new Set<() => void>();
+  const notifyToolsetMayHaveChanged = (): void => {
+    for (const listener of toolsetListeners) {
+      try {
+        listener();
+      } catch (error) {
+        options.onError?.(error);
+      }
+    }
+  };
   const requestClose = (): void => {
     closeRequested = true;
     if (server === undefined) {
@@ -189,7 +218,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     site: siteDefinition.id,
     targetUrl,
     authPolicy,
-    ...(options.userDataDir !== undefined ? { profilePath: options.userDataDir } : {}),
+    ...(managedUserDataDir !== undefined ? { profilePath: managedUserDataDir } : {}),
     ...(options.browserChannel !== undefined ? { browserChannel: options.browserChannel } : {}),
     ...(options.browserUrl !== undefined ? { browserUrl: options.browserUrl } : {}),
     ...(options.preferredPresentationMode !== undefined
@@ -197,13 +226,23 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       : {}),
     runtimeFactory: async ({ controlMode, preferredPresentationMode, browserUrl }) =>
       await startRuntime(
-        buildRuntimeStartOptions(options, siteDefinition, controlMode, preferredPresentationMode, browserUrl),
+        buildRuntimeStartOptions(
+          options,
+          siteDefinition,
+          managedUserDataDir,
+          controlMode,
+          preferredPresentationMode,
+          browserUrl,
+        ),
       ),
     browserUrlHealthCheck: async (browserUrl) => {
       await resolveCdpConnectUrl(browserUrl);
     },
     onCloseRequested: requestClose,
     ...(options.onError !== undefined ? { onError: options.onError } : {}),
+  });
+  const unsubscribeControllerToolset = controller.onToolsetMayHaveChanged(() => {
+    notifyToolsetMayHaveChanged();
   });
   let closed = false;
   let lastState = toLocalBridgeState(controller.getState());
@@ -214,6 +253,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     }
     closed = true;
     lastState = toLocalBridgeState(controller.getState());
+    unsubscribeControllerToolset();
     const activeServer = server;
     server = undefined;
     const results = await Promise.allSettled([activeServer?.close(), controller.close()]);
@@ -229,7 +269,8 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       if (!runtime) {
         return [];
       }
-      return await runtime.gateway.listTools();
+      const pageTools = await runtime.gateway.listTools();
+      return [...pageTools, ...overlayStore.listEnabledToolDefinitions()];
     },
     callTool: async (name: string, input: Record<string, unknown>) => {
       const runtime = controller.getRuntime();
@@ -237,6 +278,10 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         throw new Error(
           "SESSION_NOT_AVAILABLE: page tools are unavailable while local-mcp is waiting for bootstrap or attach",
         );
+      }
+      const overlayTool = overlayStore.getOverlayTool(name);
+      if (overlayTool) {
+        return await evaluateOverlayTool(runtime.page, overlayTool.overlay, overlayTool.tool, input);
       }
       return (await runtime.gateway.callTool(name, input)) as Awaited<
         ReturnType<LocalMcpRuntime["gateway"]["callTool"]>
@@ -276,6 +321,38 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
           lastState = toLocalBridgeState(await controller.attachSession(requestedBrowserUrl));
           return lastState;
         },
+        debugEval: async (script: string, args: JsonValue) => {
+          const runtime = controller.getRuntime();
+          if (!runtime) {
+            throw new Error("SESSION_NOT_AVAILABLE: debug eval requires an active browser runtime");
+          }
+          return await evaluateDebugScript(runtime.page, script, args);
+        },
+        listOverlays: async (): Promise<OverlayListResult> => overlayStore.list(),
+        installOverlay: async (installOptions: InstallOverlayOptions): Promise<OverlayRecord> => {
+          const overlay = await overlayStore.install(installOptions);
+          notifyToolsetMayHaveChanged();
+          return overlay;
+        },
+        updateOverlay: async (updateOptions: UpdateOverlayOptions): Promise<OverlayRecord> => {
+          const overlay = await overlayStore.update(updateOptions);
+          notifyToolsetMayHaveChanged();
+          return overlay;
+        },
+        enableOverlay: async (id: string): Promise<OverlayRecord> => {
+          const overlay = await overlayStore.enable(id);
+          notifyToolsetMayHaveChanged();
+          return overlay;
+        },
+        disableOverlay: async (id: string): Promise<OverlayRecord> => {
+          const overlay = await overlayStore.disable(id);
+          notifyToolsetMayHaveChanged();
+          return overlay;
+        },
+        deleteOverlay: async (id: string): Promise<void> => {
+          await overlayStore.delete(id);
+          notifyToolsetMayHaveChanged();
+        },
         getPresentationMode: () => controller.getPresentationMode(),
         setPresentationMode: async (setModeOptions: LocalBridgePresentationModeSetOptions) => {
           lastState = toLocalBridgeState(await controller.setPresentationMode(setModeOptions));
@@ -283,6 +360,8 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         },
         resetProfile: async () => {
           lastState = toLocalBridgeState(await controller.resetProfile());
+          await overlayStore.load();
+          notifyToolsetMayHaveChanged();
           return lastState;
         },
         closeBridge: async () => {
@@ -290,7 +369,12 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         },
       },
       serviceVersion: options.serviceVersion,
-      onToolsetMayHaveChanged: (listener) => controller.onToolsetMayHaveChanged(listener),
+      onToolsetMayHaveChanged: (listener) => {
+        toolsetListeners.add(listener);
+        return () => {
+          toolsetListeners.delete(listener);
+        };
+      },
       ...(options.input !== undefined ? { input: options.input } : {}),
       ...(options.output !== undefined ? { output: options.output } : {}),
       ...(options.onError !== undefined ? { onError: options.onError } : {}),

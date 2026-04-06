@@ -3,6 +3,9 @@
  * It depends on mocked runtime/server modules so bridge-level session restarts keep the MCP server alive while swapping runtimes.
  */
 
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LocalMcpStdioServerOptions } from "../src/server.js";
@@ -12,8 +15,11 @@ type MockRuntimeHandle = {
   site: string;
   targetUrl: string;
   controlMode: "launch" | "attach";
-  mode: "native" | "polyfill" | "adapter-shim";
+  mode: "native" | "polyfill" | "adapter-shim" | "overlay-bootstrap";
   presentationMode: "headed" | "headless";
+  page: {
+    evaluate: ReturnType<typeof vi.fn>;
+  };
   gateway: {
     listTools: ReturnType<typeof vi.fn>;
     callTool: ReturnType<typeof vi.fn>;
@@ -71,6 +77,9 @@ function createRuntimeHandle(
     controlMode: "launch",
     mode: "native",
     presentationMode: "headed",
+    page: {
+      evaluate: vi.fn(async (pageFunction: (payload: unknown) => Promise<string>, payload: unknown) => await pageFunction(payload)),
+    },
     gateway,
     openWindow: vi.fn(async () => "focused" as const),
     ownerSessionEnded: createOwnerSessionEndedPromise(),
@@ -81,6 +90,7 @@ function createRuntimeHandle(
 
 let runtimeQueue: MockRuntimeHandle[] = [createRuntimeHandle()];
 let startedRuntimeHandles: MockRuntimeHandle[] = [];
+let runtimeStartOptions: Array<Record<string, unknown>> = [];
 const resolveCdpConnectUrlMock = vi.fn(async (browserUrl: string) => browserUrl);
 
 const serverHandle = {
@@ -105,7 +115,8 @@ const findBrowserProcessForProfileMock = vi.fn(async () => undefined as number |
 const stopManagedBrowserMock = vi.fn(async () => {});
 
 vi.mock("../src/runtime.js", () => ({
-  startLocalMcpRuntime: vi.fn(async () => {
+  startLocalMcpRuntime: vi.fn(async (options: Record<string, unknown>) => {
+    runtimeStartOptions.push(options);
     const nextHandle = runtimeQueue.shift();
     if (!nextHandle) {
       throw new Error("missing mocked runtime handle");
@@ -262,6 +273,7 @@ describe("startLocalMcpBridge", () => {
     runningPids.clear();
     runtimeQueue = [createRuntimeHandle()];
     startedRuntimeHandles = [];
+    runtimeStartOptions = [];
     resolveCdpConnectUrlMock.mockReset();
     resolveCdpConnectUrlMock.mockImplementation(async (browserUrl: string) => browserUrl);
     serverHandle.start.mockClear();
@@ -1145,5 +1157,94 @@ describe("startLocalMcpBridge", () => {
       authState: "authenticated",
       sessionState: "runtime_active",
     });
+  });
+
+  it("assigns a default managed profile path for built-in sites when none is provided", async () => {
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    await startLocalMcpBridge({
+      site: "x",
+      serviceVersion: "0.1.0-test",
+      input: new PassThrough(),
+    });
+
+    expect(capturedServerOptions?.bridgeControl.getState()).toMatchObject({
+      profilePath: join(homedir(), ".uxc", "webmcp-profile", "x"),
+    });
+  });
+
+  it("passes the default managed profile path into runtime startup for URL mode", async () => {
+    const { startLocalMcpBridge } = await import("../src/bridge.js");
+    await startLocalMcpBridge({
+      url: "https://board.holon.run",
+      serviceVersion: "0.1.0-test",
+      input: new PassThrough(),
+    });
+
+    expect(runtimeStartOptions[0]).toMatchObject({
+      userDataDir: join(homedir(), ".uxc", "webmcp-profile", "board-holon-run"),
+      url: "https://board.holon.run",
+    });
+  });
+
+  it("installs persisted overlays and exposes overlay tools through the bridge gateway", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "webmcp-overlay-bridge-"));
+    try {
+      runtimeQueue = [
+        createRuntimeHandle({
+          site: "board",
+          targetUrl: "https://board.holon.run",
+          mode: "overlay-bootstrap",
+          gateway: {
+            listTools: vi.fn(async () => []),
+          },
+        }),
+      ];
+      startedRuntimeHandles = [];
+
+      const { startLocalMcpBridge } = await import("../src/bridge.js");
+      await startLocalMcpBridge({
+        url: "https://board.holon.run",
+        userDataDir: profileDir,
+        serviceVersion: "0.1.0-test",
+        input: new PassThrough(),
+      });
+
+      const overlay = await capturedServerOptions?.bridgeControl.installOverlay({
+        id: "board_fix",
+        tools: [
+          {
+            name: "diagram.get",
+            script: "(input) => ({ title: input.title, source: 'overlay' })",
+          },
+        ],
+      });
+
+      expect(overlay).toMatchObject({
+        id: "board_fix",
+        enabled: true,
+      });
+      await expect(capturedServerOptions?.gateway.listTools()).resolves.toEqual([
+        {
+          name: "overlay.board_fix.diagram.get",
+          inputSchema: { type: "object" },
+        },
+      ]);
+      await expect(
+        capturedServerOptions?.gateway.callTool("overlay.board_fix.diagram.get", { title: "Roadmap" }),
+      ).resolves.toEqual({
+        title: "Roadmap",
+        source: "overlay",
+      });
+
+      const persisted = JSON.parse(
+        await readFile(join(profileDir, ".webmcp-bridge", "overlays", "board_fix.json"), "utf8"),
+      ) as { id: string; siteId: string };
+      expect(persisted).toMatchObject({
+        id: "board_fix",
+        siteId: "native",
+      });
+    } finally {
+      await rm(profileDir, { recursive: true, force: true });
+    }
   });
 });

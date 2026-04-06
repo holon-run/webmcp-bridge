@@ -73,7 +73,7 @@ export type LocalMcpRuntime = {
   siteDefinition: SiteDefinition;
   targetUrl: string;
   controlMode: "launch" | "attach";
-  mode: "native" | "polyfill" | "adapter-shim";
+  mode: "native" | "polyfill" | "adapter-shim" | "overlay-bootstrap";
   presentationMode: BridgePresentationMode;
   page: Page;
   gateway: LocalMcpGateway;
@@ -437,6 +437,17 @@ export function isRecoverableGatewayError(error: unknown): boolean {
   return GATEWAY_RECOVERABLE_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
 }
 
+export function resolveBridgeRuntimeMode(
+  gatewayMode: "native" | "polyfill" | "adapter-shim",
+  toolCount: number,
+  hasFallbackAdapter: boolean,
+): "native" | "polyfill" | "adapter-shim" | "overlay-bootstrap" {
+  if (gatewayMode === "polyfill" && !hasFallbackAdapter && toolCount === 0) {
+    return "overlay-bootstrap";
+  }
+  return gatewayMode;
+}
+
 export function mapNavigationError(error: unknown, targetUrl: string, phase: "goto" | "reload"): Error {
   const message = extractErrorMessage(error);
   const normalizedPhase = phase === "goto" ? "open" : "reload";
@@ -511,7 +522,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   let context: BrowserContext | undefined;
   let currentPage: Page | undefined;
   let currentGatewaySession: WebMcpPageGateway | undefined;
-  let currentMode: "native" | "polyfill" | "adapter-shim" = "native";
+  let currentMode: "native" | "polyfill" | "adapter-shim" | "overlay-bootstrap" = "native";
   let currentPresentationMode: BridgePresentationMode = preferredPresentationMode;
   let gatewayStale = false;
   let runtimeClosing = false;
@@ -697,6 +708,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
         listener(uri);
       }
     });
+    let polyfillTools: ReadonlyArray<WebMcpToolDefinition> | undefined;
     if (navigate && currentGatewaySession.mode === "polyfill") {
       try {
         await pageForEvents.reload({
@@ -706,13 +718,21 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       } catch (error) {
         throw mapNavigationError(error, targetUrl, "reload");
       }
-      await waitForPolyfillTools(currentGatewaySession);
+      await waitForPolyfillTools(currentGatewaySession).catch(() => {
+        // Overlay bootstrap mode intentionally allows empty toolsets on non-native pages.
+      });
+      polyfillTools = await currentGatewaySession.listTools();
     } else if (currentGatewaySession.mode === "polyfill") {
       await waitForPolyfillTools(currentGatewaySession).catch(() => {
-        // Recovery should still retry the original operation once even if tools are not visible yet.
+        // Overlay bootstrap mode intentionally allows empty toolsets on non-native pages.
       });
+      polyfillTools = await currentGatewaySession.listTools();
     }
-    currentMode = currentGatewaySession.mode;
+    currentMode = resolveBridgeRuntimeMode(
+      currentGatewaySession.mode,
+      polyfillTools?.length ?? 0,
+      typeof fallbackAdapterFactory === "function",
+    );
     gatewayStale = false;
   };
 

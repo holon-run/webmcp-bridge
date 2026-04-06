@@ -9,6 +9,7 @@ import {
   isRecoverableGatewayError,
   isUrlAllowed,
   mapNavigationError,
+  resolveBridgeRuntimeMode,
   resolveCdpConnectUrl,
   resolveCdpVersionEndpoint,
   resolveRecoveryNavigationUrl,
@@ -144,6 +145,28 @@ describe("isRecoverableGatewayError", () => {
 
   it("rejects unrelated gateway failures", () => {
     expect(isRecoverableGatewayError(new Error("AUTH_REQUIRED: login required"))).toBe(false);
+  });
+});
+
+describe("resolveBridgeRuntimeMode", () => {
+  it("keeps native mode unchanged", () => {
+    expect(resolveBridgeRuntimeMode("native", 3, false)).toBe("native");
+  });
+
+  it("keeps adapter-shim mode unchanged", () => {
+    expect(resolveBridgeRuntimeMode("adapter-shim", 0, true)).toBe("adapter-shim");
+  });
+
+  it("switches empty polyfill pages into overlay-bootstrap mode when no fallback adapter exists", () => {
+    expect(resolveBridgeRuntimeMode("polyfill", 0, false)).toBe("overlay-bootstrap");
+  });
+
+  it("keeps polyfill mode when page tools are available", () => {
+    expect(resolveBridgeRuntimeMode("polyfill", 2, false)).toBe("polyfill");
+  });
+
+  it("keeps polyfill mode when a fallback adapter exists", () => {
+    expect(resolveBridgeRuntimeMode("polyfill", 0, true)).toBe("polyfill");
   });
 });
 

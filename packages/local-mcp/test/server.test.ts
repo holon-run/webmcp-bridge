@@ -108,6 +108,47 @@ describe("createLocalMcpStdioServer", () => {
       presentationMode: "headed" as const,
       preferredPresentationMode: "headed" as const,
     })),
+    debugEval: vi.fn(async () => ({ ok: true, source: "debug" })),
+    listOverlays: vi.fn(async () => ({
+      overlays: [],
+      persistence: {
+        available: true,
+        profilePath: "/tmp/board-profile",
+      },
+    })),
+    installOverlay: vi.fn(async () => ({
+      id: "x-dom",
+      siteId: "board",
+      enabled: true,
+      tools: [],
+      createdAt: "2026-04-06T00:00:00.000Z",
+      updatedAt: "2026-04-06T00:00:00.000Z",
+    })),
+    updateOverlay: vi.fn(async () => ({
+      id: "x-dom",
+      siteId: "board",
+      enabled: true,
+      tools: [],
+      createdAt: "2026-04-06T00:00:00.000Z",
+      updatedAt: "2026-04-06T00:00:00.000Z",
+    })),
+    enableOverlay: vi.fn(async () => ({
+      id: "x-dom",
+      siteId: "board",
+      enabled: true,
+      tools: [],
+      createdAt: "2026-04-06T00:00:00.000Z",
+      updatedAt: "2026-04-06T00:00:00.000Z",
+    })),
+    disableOverlay: vi.fn(async () => ({
+      id: "x-dom",
+      siteId: "board",
+      enabled: false,
+      tools: [],
+      createdAt: "2026-04-06T00:00:00.000Z",
+      updatedAt: "2026-04-06T00:00:00.000Z",
+    })),
+    deleteOverlay: vi.fn(async () => {}),
     getPresentationMode: vi.fn(() => "headed" as const),
     setPresentationMode: vi.fn(async () => ({
       site: "board",
@@ -153,6 +194,13 @@ describe("createLocalMcpStdioServer", () => {
     bridgeControl.openWindow.mockClear();
     bridgeControl.bootstrapSession.mockClear();
     bridgeControl.attachSession.mockClear();
+    bridgeControl.debugEval.mockClear();
+    bridgeControl.listOverlays.mockClear();
+    bridgeControl.installOverlay.mockClear();
+    bridgeControl.updateOverlay.mockClear();
+    bridgeControl.enableOverlay.mockClear();
+    bridgeControl.disableOverlay.mockClear();
+    bridgeControl.deleteOverlay.mockClear();
     bridgeControl.getPresentationMode.mockClear();
     bridgeControl.setPresentationMode.mockClear();
     bridgeControl.resetProfile.mockClear();
@@ -418,6 +466,13 @@ describe("createLocalMcpStdioServer", () => {
         { name: "bridge.session.mode.set" },
         { name: "bridge.session.stop" },
         { name: "bridge.session.reset_profile" },
+        { name: "bridge.debug.eval" },
+        { name: "bridge.overlay.list" },
+        { name: "bridge.overlay.install" },
+        { name: "bridge.overlay.update" },
+        { name: "bridge.overlay.enable" },
+        { name: "bridge.overlay.disable" },
+        { name: "bridge.overlay.delete" },
         { name: "bridge.open" },
         { name: "bridge.close" },
         { name: "ping" },
@@ -524,6 +579,131 @@ describe("createLocalMcpStdioServer", () => {
           mode: "native",
           presentationMode: "headed",
           preferredPresentationMode: "headed",
+        },
+      },
+    });
+  });
+
+  it("handles bridge.debug.eval locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2bc-debug",
+      method: "tools/call",
+      params: {
+        name: "bridge.debug.eval",
+        arguments: {
+          script: "(args) => ({ query: args.query, ok: true })",
+          args: {
+            query: "openai",
+          },
+        },
+      },
+    });
+
+    expect(bridgeControl.debugEval).toHaveBeenCalledWith(
+      "(args) => ({ query: args.query, ok: true })",
+      { query: "openai" },
+    );
+    expect(callTool).not.toHaveBeenCalled();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        value: {
+          ok: true,
+          source: "debug",
+        },
+      },
+    });
+  });
+
+  it("lists overlays locally", async () => {
+    bridgeControl.listOverlays.mockResolvedValueOnce({
+      overlays: [
+        {
+          id: "board_fix",
+          siteId: "board",
+          enabled: true,
+          tools: [
+            {
+              name: "diagram.get",
+              script: "() => ({ ok: true })",
+            },
+          ],
+          createdAt: "2026-04-06T00:00:00.000Z",
+          updatedAt: "2026-04-06T00:00:00.000Z",
+        },
+      ],
+      persistence: {
+        available: true,
+        profilePath: "/tmp/board-profile",
+      },
+    } as Awaited<ReturnType<typeof bridgeControl.listOverlays>>);
+
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2bc-overlays",
+      method: "tools/call",
+      params: {
+        name: "bridge.overlay.list",
+        arguments: {},
+      },
+    });
+
+    expect(bridgeControl.listOverlays).toHaveBeenCalledOnce();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        overlays: [
+          {
+            id: "board_fix",
+            enabled: true,
+          },
+        ],
+        persistence: {
+          available: true,
+          profilePath: "/tmp/board-profile",
+        },
+      },
+    });
+  });
+
+  it("installs overlays locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2bc-install",
+      method: "tools/call",
+      params: {
+        name: "bridge.overlay.install",
+        arguments: {
+          id: "board_fix",
+          description: "Board fallback",
+          tools: [
+            {
+              name: "diagram.get",
+              script: "() => ({ ok: true })",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(bridgeControl.installOverlay).toHaveBeenCalledWith({
+      id: "board_fix",
+      description: "Board fallback",
+      tools: [
+        {
+          name: "diagram.get",
+          script: "() => ({ ok: true })",
+        },
+      ],
+    });
+    expect(callTool).not.toHaveBeenCalled();
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        installed: true,
+        overlay: {
+          id: "x-dom",
         },
       },
     });
