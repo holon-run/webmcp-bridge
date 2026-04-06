@@ -12,7 +12,7 @@ That is why `bridge.window.*` and `bridge.session.*` both exist.
 Important session concepts:
 
 - `controlMode`: `none`, `bootstrap`, `launch`, or `attach`
-- `mode`: `native`, `polyfill`, `adapter-shim`, or `control-only`
+- `mode`: `native`, `polyfill`, `adapter-shim`, `overlay-bootstrap`, or `control-only`
 - `presentationMode`: `headed` or `headless`
 - `ownership`: `managed` or `external`
 - `sessionState`: profile/auth/runtime state for the current site profile
@@ -59,6 +59,17 @@ Then choose one of these:
 ```
 
 Only call site operations after help output shows site tools again.
+
+For adapterless pages, `bridge.session.status` may report `mode=overlay-bootstrap`.
+That means the browser runtime is alive, but there are no native or formal adapter tools yet.
+Use:
+
+```bash
+<site>-webmcp-cli bridge.debug.eval '{"script":"() => document.title"}'
+<site>-webmcp-cli bridge.overlay.install '{"id":"draft","tools":[{"name":"page.title.get","script":"() => ({ title: document.title })"}]}'
+```
+
+After install succeeds, rerun help and the overlay tool will appear as `overlay.draft.page.title.get`.
 
 ## Managed vs External
 

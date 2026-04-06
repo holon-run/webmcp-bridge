@@ -21,6 +21,12 @@ import type { Readable, Writable } from "node:stream";
 import { z } from "zod";
 import type { McpCanReapResult, McpToolDefinition } from "./mcp-types.js";
 import type {
+  InstallOverlayOptions,
+  OverlayListResult,
+  OverlayRecord,
+  UpdateOverlayOptions,
+} from "./overlays.js";
+import type {
   BridgeAuthState,
   BridgeControlMode,
   BridgePresentationMode,
@@ -41,7 +47,7 @@ export type LocalBridgeState = {
   targetUrl: string;
   controlMode: BridgeControlMode;
   browserUrl?: string;
-  mode: "native" | "polyfill" | "adapter-shim" | "control-only";
+  mode: "native" | "polyfill" | "adapter-shim" | "overlay-bootstrap" | "control-only";
   presentationMode: BridgePresentationMode;
   preferredPresentationMode: BridgePresentationMode;
   authPolicyMode: "none" | "bootstrap_then_attach";
@@ -62,6 +68,13 @@ export type LocalBridgeControl = {
   openWindow: () => Promise<"focused" | "opened">;
   bootstrapSession: () => Promise<LocalBridgeState>;
   attachSession: (browserUrl?: string) => Promise<LocalBridgeState>;
+  debugEval: (script: string, args: JsonValue) => Promise<JsonValue>;
+  listOverlays: () => Promise<OverlayListResult> | OverlayListResult;
+  installOverlay: (options: InstallOverlayOptions) => Promise<OverlayRecord>;
+  updateOverlay: (options: UpdateOverlayOptions) => Promise<OverlayRecord>;
+  enableOverlay: (id: string) => Promise<OverlayRecord>;
+  disableOverlay: (id: string) => Promise<OverlayRecord>;
+  deleteOverlay: (id: string) => Promise<void>;
   getPresentationMode: () => BridgePresentationMode;
   setPresentationMode: (options: LocalBridgePresentationModeSetOptions) => Promise<LocalBridgeState>;
   resetProfile: () => Promise<LocalBridgeState>;
@@ -88,6 +101,7 @@ const SERVICE_INSTRUCTIONS = [
   "Call bridge.session.status first.",
   "If the session needs sign-in, call bridge.session.bootstrap and finish login in the browser.",
   "If you already have a signed-in browser or managed profile, call bridge.session.attach.",
+  "If the page has no native WebMCP or adapter tools yet, use bridge.debug.eval and bridge.overlay.* to bootstrap draft tools.",
   "After attach succeeds, run help again to see site tools.",
 ].join(" ");
 const CAN_REAP_RETRY_AFTER_SECS = 30;
@@ -101,6 +115,16 @@ const UxcCanReapRequestSchema = RequestSchema.extend({
     })
     .optional(),
 });
+
+type OverlayToolInput = {
+  name: string;
+  description?: string;
+  inputSchema?: JsonValue;
+  annotations?: {
+    readOnlyHint?: boolean;
+  };
+  script: string;
+};
 
 class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private static readonly BRIDGE_CLOSE_DELAY_MS = 100;
@@ -515,6 +539,133 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         inputSchema: { type: "object", additionalProperties: false },
       },
       {
+        name: "bridge.debug.eval",
+        description: "Run a debug-only page-context function in the current browser session and return a JSON-serializable result.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            script: { type: "string" },
+            args: {},
+          },
+          required: ["script"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "bridge.overlay.list",
+        description: "List persisted overlays for the current site/profile scope.",
+        inputSchema: { type: "object", additionalProperties: false },
+        annotations: {
+          readOnlyHint: true,
+        },
+      },
+      {
+        name: "bridge.overlay.install",
+        description: "Persist a new namespaced overlay and load its tools into the current session.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            description: { type: "string" },
+            enabled: { type: "boolean" },
+            tools: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  description: { type: "string" },
+                  inputSchema: {},
+                  annotations: {
+                    type: "object",
+                    properties: {
+                      readOnlyHint: { type: "boolean" },
+                    },
+                    additionalProperties: false,
+                  },
+                  script: { type: "string" },
+                },
+                required: ["name", "script"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["id", "tools"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "bridge.overlay.update",
+        description: "Update an existing persisted overlay.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            description: { type: "string" },
+            enabled: { type: "boolean" },
+            tools: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  description: { type: "string" },
+                  inputSchema: {},
+                  annotations: {
+                    type: "object",
+                    properties: {
+                      readOnlyHint: { type: "boolean" },
+                    },
+                    additionalProperties: false,
+                  },
+                  script: { type: "string" },
+                },
+                required: ["name", "script"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["id"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "bridge.overlay.enable",
+        description: "Enable a persisted overlay so its tools are listed in the current session.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "bridge.overlay.disable",
+        description: "Disable a persisted overlay without deleting it.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "bridge.overlay.delete",
+        description: "Delete a persisted overlay from the current site/profile scope.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+          additionalProperties: false,
+        },
+      },
+      {
         name: "bridge.open",
         description: "Legacy alias for bridge.window.open.",
         inputSchema: { type: "object", additionalProperties: false },
@@ -538,6 +689,13 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       name === "bridge.session.status" ||
       name === "bridge.session.bootstrap" ||
       name === "bridge.session.attach" ||
+      name === "bridge.debug.eval" ||
+      name === "bridge.overlay.list" ||
+      name === "bridge.overlay.install" ||
+      name === "bridge.overlay.update" ||
+      name === "bridge.overlay.enable" ||
+      name === "bridge.overlay.disable" ||
+      name === "bridge.overlay.delete" ||
       name === "bridge.session.mode.get" ||
       name === "bridge.session.mode.set" ||
       name === "bridge.session.stop" ||
@@ -566,6 +724,103 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       };
     }
     throw new Error("INVALID_ARGUMENT: mode must be headed or headless");
+  }
+
+  private parseScript(input: Record<string, unknown>): string {
+    const script = input.script;
+    if (typeof script !== "string" || !script.trim()) {
+      throw new Error("INVALID_ARGUMENT: script must be a non-empty string");
+    }
+    return script.trim();
+  }
+
+  private parseJsonValue(value: unknown): JsonValue {
+    return value as JsonValue;
+  }
+
+  private parseOverlayId(input: Record<string, unknown>): string {
+    const id = input.id;
+    if (typeof id !== "string" || !id.trim()) {
+      throw new Error("INVALID_ARGUMENT: id must be a non-empty string");
+    }
+    return id.trim();
+  }
+
+  private parseOverlayTools(input: unknown, required: boolean): OverlayToolInput[] | undefined {
+    if (input === undefined) {
+      if (required) {
+        throw new Error("INVALID_ARGUMENT: tools must be a non-empty array");
+      }
+      return undefined;
+    }
+    if (!Array.isArray(input) || input.length === 0) {
+      throw new Error("INVALID_ARGUMENT: tools must be a non-empty array");
+    }
+    return input.map((entry, index) => {
+      if (!this.isRecord(entry)) {
+        throw new Error(`INVALID_ARGUMENT: tools[${index}] must be an object`);
+      }
+      if (typeof entry.name !== "string" || !entry.name.trim()) {
+        throw new Error(`INVALID_ARGUMENT: tools[${index}].name must be a non-empty string`);
+      }
+      if (typeof entry.script !== "string" || !entry.script.trim()) {
+        throw new Error(`INVALID_ARGUMENT: tools[${index}].script must be a non-empty string`);
+      }
+      const tool: OverlayToolInput = {
+        name: entry.name.trim(),
+        script: entry.script.trim(),
+      };
+      if (typeof entry.description === "string" && entry.description.trim()) {
+        tool.description = entry.description.trim();
+      }
+      if (entry.inputSchema !== undefined) {
+        tool.inputSchema = this.parseJsonValue(entry.inputSchema);
+      }
+      if (entry.annotations !== undefined) {
+        if (!this.isRecord(entry.annotations)) {
+          throw new Error(`INVALID_ARGUMENT: tools[${index}].annotations must be an object`);
+        }
+        const readOnlyHint = entry.annotations.readOnlyHint;
+        if (readOnlyHint !== undefined && typeof readOnlyHint !== "boolean") {
+          throw new Error(`INVALID_ARGUMENT: tools[${index}].annotations.readOnlyHint must be a boolean`);
+        }
+        tool.annotations = {
+          ...(typeof readOnlyHint === "boolean" ? { readOnlyHint } : {}),
+        };
+      }
+      return tool;
+    });
+  }
+
+  private parseOverlayInstallOptions(input: Record<string, unknown>): InstallOverlayOptions {
+    const options: InstallOverlayOptions = {
+      id: this.parseOverlayId(input),
+      tools: this.parseOverlayTools(input.tools, true) ?? [],
+    };
+    if (typeof input.description === "string") {
+      options.description = input.description;
+    }
+    if (typeof input.enabled === "boolean") {
+      options.enabled = input.enabled;
+    }
+    return options;
+  }
+
+  private parseOverlayUpdateOptions(input: Record<string, unknown>): UpdateOverlayOptions {
+    const options: UpdateOverlayOptions = {
+      id: this.parseOverlayId(input),
+    };
+    if (typeof input.description === "string") {
+      options.description = input.description;
+    }
+    if (typeof input.enabled === "boolean") {
+      options.enabled = input.enabled;
+    }
+    const tools = this.parseOverlayTools(input.tools, false);
+    if (tools !== undefined) {
+      options.tools = tools;
+    }
+    return options;
   }
 
   private toBridgeErrorResult(error: unknown): JsonValue {
@@ -655,6 +910,92 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         ok: true,
         presentationMode: options.bridgeControl.getPresentationMode(),
       };
+    }
+    if (name === "bridge.debug.eval") {
+      try {
+        const value = await options.bridgeControl.debugEval(
+          this.parseScript(input),
+          this.parseJsonValue(input.args ?? {}),
+        );
+        return {
+          ok: true,
+          value,
+        };
+      } catch (error) {
+        return this.toBridgeErrorResult(error);
+      }
+    }
+    if (name === "bridge.overlay.list") {
+      try {
+        const overlays = await options.bridgeControl.listOverlays();
+        return {
+          ok: true,
+          ...overlays,
+        };
+      } catch (error) {
+        return this.toBridgeErrorResult(error);
+      }
+    }
+    if (name === "bridge.overlay.install") {
+      try {
+        const overlay = await options.bridgeControl.installOverlay(this.parseOverlayInstallOptions(input));
+        return {
+          ok: true,
+          overlay,
+          installed: true,
+        };
+      } catch (error) {
+        return this.toBridgeErrorResult(error);
+      }
+    }
+    if (name === "bridge.overlay.update") {
+      try {
+        const overlay = await options.bridgeControl.updateOverlay(this.parseOverlayUpdateOptions(input));
+        return {
+          ok: true,
+          overlay,
+          updated: true,
+        };
+      } catch (error) {
+        return this.toBridgeErrorResult(error);
+      }
+    }
+    if (name === "bridge.overlay.enable") {
+      try {
+        const overlay = await options.bridgeControl.enableOverlay(this.parseOverlayId(input));
+        return {
+          ok: true,
+          overlay,
+          enabled: true,
+        };
+      } catch (error) {
+        return this.toBridgeErrorResult(error);
+      }
+    }
+    if (name === "bridge.overlay.disable") {
+      try {
+        const overlay = await options.bridgeControl.disableOverlay(this.parseOverlayId(input));
+        return {
+          ok: true,
+          overlay,
+          disabled: true,
+        };
+      } catch (error) {
+        return this.toBridgeErrorResult(error);
+      }
+    }
+    if (name === "bridge.overlay.delete") {
+      try {
+        const id = this.parseOverlayId(input);
+        await options.bridgeControl.deleteOverlay(id);
+        return {
+          ok: true,
+          id,
+          deleted: true,
+        };
+      } catch (error) {
+        return this.toBridgeErrorResult(error);
+      }
     }
     if (name === "bridge.session.mode.set") {
       try {

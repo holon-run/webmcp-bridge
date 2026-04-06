@@ -40,7 +40,7 @@ export type BrowserSessionRuntimeGateway = {
 
 export type BrowserSessionRuntime<TGateway extends BrowserSessionRuntimeGateway = BrowserSessionRuntimeGateway> = {
   controlMode: "launch" | "attach";
-  mode: "native" | "polyfill" | "adapter-shim";
+  mode: "native" | "polyfill" | "adapter-shim" | "overlay-bootstrap";
   presentationMode: BridgePresentationMode;
   gateway: TGateway;
   ownerSessionEnded: Promise<void>;
@@ -53,7 +53,7 @@ export type BrowserSessionStatus = {
   targetUrl: string;
   controlMode: BridgeControlMode;
   browserUrl?: string;
-  mode: "native" | "polyfill" | "adapter-shim" | "control-only";
+  mode: "native" | "polyfill" | "adapter-shim" | "overlay-bootstrap" | "control-only";
   presentationMode: BridgePresentationMode;
   preferredPresentationMode: BridgePresentationMode;
   authPolicyMode: AuthPolicyMode;
