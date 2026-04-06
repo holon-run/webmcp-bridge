@@ -1,5 +1,18 @@
 # @webmcp-bridge/adapter-weibo
 
+## 0.7.0
+
+### Minor Changes
+
+- 3a220ef: Start a unified 0.7.x release line for the public bridge packages and refresh host help after attach when bridge runtime toolsets change.
+
+### Patch Changes
+
+- Updated dependencies [3a220ef]
+  - @webmcp-bridge/core@0.7.0
+  - @webmcp-bridge/playwright@0.7.0
+  - @webmcp-bridge/adapter-utils@0.7.0
+
 ## 0.6.1
 
 ### Patch Changes
