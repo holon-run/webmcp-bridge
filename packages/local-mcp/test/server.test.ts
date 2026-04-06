@@ -709,6 +709,122 @@ describe("createLocalMcpStdioServer", () => {
     });
   });
 
+  it("updates overlays locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2bc-update",
+      method: "tools/call",
+      params: {
+        name: "bridge.overlay.update",
+        arguments: {
+          id: "board_fix",
+          enabled: false,
+          tools: [
+            {
+              name: "diagram.get",
+              script: "() => ({ ok: true, updated: true })",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(bridgeControl.updateOverlay).toHaveBeenCalledWith({
+      id: "board_fix",
+      enabled: false,
+      tools: [
+        {
+          name: "diagram.get",
+          script: "() => ({ ok: true, updated: true })",
+        },
+      ],
+    });
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        updated: true,
+        overlay: {
+          id: "x-dom",
+        },
+      },
+    });
+  });
+
+  it("enables overlays locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2bc-enable",
+      method: "tools/call",
+      params: {
+        name: "bridge.overlay.enable",
+        arguments: {
+          id: "board_fix",
+        },
+      },
+    });
+
+    expect(bridgeControl.enableOverlay).toHaveBeenCalledWith("board_fix");
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        enabled: true,
+        overlay: {
+          id: "x-dom",
+          enabled: true,
+        },
+      },
+    });
+  });
+
+  it("disables overlays locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2bc-disable",
+      method: "tools/call",
+      params: {
+        name: "bridge.overlay.disable",
+        arguments: {
+          id: "board_fix",
+        },
+      },
+    });
+
+    expect(bridgeControl.disableOverlay).toHaveBeenCalledWith("board_fix");
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        disabled: true,
+        overlay: {
+          id: "x-dom",
+          enabled: false,
+        },
+      },
+    });
+  });
+
+  it("deletes overlays locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2bc-delete",
+      method: "tools/call",
+      params: {
+        name: "bridge.overlay.delete",
+        arguments: {
+          id: "board_fix",
+        },
+      },
+    });
+
+    expect(bridgeControl.deleteOverlay).toHaveBeenCalledWith("board_fix");
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        deleted: true,
+        id: "board_fix",
+      },
+    });
+  });
+
   it("maps bridge.open headless failures to structured errors", async () => {
     bridgeControl.openWindow.mockRejectedValueOnce(
       new Error(

@@ -95,7 +95,16 @@ function assertToolName(name: string): void {
   }
 }
 
-function normalizeToolRecord(tool: OverlayToolRecord): OverlayToolRecord {
+function normalizeToolRecord(tool: unknown): OverlayToolRecord {
+  if (!isRecord(tool)) {
+    throw new Error("OVERLAY_CONTRACT_ERROR: overlay tool entries must be objects");
+  }
+  if (typeof tool.name !== "string") {
+    throw new Error("OVERLAY_CONTRACT_ERROR: overlay tool name must be a string");
+  }
+  if (typeof tool.script !== "string") {
+    throw new Error(`OVERLAY_CONTRACT_ERROR: overlay tool ${tool.name} script must be a string`);
+  }
   const name = tool.name.trim();
   assertToolName(name);
   const script = tool.script.trim();
@@ -106,15 +115,22 @@ function normalizeToolRecord(tool: OverlayToolRecord): OverlayToolRecord {
     name,
     script,
   };
-  if (tool.description?.trim()) {
+  if (typeof tool.description === "string" && tool.description.trim()) {
     output.description = tool.description.trim();
   }
   if (tool.inputSchema !== undefined) {
-    output.inputSchema = cloneJsonValue(tool.inputSchema);
+    output.inputSchema = cloneJsonValue(tool.inputSchema as JsonValue);
   }
   if (tool.annotations !== undefined) {
+    if (!isRecord(tool.annotations)) {
+      throw new Error(`OVERLAY_CONTRACT_ERROR: overlay tool ${name} annotations must be an object`);
+    }
+    const readOnlyHint = tool.annotations.readOnlyHint;
+    if (readOnlyHint !== undefined && typeof readOnlyHint !== "boolean") {
+      throw new Error(`OVERLAY_CONTRACT_ERROR: overlay tool ${name} annotations.readOnlyHint must be a boolean`);
+    }
     output.annotations = {
-      ...(tool.annotations.readOnlyHint !== undefined ? { readOnlyHint: tool.annotations.readOnlyHint } : {}),
+      ...(readOnlyHint !== undefined ? { readOnlyHint } : {}),
     };
   }
   return output;
@@ -181,7 +197,7 @@ async function executePageFunction(page: Page, script: string, args: JsonValue):
       if (typeof candidate !== "function") {
         throw new Error("script must evaluate to a function");
       }
-      const value = await candidate(scriptArgs ?? {});
+      const value = await candidate(scriptArgs);
       const json = JSON.stringify(value);
       if (json === undefined) {
         throw new Error("script result must be JSON-serializable");
@@ -322,15 +338,16 @@ export class OverlayStore {
   }
 
   async install(options: InstallOverlayOptions): Promise<OverlayRecord> {
-    assertOverlayId(options.id.trim());
-    if (this.overlays.has(options.id)) {
-      throw new Error(`OVERLAY_ALREADY_EXISTS: overlay ${options.id} already exists`);
+    const id = options.id.trim();
+    assertOverlayId(id);
+    if (this.overlays.has(id)) {
+      throw new Error(`OVERLAY_ALREADY_EXISTS: overlay ${id} already exists`);
     }
     if (!Array.isArray(options.tools) || options.tools.length === 0) {
       throw new Error("INVALID_ARGUMENT: overlay tools must be a non-empty array");
     }
     const overlay: OverlayRecord = {
-      id: options.id.trim(),
+      id,
       siteId: this.siteId,
       enabled: options.enabled ?? true,
       ...(options.description?.trim() ? { description: options.description.trim() } : {}),

@@ -574,6 +574,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     preferNative: options.preferNative ?? true,
   };
   const fallbackAdapterFactory = site.createFallbackAdapter;
+  const shouldWaitForPolyfillVisibility = typeof fallbackAdapterFactory === "function";
   if (fallbackAdapterFactory) {
     gatewayOptions.fallbackAdapter = await fallbackAdapterFactory();
   }
@@ -718,14 +719,18 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       } catch (error) {
         throw mapNavigationError(error, targetUrl, "reload");
       }
-      await waitForPolyfillTools(currentGatewaySession).catch(() => {
-        // Overlay bootstrap mode intentionally allows empty toolsets on non-native pages.
-      });
+      if (shouldWaitForPolyfillVisibility) {
+        await waitForPolyfillTools(currentGatewaySession).catch(() => {
+          // Overlay bootstrap mode intentionally allows empty toolsets on non-native pages.
+        });
+      }
       polyfillTools = await currentGatewaySession.listTools();
     } else if (currentGatewaySession.mode === "polyfill") {
-      await waitForPolyfillTools(currentGatewaySession).catch(() => {
-        // Overlay bootstrap mode intentionally allows empty toolsets on non-native pages.
-      });
+      if (shouldWaitForPolyfillVisibility) {
+        await waitForPolyfillTools(currentGatewaySession).catch(() => {
+          // Overlay bootstrap mode intentionally allows empty toolsets on non-native pages.
+        });
+      }
       polyfillTools = await currentGatewaySession.listTools();
     }
     currentMode = resolveBridgeRuntimeMode(
