@@ -4,6 +4,7 @@
   "commit": false,
   "fixed": [
     [
+      "@webmcp-bridge/agent-browser-core",
       "@webmcp-bridge/core",
       "@webmcp-bridge/playwright",
       "@webmcp-bridge/local-mcp",
