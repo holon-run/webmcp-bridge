@@ -120,6 +120,7 @@ describe("createLocalMcpStdioServer", () => {
       id: "x-dom",
       siteId: "board",
       enabled: true,
+      activation: "namespaced" as const,
       tools: [],
       createdAt: "2026-04-06T00:00:00.000Z",
       updatedAt: "2026-04-06T00:00:00.000Z",
@@ -128,6 +129,7 @@ describe("createLocalMcpStdioServer", () => {
       id: "x-dom",
       siteId: "board",
       enabled: true,
+      activation: "namespaced" as const,
       tools: [],
       createdAt: "2026-04-06T00:00:00.000Z",
       updatedAt: "2026-04-06T00:00:00.000Z",
@@ -136,6 +138,7 @@ describe("createLocalMcpStdioServer", () => {
       id: "x-dom",
       siteId: "board",
       enabled: true,
+      activation: "namespaced" as const,
       tools: [],
       createdAt: "2026-04-06T00:00:00.000Z",
       updatedAt: "2026-04-06T00:00:00.000Z",
@@ -144,11 +147,27 @@ describe("createLocalMcpStdioServer", () => {
       id: "x-dom",
       siteId: "board",
       enabled: false,
+      activation: "namespaced" as const,
       tools: [],
       createdAt: "2026-04-06T00:00:00.000Z",
       updatedAt: "2026-04-06T00:00:00.000Z",
     })),
     deleteOverlay: vi.fn(async () => {}),
+    exportOverlay: vi.fn(async () => ({
+      overlay: {
+        id: "board_fix",
+        siteId: "board",
+        enabled: true,
+        activation: "override" as const,
+        tools: [],
+        createdAt: "2026-04-06T00:00:00.000Z",
+        updatedAt: "2026-04-06T00:00:00.000Z",
+      },
+      format: "adapter-draft" as const,
+      outputDir: "/tmp/board-profile/.webmcp-bridge/exports/board_fix",
+      entryFile: "/tmp/board-profile/.webmcp-bridge/exports/board_fix/src/index.ts",
+      files: ["/tmp/board-profile/.webmcp-bridge/exports/board_fix/src/index.ts"],
+    })),
     getPresentationMode: vi.fn(() => "headed" as const),
     setPresentationMode: vi.fn(async () => ({
       site: "board",
@@ -473,6 +492,7 @@ describe("createLocalMcpStdioServer", () => {
         { name: "bridge.overlay.enable" },
         { name: "bridge.overlay.disable" },
         { name: "bridge.overlay.delete" },
+        { name: "bridge.overlay.export" },
         { name: "bridge.open" },
         { name: "bridge.close" },
         { name: "ping" },
@@ -683,6 +703,7 @@ describe("createLocalMcpStdioServer", () => {
               script: "() => ({ ok: true })",
             },
           ],
+          activation: "override",
         },
       },
     });
@@ -690,6 +711,7 @@ describe("createLocalMcpStdioServer", () => {
     expect(bridgeControl.installOverlay).toHaveBeenCalledWith({
       id: "board_fix",
       description: "Board fallback",
+      activation: "override",
       tools: [
         {
           name: "diagram.get",
@@ -725,6 +747,7 @@ describe("createLocalMcpStdioServer", () => {
               script: "() => ({ ok: true, updated: true })",
             },
           ],
+          activation: "override",
         },
       },
     });
@@ -732,6 +755,7 @@ describe("createLocalMcpStdioServer", () => {
     expect(bridgeControl.updateOverlay).toHaveBeenCalledWith({
       id: "board_fix",
       enabled: false,
+      activation: "override",
       tools: [
         {
           name: "diagram.get",
@@ -746,6 +770,30 @@ describe("createLocalMcpStdioServer", () => {
         overlay: {
           id: "x-dom",
         },
+      },
+    });
+  });
+
+  it("exports overlays locally", async () => {
+    const response = await request({
+      jsonrpc: "2.0",
+      id: "2bc-export",
+      method: "tools/call",
+      params: {
+        name: "bridge.overlay.export",
+        arguments: {
+          id: "board_fix",
+        },
+      },
+    });
+
+    expect(bridgeControl.exportOverlay).toHaveBeenCalledWith("board_fix");
+    expect("result" in response ? response.result : undefined).toMatchObject({
+      structuredContent: {
+        ok: true,
+        exported: true,
+        format: "adapter-draft",
+        outputDir: "/tmp/board-profile/.webmcp-bridge/exports/board_fix",
       },
     });
   });

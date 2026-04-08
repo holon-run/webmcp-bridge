@@ -58,6 +58,7 @@ describe("OverlayStore", () => {
     const overlay = await store.install({
       id: "board_fix",
       description: "Board fallback",
+      activation: "override",
       tools: [
         {
           name: "diagram.get",
@@ -69,7 +70,8 @@ describe("OverlayStore", () => {
     });
 
     expect(overlay.id).toBe("board_fix");
-    expect(store.listEnabledToolDefinitions()).toEqual([
+    expect(overlay.activation).toBe("override");
+    expect(store.listEnabledAliasToolDefinitions()).toEqual([
       {
         name: "overlay.board_fix.diagram.get",
         description: "Read board state",
@@ -82,6 +84,7 @@ describe("OverlayStore", () => {
       id: "board_fix",
       siteId: "board",
       enabled: true,
+      activation: "override",
     });
 
     const raw = await readFile(join(profileDir, ".webmcp-bridge", "overlays", "board_fix.json"), "utf8");
@@ -95,6 +98,7 @@ describe("OverlayStore", () => {
           id: "board_fix",
           siteId: "board",
           enabled: true,
+          activation: "override",
         },
       ],
       persistence: {
@@ -114,10 +118,89 @@ describe("OverlayStore", () => {
     });
 
     await store.disable("board_fix");
-    expect(store.listEnabledToolDefinitions()).toEqual([]);
+    expect(store.listEnabledAliasToolDefinitions()).toEqual([]);
 
     await store.delete("board_fix");
     expect(store.list().overlays).toEqual([]);
+  });
+
+  it("rejects conflicting override overlays for the same tool name", async () => {
+    profileDir = await mkdtemp(join(tmpdir(), "webmcp-overlay-store-"));
+    const store = new OverlayStore("board", profileDir);
+    await store.load();
+    await store.install({
+      id: "board_fix",
+      activation: "override",
+      tools: [{ name: "diagram.get", script: "() => ({ ok: true })" }],
+    });
+
+    await expect(
+      store.install({
+        id: "board_fix_2",
+        activation: "override",
+        tools: [{ name: "diagram.get", script: "() => ({ ok: false })" }],
+      }),
+    ).rejects.toThrow("OVERLAY_OVERRIDE_CONFLICT");
+  });
+
+  it("applies override tools canonically while preserving alias tools", async () => {
+    profileDir = await mkdtemp(join(tmpdir(), "webmcp-overlay-store-"));
+    const store = new OverlayStore("board", profileDir);
+    await store.load();
+    await store.install({
+      id: "board_fix",
+      activation: "override",
+      tools: [{ name: "diagram.get", script: "() => ({ ok: true })" }],
+    });
+
+    expect(
+      store.applyOverrideToolDefinitions([
+        { name: "diagram.get", description: "base tool" },
+        { name: "diagram.list", description: "list tool" },
+      ]),
+    ).toEqual([
+      { name: "diagram.get", inputSchema: { type: "object" } },
+      { name: "diagram.list", description: "list tool" },
+    ]);
+    expect(store.list(["diagram.get", "diagram.list"]).overlays[0]).toMatchObject({
+      activation: "override",
+      toolNames: ["diagram.get"],
+      shadowedTools: ["diagram.get"],
+      aliasPrefix: "overlay.board_fix",
+    });
+  });
+
+  it("exports a persisted overlay as an adapter draft directory", async () => {
+    profileDir = await mkdtemp(join(tmpdir(), "webmcp-overlay-store-"));
+    const store = new OverlayStore("board", profileDir);
+    await store.load();
+    const overlay = await store.install({
+      id: "board_fix",
+      tools: [{ name: "diagram.get", script: "() => ({ ok: true })" }],
+    });
+
+    const exported = await store.exportAdapterDraft({
+      id: overlay.id,
+      targetUrl: "https://board.holon.run",
+      siteDisplayName: "Board",
+      hostPatterns: ["board.holon.run"],
+    });
+
+    expect(exported).toMatchObject({
+      format: "adapter-draft",
+      overlay: {
+        id: "board_fix",
+      },
+    });
+    const generatedEntry = await readFile(exported.entryFile, "utf8");
+    expect(generatedEntry).toContain("export const manifest");
+    expect(generatedEntry).toContain("\"diagram.get\"");
+    const generatedPackage = JSON.parse(await readFile(join(exported.outputDir, "package.json"), "utf8")) as {
+      private: boolean;
+      dependencies: Record<string, string>;
+    };
+    expect(generatedPackage.private).toBe(true);
+    expect(generatedPackage.dependencies["@webmcp-bridge/playwright"]).toBe("^0.7.0");
   });
 });
 
@@ -139,6 +222,7 @@ describe("overlay script execution", () => {
           id: "board_fix",
           siteId: "board",
           enabled: true,
+          activation: "namespaced",
           tools: [{ name: "diagram.get", script: "() => ({ ok: true })" }],
           createdAt: "2026-04-06T00:00:00.000Z",
           updatedAt: "2026-04-06T00:00:00.000Z",

@@ -1194,9 +1194,9 @@ describe("startLocalMcpBridge", () => {
           site: "board",
           targetUrl: "https://board.holon.run",
           mode: "overlay-bootstrap",
-          gateway: {
-            listTools: vi.fn(async () => []),
-          },
+      gateway: {
+        listTools: vi.fn(async () => [{ name: "diagram.get", description: "base diagram tool" }]),
+      },
         }),
       ];
       startedRuntimeHandles = [];
@@ -1225,6 +1225,10 @@ describe("startLocalMcpBridge", () => {
       });
       await expect(capturedServerOptions?.gateway.listTools()).resolves.toEqual([
         {
+          name: "diagram.get",
+          description: "base diagram tool",
+        },
+        {
           name: "overlay.board_fix.diagram.get",
           inputSchema: { type: "object" },
         },
@@ -1235,14 +1239,122 @@ describe("startLocalMcpBridge", () => {
         title: "Roadmap",
         source: "overlay",
       });
+      await capturedServerOptions?.gateway.callTool("diagram.get", { title: "Roadmap" });
+      expect(startedRuntimeHandles[0]?.gateway.callTool).toHaveBeenCalledWith("diagram.get", { title: "Roadmap" });
+      await expect(capturedServerOptions?.bridgeControl.listOverlays()).resolves.toMatchObject({
+        overlays: [
+          {
+            id: "board_fix",
+            activation: "namespaced",
+            toolNames: ["diagram.get"],
+            shadowedTools: [],
+            aliasPrefix: "overlay.board_fix",
+          },
+        ],
+      });
 
       const persisted = JSON.parse(
         await readFile(join(profileDir, ".webmcp-bridge", "overlays", "board_fix.json"), "utf8"),
-      ) as { id: string; siteId: string };
+      ) as { id: string; siteId: string; activation: string };
       expect(persisted).toMatchObject({
         id: "board_fix",
         siteId: "native",
+        activation: "namespaced",
       });
+    } finally {
+      await rm(profileDir, { recursive: true, force: true });
+    }
+  });
+
+  it("overrides canonical tool names while keeping overlay aliases", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "webmcp-overlay-override-"));
+    try {
+      runtimeQueue = [
+        createRuntimeHandle({
+          site: "board",
+          targetUrl: "https://board.holon.run",
+          mode: "overlay-bootstrap",
+          gateway: {
+            listTools: vi.fn(async () => [
+              { name: "diagram.get", description: "base diagram tool" },
+              { name: "diagram.list", description: "base list tool" },
+            ]),
+            callTool: vi.fn(async () => ({ ok: true, source: "runtime" })),
+          },
+        }),
+      ];
+      startedRuntimeHandles = [];
+
+      const { startLocalMcpBridge } = await import("../src/bridge.js");
+      await startLocalMcpBridge({
+        url: "https://board.holon.run",
+        userDataDir: profileDir,
+        serviceVersion: "0.1.0-test",
+        input: new PassThrough(),
+      });
+
+      await capturedServerOptions?.bridgeControl.installOverlay({
+        id: "board_fix",
+        activation: "override",
+        tools: [
+          {
+            name: "diagram.get",
+            script: "(input) => ({ title: input.title, source: 'override-overlay' })",
+          },
+        ],
+      });
+
+      await expect(capturedServerOptions?.gateway.listTools()).resolves.toEqual([
+        { name: "diagram.get", inputSchema: { type: "object" } },
+        { name: "diagram.list", description: "base list tool" },
+        { name: "overlay.board_fix.diagram.get", inputSchema: { type: "object" } },
+      ]);
+      await expect(capturedServerOptions?.gateway.callTool("diagram.get", { title: "Roadmap" })).resolves.toEqual({
+        title: "Roadmap",
+        source: "override-overlay",
+      });
+      await expect(capturedServerOptions?.bridgeControl.listOverlays()).resolves.toMatchObject({
+        overlays: [
+          {
+            id: "board_fix",
+            activation: "override",
+            shadowedTools: ["diagram.get"],
+          },
+        ],
+      });
+    } finally {
+      await rm(profileDir, { recursive: true, force: true });
+    }
+  });
+
+  it("exports persisted overlays as local adapter drafts", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "webmcp-overlay-export-"));
+    try {
+      runtimeQueue = [createRuntimeHandle()];
+      startedRuntimeHandles = [];
+
+      const { startLocalMcpBridge } = await import("../src/bridge.js");
+      await startLocalMcpBridge({
+        url: "https://board.holon.run",
+        userDataDir: profileDir,
+        serviceVersion: "0.1.0-test",
+        input: new PassThrough(),
+      });
+
+      await capturedServerOptions?.bridgeControl.installOverlay({
+        id: "board_fix",
+        activation: "override",
+        tools: [{ name: "diagram.get", script: "() => ({ ok: true })" }],
+      });
+
+      const exported = await capturedServerOptions?.bridgeControl.exportOverlay("board_fix");
+      expect(exported).toMatchObject({
+        format: "adapter-draft",
+      });
+      const packageJson = JSON.parse(await readFile(join(exported!.outputDir, "package.json"), "utf8")) as {
+        name: string;
+      };
+      expect(packageJson.name).toContain("native");
     } finally {
       await rm(profileDir, { recursive: true, force: true });
     }

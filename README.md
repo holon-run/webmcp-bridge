@@ -217,8 +217,9 @@ If a page exposes neither native WebMCP nor a configured adapter, local-mcp star
 `overlay-bootstrap` mode instead of failing immediately. In that mode:
 
 - `bridge.debug.eval` can inspect or prototype page-context scripts
-- `bridge.overlay.*` can persist draft namespaced overlay tools
-- installed overlay tools appear as `overlay.<id>.<tool>`
+- `bridge.overlay.*` can persist draft overlay tools, switch them between `namespaced` and `override`, and export adapter drafts
+- installed overlay tools always appear as `overlay.<id>.<tool>`
+- overlays in `override` mode also expose their canonical tool names while preserving the `overlay.<id>.*` aliases
 
 ## Collaborative board demo
 

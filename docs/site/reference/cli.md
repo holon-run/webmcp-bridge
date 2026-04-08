@@ -33,6 +33,7 @@ One process manages one site session.
 - `bridge.overlay.enable`
 - `bridge.overlay.disable`
 - `bridge.overlay.delete`
+- `bridge.overlay.export`
 - `bridge.window.open`
 - `bridge.open`
 - `bridge.close`
@@ -58,6 +59,7 @@ One process manages one site session.
 - `bridge.open` is only valid in `headed` sessions
 - auth-sensitive sites may temporarily expose only `bridge.*` tools while waiting for bootstrap or attach
 - adapterless pages may enter `overlay-bootstrap` mode and expose only bridge tools plus `overlay.<id>.*` tools that you install
+- overlays default to `namespaced`; `activation=override` also exposes the same tool names canonically while keeping the `overlay.<id>.*` aliases
 
 ## Next
 
