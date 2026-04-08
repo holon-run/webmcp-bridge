@@ -21,7 +21,9 @@ import type { Readable, Writable } from "node:stream";
 import { z } from "zod";
 import type { McpCanReapResult, McpToolDefinition } from "./mcp-types.js";
 import type {
+  ExportOverlayResult,
   InstallOverlayOptions,
+  OverlayActivation,
   OverlayListResult,
   OverlayRecord,
   UpdateOverlayOptions,
@@ -75,6 +77,7 @@ export type LocalBridgeControl = {
   enableOverlay: (id: string) => Promise<OverlayRecord>;
   disableOverlay: (id: string) => Promise<OverlayRecord>;
   deleteOverlay: (id: string) => Promise<void>;
+  exportOverlay: (id: string) => Promise<ExportOverlayResult>;
   getPresentationMode: () => BridgePresentationMode;
   setPresentationMode: (options: LocalBridgePresentationModeSetOptions) => Promise<LocalBridgeState>;
   resetProfile: () => Promise<LocalBridgeState>;
@@ -561,13 +564,17 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.overlay.install",
-        description: "Persist a new namespaced overlay and load its tools into the current session.",
+        description: "Persist a new overlay and load its tools into the current session.",
         inputSchema: {
           type: "object",
           properties: {
             id: { type: "string" },
             description: { type: "string" },
             enabled: { type: "boolean" },
+            activation: {
+              type: "string",
+              enum: ["namespaced", "override"],
+            },
             tools: {
               type: "array",
               items: {
@@ -603,6 +610,10 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
             id: { type: "string" },
             description: { type: "string" },
             enabled: { type: "boolean" },
+            activation: {
+              type: "string",
+              enum: ["namespaced", "override"],
+            },
             tools: {
               type: "array",
               items: {
@@ -666,6 +677,18 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         },
       },
       {
+        name: "bridge.overlay.export",
+        description: "Export a persisted overlay as a local TypeScript adapter draft.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+          required: ["id"],
+          additionalProperties: false,
+        },
+      },
+      {
         name: "bridge.open",
         description: "Legacy alias for bridge.window.open.",
         inputSchema: { type: "object", additionalProperties: false },
@@ -696,6 +719,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       name === "bridge.overlay.enable" ||
       name === "bridge.overlay.disable" ||
       name === "bridge.overlay.delete" ||
+      name === "bridge.overlay.export" ||
       name === "bridge.session.mode.get" ||
       name === "bridge.session.mode.set" ||
       name === "bridge.session.stop" ||
@@ -792,6 +816,17 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     });
   }
 
+  private parseOverlayActivation(input: Record<string, unknown>): OverlayActivation | undefined {
+    const activation = input.activation;
+    if (activation === undefined) {
+      return undefined;
+    }
+    if (activation === "namespaced" || activation === "override") {
+      return activation;
+    }
+    throw new Error("INVALID_ARGUMENT: activation must be namespaced or override");
+  }
+
   private parseOverlayInstallOptions(input: Record<string, unknown>): InstallOverlayOptions {
     const options: InstallOverlayOptions = {
       id: this.parseOverlayId(input),
@@ -802,6 +837,10 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     if (typeof input.enabled === "boolean") {
       options.enabled = input.enabled;
+    }
+    const activation = this.parseOverlayActivation(input);
+    if (activation !== undefined) {
+      options.activation = activation;
     }
     return options;
   }
@@ -815,6 +854,10 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     if (typeof input.enabled === "boolean") {
       options.enabled = input.enabled;
+    }
+    const activation = this.parseOverlayActivation(input);
+    if (activation !== undefined) {
+      options.activation = activation;
     }
     const tools = this.parseOverlayTools(input.tools, false);
     if (tools !== undefined) {
@@ -992,6 +1035,18 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
           ok: true,
           id,
           deleted: true,
+        };
+      } catch (error) {
+        return this.toBridgeErrorResult(error);
+      }
+    }
+    if (name === "bridge.overlay.export") {
+      try {
+        const exported = await options.bridgeControl.exportOverlay(this.parseOverlayId(input));
+        return {
+          ok: true,
+          exported: true,
+          ...exported,
         };
       } catch (error) {
         return this.toBridgeErrorResult(error);

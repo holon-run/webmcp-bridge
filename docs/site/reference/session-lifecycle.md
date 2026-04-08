@@ -71,6 +71,20 @@ Use:
 
 After install succeeds, rerun help and the overlay tool will appear as `overlay.draft.page.title.get`.
 
+If the overlay stabilizes and you want it to take over the canonical tool name while keeping the overlay alias for comparison, switch it to override mode:
+
+```bash
+<site>-webmcp-cli bridge.overlay.update '{"id":"draft","activation":"override"}'
+```
+
+To turn a persisted overlay into a local TypeScript adapter draft:
+
+```bash
+<site>-webmcp-cli bridge.overlay.export '{"id":"draft"}'
+```
+
+The export is written under the managed profile at `.webmcp-bridge/exports/<overlayId>/`.
+
 ## Managed vs External
 
 Managed sessions:

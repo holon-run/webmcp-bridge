@@ -270,7 +270,10 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         return [];
       }
       const pageTools = await runtime.gateway.listTools();
-      return [...pageTools, ...overlayStore.listEnabledToolDefinitions()];
+      return [
+        ...overlayStore.applyOverrideToolDefinitions(pageTools),
+        ...overlayStore.listEnabledAliasToolDefinitions(),
+      ];
     },
     callTool: async (name: string, input: Record<string, unknown>) => {
       const runtime = controller.getRuntime();
@@ -282,6 +285,10 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
       const overlayTool = overlayStore.getOverlayTool(name);
       if (overlayTool) {
         return await evaluateOverlayTool(runtime.page, overlayTool.overlay, overlayTool.tool, input);
+      }
+      const overrideTool = overlayStore.getOverrideTool(name);
+      if (overrideTool) {
+        return await evaluateOverlayTool(runtime.page, overrideTool.overlay, overrideTool.tool, input);
       }
       return (await runtime.gateway.callTool(name, input)) as Awaited<
         ReturnType<LocalMcpRuntime["gateway"]["callTool"]>
@@ -328,7 +335,11 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
           }
           return await evaluateDebugScript(runtime.page, script, args);
         },
-        listOverlays: async (): Promise<OverlayListResult> => overlayStore.list(),
+        listOverlays: async (): Promise<OverlayListResult> => {
+          const runtime = controller.getRuntime();
+          const baseTools = runtime ? await runtime.gateway.listTools() : [];
+          return overlayStore.list(baseTools.map((tool) => tool.name));
+        },
         installOverlay: async (installOptions: InstallOverlayOptions): Promise<OverlayRecord> => {
           const overlay = await overlayStore.install(installOptions);
           notifyToolsetMayHaveChanged();
@@ -352,6 +363,15 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         deleteOverlay: async (id: string): Promise<void> => {
           await overlayStore.delete(id);
           notifyToolsetMayHaveChanged();
+        },
+        exportOverlay: async (id: string) => {
+          const exported = await overlayStore.exportAdapterDraft({
+            id,
+            targetUrl,
+            siteDisplayName: siteDefinition.manifest.displayName,
+            hostPatterns: siteDefinition.manifest.hostPatterns,
+          });
+          return exported;
         },
         getPresentationMode: () => controller.getPresentationMode(),
         setPresentationMode: async (setModeOptions: LocalBridgePresentationModeSetOptions) => {
