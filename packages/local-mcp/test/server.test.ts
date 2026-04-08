@@ -155,7 +155,7 @@ describe("createLocalMcpStdioServer", () => {
     deleteOverlay: vi.fn(async () => {}),
     exportOverlay: vi.fn(async () => ({
       overlay: {
-        id: "x-dom",
+        id: "board_fix",
         siteId: "board",
         enabled: true,
         activation: "override" as const,
@@ -164,9 +164,9 @@ describe("createLocalMcpStdioServer", () => {
         updatedAt: "2026-04-06T00:00:00.000Z",
       },
       format: "adapter-draft" as const,
-      outputDir: "/tmp/board-profile/.webmcp-bridge/exports/x-dom",
-      entryFile: "/tmp/board-profile/.webmcp-bridge/exports/x-dom/src/index.ts",
-      files: ["/tmp/board-profile/.webmcp-bridge/exports/x-dom/src/index.ts"],
+      outputDir: "/tmp/board-profile/.webmcp-bridge/exports/board_fix",
+      entryFile: "/tmp/board-profile/.webmcp-bridge/exports/board_fix/src/index.ts",
+      files: ["/tmp/board-profile/.webmcp-bridge/exports/board_fix/src/index.ts"],
     })),
     getPresentationMode: vi.fn(() => "headed" as const),
     setPresentationMode: vi.fn(async () => ({
@@ -793,7 +793,7 @@ describe("createLocalMcpStdioServer", () => {
         ok: true,
         exported: true,
         format: "adapter-draft",
-        outputDir: "/tmp/board-profile/.webmcp-bridge/exports/x-dom",
+        outputDir: "/tmp/board-profile/.webmcp-bridge/exports/board_fix",
       },
     });
   });

@@ -299,15 +299,6 @@ function overlayAliasPrefix(overlayId: string): string {
   return `overlay.${overlayId}`;
 }
 
-function toAliasToolDefinition(overlayId: string, tool: OverlayToolRecord): WebMcpToolDefinition {
-  return {
-    name: `${overlayAliasPrefix(overlayId)}.${tool.name}`,
-    ...(tool.description !== undefined ? { description: tool.description } : {}),
-    ...(tool.inputSchema !== undefined ? { inputSchema: tool.inputSchema } : { inputSchema: { type: "object" } }),
-    ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
-  };
-}
-
 function toCanonicalToolDefinition(tool: OverlayToolRecord): WebMcpToolDefinition {
   return {
     name: tool.name,
@@ -489,7 +480,7 @@ export class OverlayStore {
   async load(): Promise<void> {
     const nextOverlays = new Map<string, OverlayRecord>();
     if (!this.profilePath) {
-      this.overlays.clear();
+      this.commit(nextOverlays);
       return;
     }
     const dirPath = overlayDirectory(this.profilePath);
@@ -499,6 +490,7 @@ export class OverlayStore {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("ENOENT")) {
+        this.commit(nextOverlays);
         return;
       }
       throw error;
@@ -675,6 +667,7 @@ export class OverlayStore {
     }
     const outputDir = overlayExportDirectory(profilePath, overlay.id);
     const srcDir = join(outputDir, "src");
+    await rm(outputDir, { recursive: true, force: true });
     await mkdir(srcDir, { recursive: true });
     const packageName = toPackageName(this.siteId, overlay.id);
     const files = ["README.md", "package.json", "src/index.ts", "tsconfig.json"];
