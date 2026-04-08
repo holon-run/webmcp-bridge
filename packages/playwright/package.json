@@ -1,6 +1,6 @@
 {
   "name": "@webmcp-bridge/playwright",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "description": "Playwright page gateway that uses native WebMCP when available and falls back to injected adapters.",
   "main": "dist/index.js",
