@@ -7,132 +7,106 @@ description: Connect a website to the local-mcp browser bridge through a fixed U
 
 Use this skill to operate `@webmcp-bridge/local-mcp` through one fixed `uxc` shortcut command per site.
 
-If the target site does not expose native WebMCP and does not already have a fallback adapter, switch to `$webmcp-adapter-creator`.
+Keep this skill thin: prefer the published docs for behavior details, and use the docs search API before guessing.
 
 ## Prerequisites
 
 - `uxc` is installed and available in `PATH`.
 - `npx` is installed and available in `PATH`.
 - Network access is available for the target website.
-- On a fresh machine, or under an isolated `HOME`, install Playwright browsers first with `npx playwright install`.
-- For local repo development, you may replace the default `npx -y @webmcp-bridge/local-mcp` launcher with `WEBMCP_LOCAL_MCP_COMMAND='node packages/local-mcp/dist/cli.js'`.
+- On a fresh machine or isolated `HOME`, install Playwright browsers with `npx playwright install`.
+- For local repo development, you may replace the default launcher with `WEBMCP_LOCAL_MCP_COMMAND='node packages/local-mcp/dist/cli.js'`.
 
 ## Docs Search
 
-Use the docs site search when you need current bridge docs before guessing:
+Docs site:
 
-- site: `https://webmcp-bridge.holon.run`
-- API: `https://webmcp-bridge.holon.run/api/search?q=<query>`
+- `https://webmcp-bridge.holon.run`
+
+Docs search API:
+
+- `https://webmcp-bridge.holon.run/api/search?q=<query>`
 
 Typical searches:
 
 - `session lifecycle`
+- `bridge.overlay.export`
+- `overlay-bootstrap`
 - `bridge.session.attach`
-- `weibo article`
-- `x article`
 
-## Core Workflow
+## Quick Workflow
 
-1. Identify the bridge source mode before creating any link:
-   - Native or polyfill target: use `--url <url>`.
-   - Built-in adapter preset: use `--site <site>`.
-   - Third-party adapter module: use `--adapter-module <specifier>` and optionally `--url <url>`.
-2. Pick one stable site name and one site-scoped profile path:
-   - default profile root: `~/.uxc/webmcp-profile/<site>`
-   - never share one profile across different sites
-3. Create or refresh the fixed link for that site:
+1. Pick the source mode:
+   - native/polyfill target: `--url <url>`
+   - built-in fallback adapter: `--site <site>`
+   - third-party adapter: `--adapter-module <specifier>` and optionally `--url <url>`
+2. Use one site-scoped profile:
+   - `~/.uxc/webmcp-profile/<site>`
+3. Create or refresh the fixed link:
    - `command -v <site>-webmcp-cli`
-   - if the link is missing or the source config changed, run `skills/webmcp-bridge/scripts/ensure-links.sh`
-4. Inspect the bridge and tool schema before calling tools:
+   - `skills/webmcp-bridge/scripts/ensure-links.sh --name <site> ...`
+4. Inspect help before calling tools:
    - `<site>-webmcp-cli -h`
    - `<site>-webmcp-cli <operation> -h`
    - `<site>-webmcp-cli <operation> field=value`
    - `<site>-webmcp-cli <operation> '{"field":"value"}'`
-5. Treat presentation mode as explicit runtime state, not command-name intent:
-   - check current state with `<site>-webmcp-cli bridge.session.status`
-   - or `<site>-webmcp-cli bridge.session.mode.get`
-   - `--headless` or `--no-headless` only sets the preferred default for bridge-managed sessions
-   - the actual runtime mode is `presentationMode`
-6. Switch modes explicitly when needed:
-   - for normal automation, stay in `headless`
-   - for login, MFA, or human collaboration, run `<site>-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'`
-   - then open or focus the visible session with `<site>-webmcp-cli bridge.open`
-   - if the user manually closes that window, the headed owner session ends; run `bridge.open` again to start a new headed session on the same profile
-   - close the visible owner session with `<site>-webmcp-cli bridge.close`
-7. Parse JSON output only:
-   - success path: `.ok == true`, consume `.data`
-   - failure path: `.ok == false`, inspect `.error.code` and `.error.message`
-
-## When Only Bridge Tools Are Visible
-
-If `<site>-webmcp-cli -h` only shows `bridge.*` tools, do not keep retrying site tools blindly. The bridge is alive, but the page runtime is not attached to site tools yet.
-
-Use this recovery order:
-
-1. Inspect session state first:
+5. Treat presentation mode as live state, not launcher intent:
    - `<site>-webmcp-cli bridge.session.status`
-2. If the session is bootstrap-only or auth is incomplete:
-   - run `<site>-webmcp-cli bridge.session.bootstrap`
-   - complete login in the browser window
-   - then re-run `<site>-webmcp-cli -h`
-3. If a browser/profile already exists but the session is not attached to page tools:
-   - run `<site>-webmcp-cli bridge.session.attach`
-   - then re-run `<site>-webmcp-cli -h`
-4. If the task needs a visible browser:
-   - run `<site>-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'`
-   - run `<site>-webmcp-cli bridge.open`
-5. Only call site operations after help output shows site tools again.
+   - `<site>-webmcp-cli bridge.session.mode.get`
+   - `<site>-webmcp-cli bridge.session.mode.set '{"mode":"headed"}'`
+   - `<site>-webmcp-cli bridge.open`
 
-For auth-sensitive adapter sites such as `x` and `google`, seeing only bridge tools during first use is expected until bootstrap or attach completes successfully.
+## When Only `bridge.*` Tools Are Visible
 
-## Link Contract
+Start with:
 
-Every site gets one fixed command:
+- `<site>-webmcp-cli bridge.session.status`
 
-- `<site>-webmcp-cli`
+Then follow the state:
 
-The link must keep one stable site profile and daemon lock:
+- bootstrap/auth incomplete: `<site>-webmcp-cli bridge.session.bootstrap`
+- existing profile/browser should attach: `<site>-webmcp-cli bridge.session.attach`
+- adapterless/native-missing page in `overlay-bootstrap`: use
+  - `<site>-webmcp-cli bridge.debug.eval '{"script":"() => document.title"}'`
+  - `<site>-webmcp-cli bridge.overlay.install '{"id":"draft","tools":[{"name":"page.title.get","script":"() => ({ title: document.title })"}]}'`
+  - `<site>-webmcp-cli bridge.overlay.update '{"id":"draft","activation":"override"}'`
+  - `<site>-webmcp-cli bridge.overlay.export '{"id":"draft"}'`
 
-- profile path: `~/.uxc/webmcp-profile/<site>`
-- daemon key: same as profile path
+Do not switch to `$webmcp-adapter-creator` just because a page has no formal adapter yet. Use overlay bootstrap first; switch to adapter creation when you want to promote a stable reusable adapter.
 
-The generated command should default to:
+## Canonical Docs
 
-- use `--headless`
-- use `--no-auto-login-fallback`
+- CLI reference:
+  - `https://webmcp-bridge.holon.run/reference/cli`
+- Session lifecycle:
+  - `https://webmcp-bridge.holon.run/reference/session-lifecycle`
+- Architecture:
+  - `https://webmcp-bridge.holon.run/reference/architecture`
+- Adapter authoring:
+  - `https://webmcp-bridge.holon.run/adapters`
+- Docs search API:
+  - `https://webmcp-bridge.holon.run/api/search?q=<query>`
 
-This keeps automation deterministic while still allowing runtime switching through:
+## Local References
 
-- `bridge.session.mode.get`
-- `bridge.session.mode.set`
-- `bridge.open`
-- `bridge.close`
-
-Do not treat one command invocation as a guarantee that the current runtime has already switched. Always inspect `presentationMode` when mode matters.
+- Usage patterns:
+  - `references/usage-patterns.md`
+- Source modes:
+  - `references/source-modes.md`
+- Link patterns:
+  - `references/link-patterns.md`
+- Troubleshooting:
+  - `references/troubleshooting.md`
+- Link creation helper:
+  - `scripts/ensure-links.sh`
 
 ## Guardrails
 
 - Prefer browser-side execution for privileged site actions. Do not move site credentials into local scripts.
-- Do not share one `--user-data-dir` across multiple unrelated sites.
-- Do not dynamically rename link commands at runtime. The skill author chooses the link name once.
-- For managed sessions, use `bridge.session.mode.set` instead of relying on a new launcher invocation to force a mode change.
-- For external attach sessions, `bridge.session.mode.set` is unavailable. Attach to a headed external browser if the task needs a visible window.
-- During `bootstrap_then_attach`, bootstrap is always `headed`. Do not try to switch mode until attach completes.
-- `bridge.open` and `bridge.window.open` return `UNSUPPORTED_IN_HEADLESS_SESSION` when the current runtime is `headless`.
+- Do not share one `--user-data-dir` across unrelated sites.
+- Use `bridge.session.mode.set` for managed sessions instead of assuming a fresh launcher invocation changes the live runtime.
+- External attach sessions cannot be mode-switched by the bridge.
+- `bridge.open` and `bridge.window.open` fail in headless sessions.
 - For destructive writes, inspect tool help first and require explicit user intent.
-- Use `--url` only for the site the user asked for. Do not silently redirect hosts.
-
-## References
-
-- Common creation and invocation patterns:
-  - `references/usage-patterns.md`
-- Source mode selection and argument mapping:
-  - `references/source-modes.md`
-- Link patterns, naming, and profile layout:
-  - `references/link-patterns.md`
-- Common failures and recovery steps:
-  - `references/troubleshooting.md`
-- Concrete creation script:
-  - `scripts/ensure-links.sh`
-- If the behavior still looks like a bridge or adapter bug after local verification:
-  - open an issue at `https://github.com/holon-run/webmcp-bridge/issues`
+- If behavior still looks wrong after checking the docs search, open an issue:
+  - `https://github.com/holon-run/webmcp-bridge/issues`
