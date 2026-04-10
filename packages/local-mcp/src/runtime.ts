@@ -786,19 +786,14 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       site.manifest.hostPatterns,
     );
     if (recoveryNavigationUrl) {
+      const recoveryTimeoutMs = options.navigationTimeoutMs ?? resolveNavigationTimeoutMs(recoveryNavigationUrl);
       try {
-        const recoveryTimeoutMs = options.navigationTimeoutMs ?? resolveNavigationTimeoutMs(recoveryNavigationUrl);
         await currentPage.goto(recoveryNavigationUrl, {
           waitUntil: "domcontentloaded",
           timeout: recoveryTimeoutMs,
         });
       } catch (error) {
-        throw mapNavigationError(
-          error,
-          recoveryNavigationUrl,
-          "goto",
-          options.navigationTimeoutMs ?? resolveNavigationTimeoutMs(recoveryNavigationUrl),
-        );
+        throw mapNavigationError(error, recoveryNavigationUrl, "goto", recoveryTimeoutMs);
       }
     }
     await initializePageSession(false);

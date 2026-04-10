@@ -76,8 +76,11 @@ function parseFlagValue(args: string[], index: number, flag: string): string {
 }
 
 function parsePositiveInteger(value: string, flag: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`invalid value for ${flag}: ${value}`);
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`invalid value for ${flag}: ${value}`);
   }
   return parsed;

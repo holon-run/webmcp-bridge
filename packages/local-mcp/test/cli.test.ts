@@ -68,6 +68,12 @@ describe("parseCliArgs", () => {
     );
   });
 
+  it("rejects partially numeric navigation timeout values", () => {
+    expect(() => parseCliArgs(["--site", "x", "--navigation-timeout-ms", "25000ms"])).toThrow(
+      "invalid value for --navigation-timeout-ms: 25000ms",
+    );
+  });
+
   it("parses external adapter module", () => {
     const parsed = parseCliArgs(["--adapter-module", "@example/webmcp-adapter"]);
     expect(parsed.adapterModule).toBe("@example/webmcp-adapter");
