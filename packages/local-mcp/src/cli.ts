@@ -47,6 +47,7 @@ Optional:
   --auto-login-fallback        Auto-switch to headed mode when auth is required in headless mode (default: true)
   --no-auto-login-fallback     Disable auto-switch login fallback
   --user-data-dir <path>       Playwright persistent profile directory
+  --navigation-timeout-ms <n>  Override page navigation timeout in milliseconds
   --service-version <value>    MCP server version string (default: ${DEFAULT_SERVICE_VERSION})
   --help                       Show this help message
 `;
@@ -62,6 +63,7 @@ export type LocalMcpCliOptions = {
   preferredPresentationMode: BridgePresentationMode;
   autoLoginFallback: boolean;
   userDataDir?: string;
+  navigationTimeoutMs?: number;
   serviceVersion: string;
 };
 
@@ -71,6 +73,14 @@ function parseFlagValue(args: string[], index: number, flag: string): string {
     throw new Error(`missing value for ${flag}`);
   }
   return value;
+}
+
+function parsePositiveInteger(value: string, flag: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`invalid value for ${flag}: ${value}`);
+  }
+  return parsed;
 }
 
 export function parseCliArgs(args: string[]): LocalMcpCliOptions {
@@ -84,6 +94,7 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
   let preferredPresentationMode: BridgePresentationMode = "headed";
   let autoLoginFallback = true;
   let userDataDir: string | undefined;
+  let navigationTimeoutMs: number | undefined;
   let serviceVersion = DEFAULT_SERVICE_VERSION;
 
   for (let i = 0; i < args.length; i += 1) {
@@ -164,6 +175,15 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
       continue;
     }
 
+    if (arg === "--navigation-timeout-ms") {
+      navigationTimeoutMs = parsePositiveInteger(
+        parseFlagValue(args, i, "--navigation-timeout-ms"),
+        "--navigation-timeout-ms",
+      );
+      i += 1;
+      continue;
+    }
+
     if (arg === "--auto-login-fallback") {
       autoLoginFallback = true;
       continue;
@@ -221,6 +241,14 @@ export function parseCliArgs(args: string[]): LocalMcpCliOptions {
   }
   if (userDataDir !== undefined) {
     options.userDataDir = userDataDir;
+  }
+  if (navigationTimeoutMs !== undefined) {
+    options.navigationTimeoutMs = navigationTimeoutMs;
+  } else {
+    const envValue = process.env.WEBMCP_NAVIGATION_TIMEOUT_MS?.trim();
+    if (envValue) {
+      options.navigationTimeoutMs = parsePositiveInteger(envValue, "WEBMCP_NAVIGATION_TIMEOUT_MS");
+    }
   }
 
   return options;

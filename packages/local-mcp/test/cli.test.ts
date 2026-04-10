@@ -3,7 +3,7 @@
  * It depends on CLI and site modules to validate deterministic startup option handling.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -18,6 +18,10 @@ const packageVersion = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
 };
 
 describe("parseCliArgs", () => {
+  afterEach(() => {
+    delete process.env.WEBMCP_NAVIGATION_TIMEOUT_MS;
+  });
+
   it("parses built-in site with optional flags", () => {
     const parsed = parseCliArgs([
       "--site",
@@ -39,6 +43,29 @@ describe("parseCliArgs", () => {
       autoLoginFallback: true,
       serviceVersion: "0.2.0",
     });
+  });
+
+  it("parses a navigation timeout override", () => {
+    const parsed = parseCliArgs(["--site", "x", "--navigation-timeout-ms", "20000"]);
+    expect(parsed.navigationTimeoutMs).toBe(20000);
+  });
+
+  it("reads navigation timeout from the environment", () => {
+    process.env.WEBMCP_NAVIGATION_TIMEOUT_MS = "25000";
+    const parsed = parseCliArgs(["--site", "x"]);
+    expect(parsed.navigationTimeoutMs).toBe(25000);
+  });
+
+  it("lets the CLI flag override the environment timeout", () => {
+    process.env.WEBMCP_NAVIGATION_TIMEOUT_MS = "25000";
+    const parsed = parseCliArgs(["--site", "x", "--navigation-timeout-ms", "18000"]);
+    expect(parsed.navigationTimeoutMs).toBe(18000);
+  });
+
+  it("rejects invalid navigation timeout values", () => {
+    expect(() => parseCliArgs(["--site", "x", "--navigation-timeout-ms", "0"])).toThrow(
+      "invalid value for --navigation-timeout-ms: 0",
+    );
   });
 
   it("parses external adapter module", () => {

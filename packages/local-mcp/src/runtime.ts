@@ -29,7 +29,8 @@ import type { LocalMcpGateway } from "./server.js";
 import { resolveAuthPolicy, type BridgePresentationMode } from "./session.js";
 import type { SiteDefinition } from "./sites.js";
 
-const NAVIGATION_TIMEOUT_MS = 5_000;
+const LOCAL_NAVIGATION_TIMEOUT_MS = 5_000;
+const REMOTE_NAVIGATION_TIMEOUT_MS = 30_000;
 const LAUNCH_RETRY_DELAY_MS = 750;
 const MAX_LAUNCH_ATTEMPTS = 2;
 const GATEWAY_RECOVERABLE_ERROR_SNIPPETS = [
@@ -66,6 +67,7 @@ export type LocalMcpRuntimeOptions = {
   preferredPresentationMode?: BridgePresentationMode;
   userDataDir?: string;
   preferNative?: boolean;
+  navigationTimeoutMs?: number;
 };
 
 export type LocalMcpRuntime = {
@@ -448,7 +450,12 @@ export function resolveBridgeRuntimeMode(
   return gatewayMode;
 }
 
-export function mapNavigationError(error: unknown, targetUrl: string, phase: "goto" | "reload"): Error {
+export function mapNavigationError(
+  error: unknown,
+  targetUrl: string,
+  phase: "goto" | "reload",
+  timeoutMs?: number,
+): Error {
   const message = extractErrorMessage(error);
   const normalizedPhase = phase === "goto" ? "open" : "reload";
   if (
@@ -461,9 +468,35 @@ export function mapNavigationError(error: unknown, targetUrl: string, phase: "go
     return new Error(`TARGET_UNREACHABLE: failed to ${normalizedPhase} ${targetUrl}: ${message}`);
   }
   if (message.toLowerCase().includes("timeout")) {
-    return new Error(`NAVIGATION_TIMEOUT: timed out trying to ${normalizedPhase} ${targetUrl}: ${message}`);
+    const timeoutHint =
+      timeoutMs !== undefined
+        ? ` current timeout=${timeoutMs}ms; increase it with --navigation-timeout-ms or WEBMCP_NAVIGATION_TIMEOUT_MS.`
+        : " increase it with --navigation-timeout-ms or WEBMCP_NAVIGATION_TIMEOUT_MS.";
+    return new Error(
+      `NAVIGATION_TIMEOUT: timed out trying to ${normalizedPhase} ${targetUrl}:${timeoutHint} ${message}`,
+    );
   }
   return new Error(`NAVIGATION_FAILED: failed to ${normalizedPhase} ${targetUrl}: ${message}`);
+}
+
+export function resolveNavigationTimeoutMs(targetUrl: string): number {
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return LOCAL_NAVIGATION_TIMEOUT_MS;
+    }
+    if (
+      parsed.hostname === "localhost" ||
+      parsed.hostname === "127.0.0.1" ||
+      parsed.hostname === "::1"
+    ) {
+      return LOCAL_NAVIGATION_TIMEOUT_MS;
+    }
+  } catch {
+    // Non-HTTP targets should use the conservative local timeout.
+    return LOCAL_NAVIGATION_TIMEOUT_MS;
+  }
+  return REMOTE_NAVIGATION_TIMEOUT_MS;
 }
 
 async function waitForPolyfillTools(
@@ -506,6 +539,7 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
   }
   const browserType = resolveBrowserType(browserEngine);
   const targetUrl = resolveTargetUrl(options.url, site.manifest.defaultUrl);
+  const navigationTimeoutMs = options.navigationTimeoutMs ?? resolveNavigationTimeoutMs(targetUrl);
   const controlMode = browserUrl ? "attach" : "launch";
   if (!isUrlAllowed(targetUrl, site.manifest.hostPatterns)) {
     throw new Error("URL_NOT_ALLOWED: target url host is not allowed by adapter hostPatterns");
@@ -687,10 +721,10 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       try {
         await pageForEvents.goto(targetUrl, {
           waitUntil: "domcontentloaded",
-          timeout: NAVIGATION_TIMEOUT_MS,
+          timeout: navigationTimeoutMs,
         });
       } catch (error) {
-        throw mapNavigationError(error, targetUrl, "goto");
+        throw mapNavigationError(error, targetUrl, "goto", navigationTimeoutMs);
       }
     }
 
@@ -714,10 +748,10 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
       try {
         await pageForEvents.reload({
           waitUntil: "domcontentloaded",
-          timeout: NAVIGATION_TIMEOUT_MS,
+          timeout: navigationTimeoutMs,
         });
       } catch (error) {
-        throw mapNavigationError(error, targetUrl, "reload");
+        throw mapNavigationError(error, targetUrl, "reload", navigationTimeoutMs);
       }
       if (shouldWaitForPolyfillVisibility) {
         await waitForPolyfillTools(currentGatewaySession).catch(() => {
@@ -753,12 +787,18 @@ export async function startLocalMcpRuntime(options: LocalMcpRuntimeOptions): Pro
     );
     if (recoveryNavigationUrl) {
       try {
+        const recoveryTimeoutMs = options.navigationTimeoutMs ?? resolveNavigationTimeoutMs(recoveryNavigationUrl);
         await currentPage.goto(recoveryNavigationUrl, {
           waitUntil: "domcontentloaded",
-          timeout: NAVIGATION_TIMEOUT_MS,
+          timeout: recoveryTimeoutMs,
         });
       } catch (error) {
-        throw mapNavigationError(error, recoveryNavigationUrl, "goto");
+        throw mapNavigationError(
+          error,
+          recoveryNavigationUrl,
+          "goto",
+          options.navigationTimeoutMs ?? resolveNavigationTimeoutMs(recoveryNavigationUrl),
+        );
       }
     }
     await initializePageSession(false);
