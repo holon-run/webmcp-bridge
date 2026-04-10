@@ -1,6 +1,6 @@
 {
   "name": "@webmcp-bridge/adapter-google",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "type": "module",
   "description": "Fallback WebMCP adapter for Google Search and Gemini when native WebMCP is unavailable.",
   "main": "dist/index.js",
