@@ -57,6 +57,7 @@ export type StartLocalMcpBridgeOptions = {
   preferredPresentationMode?: BridgePresentationMode;
   userDataDir?: string;
   preferNative?: boolean;
+  navigationTimeoutMs?: number;
   serviceVersion: string;
   autoLoginFallback?: boolean;
   input?: Readable;
@@ -86,6 +87,7 @@ type RuntimeStartOptions = {
   userDataDir?: string;
   preferNative?: boolean;
   autoLoginFallback?: boolean;
+  navigationTimeoutMs?: number;
 };
 
 async function resolveSiteDefinitionFromBridgeOptions(options: StartLocalMcpBridgeOptions): Promise<SiteDefinition> {
@@ -141,6 +143,9 @@ function buildRuntimeStartOptions(
   }
   if (baseOptions.preferNative !== undefined) {
     nextOptions.preferNative = baseOptions.preferNative;
+  }
+  if (baseOptions.navigationTimeoutMs !== undefined) {
+    nextOptions.navigationTimeoutMs = baseOptions.navigationTimeoutMs;
   }
   if (baseOptions.autoLoginFallback !== undefined) {
     nextOptions.autoLoginFallback = baseOptions.autoLoginFallback;

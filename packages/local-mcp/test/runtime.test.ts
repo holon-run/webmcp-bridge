@@ -9,6 +9,7 @@ import {
   isRecoverableGatewayError,
   isUrlAllowed,
   mapNavigationError,
+  resolveNavigationTimeoutMs,
   resolveBridgeRuntimeMode,
   resolveCdpConnectUrl,
   resolveCdpVersionEndpoint,
@@ -78,9 +79,28 @@ describe("mapNavigationError", () => {
       new Error("page.goto: Timeout 5000ms exceeded."),
       "http://127.0.0.1:4173",
       "goto",
+      5000,
     );
 
     expect(error.message).toContain("NAVIGATION_TIMEOUT");
+    expect(error.message).toContain("--navigation-timeout-ms");
+    expect(error.message).toContain("current timeout=5000ms");
+  });
+});
+
+describe("resolveNavigationTimeoutMs", () => {
+  it("keeps localhost targets on the fast-fail timeout", () => {
+    expect(resolveNavigationTimeoutMs("http://127.0.0.1:4173")).toBe(5000);
+    expect(resolveNavigationTimeoutMs("http://localhost:4173")).toBe(5000);
+  });
+
+  it("gives remote https targets more time to cold-start", () => {
+    expect(resolveNavigationTimeoutMs("https://x.com/home")).toBe(30000);
+    expect(resolveNavigationTimeoutMs("https://gemini.google.com/app")).toBe(30000);
+  });
+
+  it("falls back to the local timeout for non-url targets", () => {
+    expect(resolveNavigationTimeoutMs("about:blank")).toBe(5000);
   });
 });
 
