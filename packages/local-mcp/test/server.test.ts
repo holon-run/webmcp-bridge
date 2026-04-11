@@ -465,6 +465,62 @@ describe("createLocalMcpStdioServer", () => {
     ).toBeTypeOf("number");
   });
 
+  it("emits a waiting_for_human lifecycle snapshot for bootstrap state", async () => {
+    bridgeControl.getState.mockReturnValueOnce({
+      site: "board",
+      targetUrl: "http://127.0.0.1:4173",
+      controlMode: "bootstrap",
+      authPolicyMode: "bootstrap_then_attach",
+      authState: "auth_required",
+      sessionState: "bootstrap_active",
+      ownership: "external",
+      mode: "control-only",
+      presentationMode: "headed",
+      preferredPresentationMode: "headed",
+      profilePath: "/tmp/board-profile",
+    } as unknown as BridgeState);
+
+    await request({
+      jsonrpc: "2.0",
+      id: "2a-init",
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {
+            listChanged: true,
+          },
+        },
+        clientInfo: {
+          name: "test-client",
+          version: "0.1.0-test",
+        },
+      },
+    });
+
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      })}\n`,
+    );
+
+    await waitFor(() =>
+      frames.some(
+        (frame) => frame.method === "notifications/uxc.lifecycle_changed",
+      ),
+    );
+    const notification = frames.find(
+      (frame) => frame.method === "notifications/uxc.lifecycle_changed",
+    );
+    expect(notification?.params).toMatchObject({
+      auto_reap_allowed: false,
+      retention_reason: "waiting_for_human",
+      retry_after_secs: 30,
+    } satisfies Partial<McpLifecycleSnapshot>);
+  });
+
   it("emits lifecycle updates when lifecycle listener reports auto-reapable state", async () => {
     await request({
       jsonrpc: "2.0",

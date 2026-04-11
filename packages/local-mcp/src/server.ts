@@ -358,19 +358,19 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     if (!force && this.lastLifecycleSignature === signature) {
       return;
     }
-    this.lastLifecycleSignature = signature;
-    await this.server
-      .notification({
+    try {
+      await this.server.notification({
         method: "notifications/uxc.lifecycle_changed",
         params: {
           ...baseSnapshot,
           updated_at_unix: Math.floor(Date.now() / 1000),
         },
       })
-      .catch(() => {
-        // Lifecycle notification delivery is best-effort; the next state change or request
-        // can refresh the snapshot again.
-      });
+      this.lastLifecycleSignature = signature;
+    } catch {
+      // Lifecycle notification delivery is best-effort; the next state change can refresh
+      // the snapshot again because the last delivered signature remains unchanged.
+    }
   }
 
   private toMcpResourceDefinition(
