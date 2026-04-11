@@ -200,7 +200,17 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
   let server: LocalMcpStdioServer | undefined;
   let closeRequested = false;
   let closeResources: () => Promise<void> = async () => {};
+  const lifecycleListeners = new Set<() => void>();
   const toolsetListeners = new Set<() => void>();
+  const notifyLifecycleMayHaveChanged = (): void => {
+    for (const listener of lifecycleListeners) {
+      try {
+        listener();
+      } catch (error) {
+        options.onError?.(error);
+      }
+    }
+  };
   const notifyToolsetMayHaveChanged = (): void => {
     for (const listener of toolsetListeners) {
       try {
@@ -249,6 +259,10 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
   const unsubscribeControllerToolset = controller.onToolsetMayHaveChanged(() => {
     notifyToolsetMayHaveChanged();
   });
+  const unsubscribeControllerState = controller.onStateChanged(() => {
+    lastState = toLocalBridgeState(controller.getState());
+    notifyLifecycleMayHaveChanged();
+  });
   let closed = false;
   let lastState = toLocalBridgeState(controller.getState());
 
@@ -259,6 +273,7 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
     closed = true;
     lastState = toLocalBridgeState(controller.getState());
     unsubscribeControllerToolset();
+    unsubscribeControllerState();
     const activeServer = server;
     server = undefined;
     const results = await Promise.allSettled([activeServer?.close(), controller.close()]);
@@ -394,6 +409,12 @@ export async function startLocalMcpBridge(options: StartLocalMcpBridgeOptions): 
         },
       },
       serviceVersion: options.serviceVersion,
+      onLifecycleMayHaveChanged: (listener) => {
+        lifecycleListeners.add(listener);
+        return () => {
+          lifecycleListeners.delete(listener);
+        };
+      },
       onToolsetMayHaveChanged: (listener) => {
         toolsetListeners.add(listener);
         return () => {

@@ -70,6 +70,7 @@ describe("createLocalMcpStdioServer", () => {
   const onResourceUpdated = vi.fn<LocalMcpGateway["onResourceUpdated"]>(
     () => () => {},
   );
+  let lifecycleChangedListener: (() => void) | undefined;
   let toolsetChangedListener: (() => void) | undefined;
 
   const gateway = {
@@ -258,6 +259,14 @@ describe("createLocalMcpStdioServer", () => {
       gateway,
       bridgeControl,
       serviceVersion: "0.1.0-test",
+      onLifecycleMayHaveChanged: (listener) => {
+        lifecycleChangedListener = listener;
+        return () => {
+          if (lifecycleChangedListener === listener) {
+            lifecycleChangedListener = undefined;
+          }
+        };
+      },
       onToolsetMayHaveChanged: (listener) => {
         toolsetChangedListener = listener;
         return () => {
@@ -456,7 +465,7 @@ describe("createLocalMcpStdioServer", () => {
     ).toBeTypeOf("number");
   });
 
-  it("emits lifecycle updates when state becomes auto-reapable", async () => {
+  it("emits lifecycle updates when lifecycle listener reports auto-reapable state", async () => {
     await request({
       jsonrpc: "2.0",
       id: "3-init",
@@ -503,15 +512,7 @@ describe("createLocalMcpStdioServer", () => {
     } as unknown as BridgeState);
 
     const beforeCount = frames.length;
-    await request({
-      jsonrpc: "2.0",
-      id: "3a",
-      method: "tools/call",
-      params: {
-        name: "ping",
-        arguments: {},
-      },
-    });
+    lifecycleChangedListener?.();
 
     await waitFor(() =>
       frames
@@ -1270,12 +1271,12 @@ describe("createLocalMcpStdioServer", () => {
     expect("error" in response ? response.error.code : undefined).toBe(-32601);
   });
 
-  it("does not respond to notifications", async () => {
+  it("does not respond to unrelated notifications", async () => {
     const beforeCount = frames.length;
     input.write(
       `${JSON.stringify({
         jsonrpc: "2.0",
-        method: "notifications/initialized",
+        method: "notifications/example",
         params: {},
       })}\n`,
     );
