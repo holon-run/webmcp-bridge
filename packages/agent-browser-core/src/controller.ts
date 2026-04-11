@@ -74,6 +74,7 @@ export type BrowserSessionController<
 > = {
   getState: () => BrowserSessionStatus;
   getRuntime: () => TRuntime | undefined;
+  onStateChanged: (listener: () => void) => () => void;
   onResourceUpdated: (listener: (uri: string) => void) => () => void;
   onToolsetMayHaveChanged: (listener: () => void) => () => void;
   openWindow: () => Promise<"focused" | "opened">;
@@ -148,7 +149,9 @@ export async function startBrowserSessionController<
   let unsubscribeRuntimeResourceUpdates: (() => void) | undefined;
   let ownerSessionGeneration = 0;
   const resourceUpdatedListeners = new Set<(uri: string) => void>();
+  const stateChangedListeners = new Set<() => void>();
   const toolsetChangedListeners = new Set<() => void>();
+  let lastStateSignature: string | undefined;
 
   const metadataFallback = options.profilePath
     ? {
@@ -178,6 +181,21 @@ export async function startBrowserSessionController<
     return state;
   };
 
+  const notifyStateChanged = (): void => {
+    const signature = JSON.stringify(refreshStatus());
+    if (lastStateSignature === signature) {
+      return;
+    }
+    lastStateSignature = signature;
+    for (const listener of stateChangedListeners) {
+      try {
+        listener();
+      } catch (error) {
+        options.onError?.(error);
+      }
+    }
+  };
+
   const syncFromMetadata = (nextMetadata: SessionMetadata): void => {
     metadata = nextMetadata;
     controlMode = nextMetadata.controlMode;
@@ -193,6 +211,7 @@ export async function startBrowserSessionController<
       runtimeMode = "control-only";
       presentationMode = nextMetadata.controlMode === "bootstrap" ? "headed" : nextMetadata.presentationMode;
     }
+    notifyStateChanged();
   };
 
   const writeMetadata = async (patch: SessionMetadataPatch): Promise<void> => {
@@ -282,6 +301,7 @@ export async function startBrowserSessionController<
     }
     browserUrl = undefined;
     browserPid = undefined;
+    notifyStateChanged();
   };
 
   const bindRuntime = (nextRuntime: TRuntime, nextOwnership: BridgeSessionOwnership): void => {
@@ -305,6 +325,7 @@ export async function startBrowserSessionController<
       }
       notifyCloseRequested();
     });
+    notifyStateChanged();
   };
 
   const clearRuntime = (): void => {
@@ -313,6 +334,7 @@ export async function startBrowserSessionController<
     unsubscribeRuntimeResourceUpdates?.();
     unsubscribeRuntimeResourceUpdates = undefined;
     notifyToolsetMayHaveChanged();
+    notifyStateChanged();
   };
 
   const closeRuntime = async (): Promise<void> => {
@@ -405,6 +427,7 @@ export async function startBrowserSessionController<
     }
     await writeMetadata(bootstrapPatch);
     notifyToolsetMayHaveChanged();
+    notifyStateChanged();
     return refreshStatus();
   };
 
@@ -429,6 +452,7 @@ export async function startBrowserSessionController<
     preferredPresentationMode = "headed";
     await writeMetadata(bootstrapPatch);
     notifyToolsetMayHaveChanged();
+    notifyStateChanged();
     return refreshStatus();
   };
 
@@ -458,6 +482,7 @@ export async function startBrowserSessionController<
       runtimePatch.browserPid = nextBrowserPid ?? null;
       await writeMetadata(runtimePatch);
     }
+    notifyStateChanged();
     return refreshStatus();
   };
 
@@ -627,6 +652,7 @@ export async function startBrowserSessionController<
           preferredPresentationMode,
         });
       }
+      notifyStateChanged();
       return refreshStatus();
     }
     if (controlMode === "attach") {
@@ -751,6 +777,12 @@ export async function startBrowserSessionController<
   const controller: BrowserSessionController<TRuntime> = {
     getState: refreshStatus,
     getRuntime: () => runtime,
+    onStateChanged: (listener) => {
+      stateChangedListeners.add(listener);
+      return () => {
+        stateChangedListeners.delete(listener);
+      };
+    },
     onResourceUpdated: (listener) => {
       resourceUpdatedListeners.add(listener);
       return () => {

@@ -105,6 +105,7 @@ export type LocalMcpStdioServerOptions = {
   gateway: LocalMcpGateway;
   bridgeControl: LocalBridgeControl;
   serviceVersion: string;
+  onLifecycleMayHaveChanged?: (listener: () => void) => () => void;
   onToolsetMayHaveChanged?: (listener: () => void) => () => void;
   input?: Readable;
   output?: Writable;
@@ -152,6 +153,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private readonly subscribedResourceUris = new Set<string>();
   private readonly resourceMimeTypes = new Map<string, string | undefined>();
   private readonly unsubscribeResourceUpdates: () => void;
+  private readonly unsubscribeLifecycleChanges: () => void;
   private readonly unsubscribeToolsetChanges: () => void;
   private toolsetNotification = Promise.resolve();
   private lastLifecycleSignature: string | undefined;
@@ -189,6 +191,10 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         void this.notifyResourceUpdated(uri);
       },
     );
+    this.unsubscribeLifecycleChanges =
+      options.onLifecycleMayHaveChanged?.(() => {
+        void this.notifyLifecycleSnapshot(options.bridgeControl.getState());
+      }) ?? (() => {});
     this.unsubscribeToolsetChanges =
       options.onToolsetMayHaveChanged?.(() => {
         void this.notifyCurrentToolListChanged(options.gateway);
@@ -213,7 +219,6 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
           ? await this.callBridgeTool(options, request.params.name, args)
           : await options.gateway.callTool(request.params.name, args);
         await this.notifyIfToolsChanged(options.gateway, previousSignature);
-        await this.notifyLifecycleSnapshot(options.bridgeControl.getState());
         return this.toCallToolResult(toolResult);
       },
     );
@@ -278,6 +283,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     this.closed = true;
     this.unsubscribeResourceUpdates();
+    this.unsubscribeLifecycleChanges();
     this.unsubscribeToolsetChanges();
     await this.server.close();
   }
