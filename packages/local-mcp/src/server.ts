@@ -16,10 +16,17 @@ import {
   UnsubscribeRequestSchema,
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { WebMcpResourceDefinition, WebMcpToolDefinition } from "@webmcp-bridge/playwright";
+import type {
+  WebMcpResourceDefinition,
+  WebMcpToolDefinition,
+} from "@webmcp-bridge/playwright";
 import type { Readable, Writable } from "node:stream";
 import { z } from "zod";
-import type { McpCanReapResult, McpToolDefinition } from "./mcp-types.js";
+import type {
+  McpLifecycleContractResult,
+  McpLifecycleSnapshot,
+  McpToolDefinition,
+} from "./mcp-types.js";
 import type {
   ExportOverlayResult,
   InstallOverlayOptions,
@@ -38,7 +45,10 @@ import type {
 
 export type LocalMcpGateway = {
   listTools: () => Promise<ReadonlyArray<WebMcpToolDefinition>>;
-  callTool: (name: string, input: Record<string, unknown>) => Promise<JsonValue>;
+  callTool: (
+    name: string,
+    input: Record<string, unknown>,
+  ) => Promise<JsonValue>;
   listResources: () => Promise<ReadonlyArray<WebMcpResourceDefinition>>;
   readResource: (uri: string) => Promise<JsonValue>;
   onResourceUpdated: (listener: (uri: string) => void) => () => void;
@@ -49,7 +59,12 @@ export type LocalBridgeState = {
   targetUrl: string;
   controlMode: BridgeControlMode;
   browserUrl?: string;
-  mode: "native" | "polyfill" | "adapter-shim" | "overlay-bootstrap" | "control-only";
+  mode:
+    | "native"
+    | "polyfill"
+    | "adapter-shim"
+    | "overlay-bootstrap"
+    | "control-only";
   presentationMode: BridgePresentationMode;
   preferredPresentationMode: BridgePresentationMode;
   authPolicyMode: "none" | "bootstrap_then_attach";
@@ -79,7 +94,9 @@ export type LocalBridgeControl = {
   deleteOverlay: (id: string) => Promise<void>;
   exportOverlay: (id: string) => Promise<ExportOverlayResult>;
   getPresentationMode: () => BridgePresentationMode;
-  setPresentationMode: (options: LocalBridgePresentationModeSetOptions) => Promise<LocalBridgeState>;
+  setPresentationMode: (
+    options: LocalBridgePresentationModeSetOptions,
+  ) => Promise<LocalBridgeState>;
   resetProfile: () => Promise<LocalBridgeState>;
   closeBridge: () => Promise<void>;
 };
@@ -107,16 +124,11 @@ const SERVICE_INSTRUCTIONS = [
   "If the page has no native WebMCP or adapter tools yet, use bridge.debug.eval and bridge.overlay.* to bootstrap draft tools.",
   "After attach succeeds, run help again to see site tools.",
 ].join(" ");
-const CAN_REAP_RETRY_AFTER_SECS = 30;
+const LIFECYCLE_RETRY_AFTER_SECS = 30;
 
-const UxcCanReapRequestSchema = RequestSchema.extend({
-  method: z.literal("uxc/can_reap"),
-  params: z
-    .object({
-      idle_for_secs: z.number().int().nonnegative(),
-      idle_ttl_secs: z.number().int().nonnegative(),
-    })
-    .optional(),
+const UxcLifecycleContractRequestSchema = RequestSchema.extend({
+  method: z.literal("uxc/lifecycle_contract"),
+  params: z.object({}).passthrough().optional(),
 });
 
 type OverlayToolInput = {
@@ -142,6 +154,7 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   private readonly unsubscribeResourceUpdates: () => void;
   private readonly unsubscribeToolsetChanges: () => void;
   private toolsetNotification = Promise.resolve();
+  private lastLifecycleSignature: string | undefined;
 
   constructor(options: LocalMcpStdioServerOptions) {
     this.onError = options.onError;
@@ -167,10 +180,15 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         instructions: SERVICE_INSTRUCTIONS,
       },
     );
+    this.server.oninitialized = () => {
+      void this.notifyLifecycleSnapshot(options.bridgeControl.getState(), true);
+    };
 
-    this.unsubscribeResourceUpdates = options.gateway.onResourceUpdated((uri) => {
-      void this.notifyResourceUpdated(uri);
-    });
+    this.unsubscribeResourceUpdates = options.gateway.onResourceUpdated(
+      (uri) => {
+        void this.notifyResourceUpdated(uri);
+      },
+    );
     this.unsubscribeToolsetChanges =
       options.onToolsetMayHaveChanged?.(() => {
         void this.notifyCurrentToolListChanged(options.gateway);
@@ -184,35 +202,49 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       };
     });
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
-      const previousSignature = await this.ensureToolsSignature(options.gateway);
-      const args = this.normalizeToolArguments(request.params.arguments);
-      const toolResult = this.isBridgeToolName(request.params.name)
-        ? await this.callBridgeTool(options, request.params.name, args)
-        : await options.gateway.callTool(request.params.name, args);
-      await this.notifyIfToolsChanged(options.gateway, previousSignature);
-      return this.toCallToolResult(toolResult);
-    });
+    this.server.setRequestHandler(
+      CallToolRequestSchema,
+      async (request): Promise<CallToolResult> => {
+        const previousSignature = await this.ensureToolsSignature(
+          options.gateway,
+        );
+        const args = this.normalizeToolArguments(request.params.arguments);
+        const toolResult = this.isBridgeToolName(request.params.name)
+          ? await this.callBridgeTool(options, request.params.name, args)
+          : await options.gateway.callTool(request.params.name, args);
+        await this.notifyIfToolsChanged(options.gateway, previousSignature);
+        await this.notifyLifecycleSnapshot(options.bridgeControl.getState());
+        return this.toCallToolResult(toolResult);
+      },
+    );
 
     this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
       const resources = await this.listResources(options.gateway);
       return {
-        resources: resources.map((resource) => this.toMcpResourceDefinition(resource)),
+        resources: resources.map((resource) =>
+          this.toMcpResourceDefinition(resource),
+        ),
       };
     });
 
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-      const resource = await options.gateway.readResource(request.params.uri);
-      return {
-        contents: [
-          this.toMcpResourceContents(
-            request.params.uri,
-            resource,
-            await this.resolveResourceMimeType(options.gateway, request.params.uri),
-          ),
-        ],
-      };
-    });
+    this.server.setRequestHandler(
+      ReadResourceRequestSchema,
+      async (request) => {
+        const resource = await options.gateway.readResource(request.params.uri);
+        return {
+          contents: [
+            this.toMcpResourceContents(
+              request.params.uri,
+              resource,
+              await this.resolveResourceMimeType(
+                options.gateway,
+                request.params.uri,
+              ),
+            ),
+          ],
+        };
+      },
+    );
 
     this.server.setRequestHandler(SubscribeRequestSchema, async (request) => {
       this.subscribedResourceUris.add(request.params.uri);
@@ -224,9 +256,12 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       return {};
     });
 
-    this.server.setRequestHandler(UxcCanReapRequestSchema, async () => {
-      return this.resolveCanReapResult(options.bridgeControl.getState());
-    });
+    this.server.setRequestHandler(
+      UxcLifecycleContractRequestSchema,
+      async () => {
+        return this.resolveLifecycleContract();
+      },
+    );
   }
 
   async start(): Promise<void> {
@@ -270,8 +305,15 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     return {};
   }
 
-  private resolveCanReapResult(state: LocalBridgeState): McpCanReapResult {
-    const ownsExternalResource = state.ownership !== "none";
+  private resolveLifecycleContract(): McpLifecycleContractResult {
+    return {
+      reap_policy: "stateful",
+    };
+  }
+
+  private resolveLifecycleSnapshot(
+    state: LocalBridgeState,
+  ): Omit<McpLifecycleSnapshot, "updated_at_unix"> {
     const waitingForHuman =
       state.controlMode === "bootstrap" ||
       state.authState === "auth_required" ||
@@ -282,47 +324,61 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
 
     if (waitingForHuman) {
       return {
-        can_reap: false,
-        reason: "waiting_for_human",
-        retry_after_secs: CAN_REAP_RETRY_AFTER_SECS,
-        state: {
-          interactive: true,
-          owns_external_resource: ownsExternalResource,
-          waiting_for_human: true,
-        },
+        auto_reap_allowed: false,
+        retention_reason: "waiting_for_human",
+        retry_after_secs: LIFECYCLE_RETRY_AFTER_SECS,
       };
     }
 
     if (state.presentationMode === "headed") {
       return {
-        can_reap: false,
-        reason: "interactive_headed_session",
-        retry_after_secs: CAN_REAP_RETRY_AFTER_SECS,
-        state: {
-          interactive: true,
-          owns_external_resource: ownsExternalResource,
-          waiting_for_human: false,
-        },
+        auto_reap_allowed: false,
+        retention_reason: "interactive",
+        retry_after_secs: LIFECYCLE_RETRY_AFTER_SECS,
       };
     }
 
     return {
-      can_reap: true,
-      reason: state.mode === "control-only" ? "idle_control_plane" : "idle_headless_session",
-      state: {
-        interactive: false,
-        owns_external_resource: ownsExternalResource,
-        waiting_for_human: false,
-      },
+      auto_reap_allowed: true,
     };
   }
 
-  private toMcpResourceDefinition(resource: WebMcpResourceDefinition): Record<string, unknown> {
+  private async notifyLifecycleSnapshot(
+    state: LocalBridgeState,
+    force = false,
+  ): Promise<void> {
+    const baseSnapshot = this.resolveLifecycleSnapshot(state);
+    const signature = JSON.stringify(baseSnapshot);
+    if (!force && this.lastLifecycleSignature === signature) {
+      return;
+    }
+    this.lastLifecycleSignature = signature;
+    await this.server
+      .notification({
+        method: "notifications/uxc.lifecycle_changed",
+        params: {
+          ...baseSnapshot,
+          updated_at_unix: Math.floor(Date.now() / 1000),
+        },
+      })
+      .catch(() => {
+        // Lifecycle notification delivery is best-effort; the next state change or request
+        // can refresh the snapshot again.
+      });
+  }
+
+  private toMcpResourceDefinition(
+    resource: WebMcpResourceDefinition,
+  ): Record<string, unknown> {
     return {
       uri: resource.uri,
       ...(resource.name !== undefined ? { name: resource.name } : {}),
-      ...(resource.description !== undefined ? { description: resource.description } : {}),
-      ...(resource.mimeType !== undefined ? { mimeType: resource.mimeType } : {}),
+      ...(resource.description !== undefined
+        ? { description: resource.description }
+        : {}),
+      ...(resource.mimeType !== undefined
+        ? { mimeType: resource.mimeType }
+        : {}),
     };
   }
 
@@ -366,11 +422,15 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
-  private isContentArray(value: unknown): value is Array<Record<string, unknown>> {
+  private isContentArray(
+    value: unknown,
+  ): value is Array<Record<string, unknown>> {
     if (!Array.isArray(value)) {
       return false;
     }
-    return value.every((item) => this.isRecord(item) && typeof item.type === "string");
+    return value.every(
+      (item) => this.isRecord(item) && typeof item.type === "string",
+    );
   }
 
   private isCallToolResultPayload(value: JsonValue): boolean {
@@ -406,7 +466,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     return "error" in value;
   }
 
-  private async ensureToolsSignature(gateway: LocalMcpGateway): Promise<string> {
+  private async ensureToolsSignature(
+    gateway: LocalMcpGateway,
+  ): Promise<string> {
     if (this.lastToolsSignature !== undefined) {
       return this.lastToolsSignature;
     }
@@ -416,7 +478,10 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     return signature;
   }
 
-  private async notifyIfToolsChanged(gateway: LocalMcpGateway, previousSignature: string): Promise<void> {
+  private async notifyIfToolsChanged(
+    gateway: LocalMcpGateway,
+    previousSignature: string,
+  ): Promise<void> {
     const tools = await gateway.listTools();
     const nextTools = [...this.bridgeTools(), ...tools];
     const nextSignature = this.computeToolsSignature(nextTools);
@@ -429,7 +494,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     });
   }
 
-  private async notifyCurrentToolListChanged(gateway: LocalMcpGateway): Promise<void> {
+  private async notifyCurrentToolListChanged(
+    gateway: LocalMcpGateway,
+  ): Promise<void> {
     this.toolsetNotification = this.toolsetNotification
       .catch(() => {
         // Keep the chain alive after previous notification failures.
@@ -438,9 +505,11 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         if (this.lastToolsSignature === undefined) {
           return;
         }
-        await this.notifyIfToolsChanged(gateway, this.lastToolsSignature).catch((error) => {
-          this.onError?.(error);
-        });
+        await this.notifyIfToolsChanged(gateway, this.lastToolsSignature).catch(
+          (error) => {
+            this.onError?.(error);
+          },
+        );
       });
     await this.toolsetNotification;
   }
@@ -479,12 +548,14 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     return [
       {
         name: "bridge.window.open",
-        description: "Open or focus the browser window for the current headed local-mcp session.",
+        description:
+          "Open or focus the browser window for the current headed local-mcp session.",
         inputSchema: { type: "object", additionalProperties: false },
       },
       {
         name: "bridge.session.status",
-        description: "Return local-mcp bridge session state for the current site session.",
+        description:
+          "Return local-mcp bridge session state for the current site session.",
         inputSchema: { type: "object", additionalProperties: false },
         annotations: {
           readOnlyHint: true,
@@ -492,12 +563,14 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.session.bootstrap",
-        description: "Launch a normal browser for manual sign-in on the managed site profile.",
+        description:
+          "Launch a normal browser for manual sign-in on the managed site profile.",
         inputSchema: { type: "object", additionalProperties: false },
       },
       {
         name: "bridge.session.attach",
-        description: "Restart the current local-mcp bridge session in attach mode against an existing Chromium browser.",
+        description:
+          "Restart the current local-mcp bridge session in attach mode against an existing Chromium browser.",
         inputSchema: {
           type: "object",
           properties: {
@@ -510,7 +583,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.session.mode.get",
-        description: "Return the current runtime presentation mode for the local-mcp bridge session.",
+        description:
+          "Return the current runtime presentation mode for the local-mcp bridge session.",
         inputSchema: { type: "object", additionalProperties: false },
         annotations: {
           readOnlyHint: true,
@@ -518,7 +592,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.session.mode.set",
-        description: "Switch the managed local-mcp bridge runtime between headed and headless presentation modes.",
+        description:
+          "Switch the managed local-mcp bridge runtime between headed and headless presentation modes.",
         inputSchema: {
           type: "object",
           properties: {
@@ -538,12 +613,14 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.session.reset_profile",
-        description: "Back up and reset the managed browser profile for the current local-mcp bridge session.",
+        description:
+          "Back up and reset the managed browser profile for the current local-mcp bridge session.",
         inputSchema: { type: "object", additionalProperties: false },
       },
       {
         name: "bridge.debug.eval",
-        description: "Run a debug-only page-context function in the current browser session and return a JSON-serializable result.",
+        description:
+          "Run a debug-only page-context function in the current browser session and return a JSON-serializable result.",
         inputSchema: {
           type: "object",
           properties: {
@@ -556,7 +633,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.overlay.list",
-        description: "List persisted overlays for the current site/profile scope.",
+        description:
+          "List persisted overlays for the current site/profile scope.",
         inputSchema: { type: "object", additionalProperties: false },
         annotations: {
           readOnlyHint: true,
@@ -564,7 +642,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.overlay.install",
-        description: "Persist a new overlay and load its tools into the current session.",
+        description:
+          "Persist a new overlay and load its tools into the current session.",
         inputSchema: {
           type: "object",
           properties: {
@@ -642,7 +721,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.overlay.enable",
-        description: "Enable a persisted overlay so its tools are listed in the current session.",
+        description:
+          "Enable a persisted overlay so its tools are listed in the current session.",
         inputSchema: {
           type: "object",
           properties: {
@@ -666,7 +746,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.overlay.delete",
-        description: "Delete a persisted overlay from the current site/profile scope.",
+        description:
+          "Delete a persisted overlay from the current site/profile scope.",
         inputSchema: {
           type: "object",
           properties: {
@@ -678,7 +759,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       },
       {
         name: "bridge.overlay.export",
-        description: "Export a persisted overlay as a local TypeScript adapter draft.",
+        description:
+          "Export a persisted overlay as a local TypeScript adapter draft.",
         inputSchema: {
           type: "object",
           properties: {
@@ -701,7 +783,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     ];
   }
 
-  private async listAllTools(options: LocalMcpStdioServerOptions): Promise<ReadonlyArray<WebMcpToolDefinition>> {
+  private async listAllTools(
+    options: LocalMcpStdioServerOptions,
+  ): Promise<ReadonlyArray<WebMcpToolDefinition>> {
     const pageTools = await options.gateway.listTools();
     return [...this.bridgeTools(), ...pageTools];
   }
@@ -729,18 +813,24 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     );
   }
 
-  private parseOptionalBrowserUrl(input: Record<string, unknown>): string | undefined {
+  private parseOptionalBrowserUrl(
+    input: Record<string, unknown>,
+  ): string | undefined {
     const browserUrl = input.browserUrl;
     if (browserUrl === undefined) {
       return undefined;
     }
     if (typeof browserUrl !== "string" || !browserUrl.trim()) {
-      throw new Error("INVALID_ARGUMENT: browserUrl must be a non-empty string when provided");
+      throw new Error(
+        "INVALID_ARGUMENT: browserUrl must be a non-empty string when provided",
+      );
     }
     return browserUrl.trim();
   }
 
-  private parsePresentationModeSetOptions(input: Record<string, unknown>): LocalBridgePresentationModeSetOptions {
+  private parsePresentationModeSetOptions(
+    input: Record<string, unknown>,
+  ): LocalBridgePresentationModeSetOptions {
     const mode = input.mode;
     if (mode === "headed" || mode === "headless") {
       return {
@@ -770,7 +860,10 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     return id.trim();
   }
 
-  private parseOverlayTools(input: unknown, required: boolean): OverlayToolInput[] | undefined {
+  private parseOverlayTools(
+    input: unknown,
+    required: boolean,
+  ): OverlayToolInput[] | undefined {
     if (input === undefined) {
       if (required) {
         throw new Error("INVALID_ARGUMENT: tools must be a non-empty array");
@@ -785,10 +878,14 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
         throw new Error(`INVALID_ARGUMENT: tools[${index}] must be an object`);
       }
       if (typeof entry.name !== "string" || !entry.name.trim()) {
-        throw new Error(`INVALID_ARGUMENT: tools[${index}].name must be a non-empty string`);
+        throw new Error(
+          `INVALID_ARGUMENT: tools[${index}].name must be a non-empty string`,
+        );
       }
       if (typeof entry.script !== "string" || !entry.script.trim()) {
-        throw new Error(`INVALID_ARGUMENT: tools[${index}].script must be a non-empty string`);
+        throw new Error(
+          `INVALID_ARGUMENT: tools[${index}].script must be a non-empty string`,
+        );
       }
       const tool: OverlayToolInput = {
         name: entry.name.trim(),
@@ -802,11 +899,15 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       }
       if (entry.annotations !== undefined) {
         if (!this.isRecord(entry.annotations)) {
-          throw new Error(`INVALID_ARGUMENT: tools[${index}].annotations must be an object`);
+          throw new Error(
+            `INVALID_ARGUMENT: tools[${index}].annotations must be an object`,
+          );
         }
         const readOnlyHint = entry.annotations.readOnlyHint;
         if (readOnlyHint !== undefined && typeof readOnlyHint !== "boolean") {
-          throw new Error(`INVALID_ARGUMENT: tools[${index}].annotations.readOnlyHint must be a boolean`);
+          throw new Error(
+            `INVALID_ARGUMENT: tools[${index}].annotations.readOnlyHint must be a boolean`,
+          );
         }
         tool.annotations = {
           ...(typeof readOnlyHint === "boolean" ? { readOnlyHint } : {}),
@@ -816,7 +917,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     });
   }
 
-  private parseOverlayActivation(input: Record<string, unknown>): OverlayActivation | undefined {
+  private parseOverlayActivation(
+    input: Record<string, unknown>,
+  ): OverlayActivation | undefined {
     const activation = input.activation;
     if (activation === undefined) {
       return undefined;
@@ -824,10 +927,14 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     if (activation === "namespaced" || activation === "override") {
       return activation;
     }
-    throw new Error("INVALID_ARGUMENT: activation must be namespaced or override");
+    throw new Error(
+      "INVALID_ARGUMENT: activation must be namespaced or override",
+    );
   }
 
-  private parseOverlayInstallOptions(input: Record<string, unknown>): InstallOverlayOptions {
+  private parseOverlayInstallOptions(
+    input: Record<string, unknown>,
+  ): InstallOverlayOptions {
     const options: InstallOverlayOptions = {
       id: this.parseOverlayId(input),
       tools: this.parseOverlayTools(input.tools, true) ?? [],
@@ -845,7 +952,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     return options;
   }
 
-  private parseOverlayUpdateOptions(input: Record<string, unknown>): UpdateOverlayOptions {
+  private parseOverlayUpdateOptions(
+    input: Record<string, unknown>,
+  ): UpdateOverlayOptions {
     const options: UpdateOverlayOptions = {
       id: this.parseOverlayId(input),
     };
@@ -893,7 +1002,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
           site: state.site,
           targetUrl: state.targetUrl,
           controlMode: state.controlMode,
-          ...(state.browserUrl !== undefined ? { browserUrl: state.browserUrl } : {}),
+          ...(state.browserUrl !== undefined
+            ? { browserUrl: state.browserUrl }
+            : {}),
           mode: state.mode,
           presentationMode: state.presentationMode,
           preferredPresentationMode: state.preferredPresentationMode,
@@ -910,7 +1021,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
           site: state.site,
           targetUrl: state.targetUrl,
           controlMode: state.controlMode,
-          ...(state.browserUrl !== undefined ? { browserUrl: state.browserUrl } : {}),
+          ...(state.browserUrl !== undefined
+            ? { browserUrl: state.browserUrl }
+            : {}),
           mode: state.mode,
           presentationMode: state.presentationMode,
           preferredPresentationMode: state.preferredPresentationMode,
@@ -918,9 +1031,15 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
           authState: state.authState,
           sessionState: state.sessionState,
           ownership: state.ownership,
-          ...(state.profilePath !== undefined ? { profilePath: state.profilePath } : {}),
-          ...(state.browserPid !== undefined ? { browserPid: state.browserPid } : {}),
-          ...(state.lastBackupPath !== undefined ? { lastBackupPath: state.lastBackupPath } : {}),
+          ...(state.profilePath !== undefined
+            ? { profilePath: state.profilePath }
+            : {}),
+          ...(state.browserPid !== undefined
+            ? { browserPid: state.browserPid }
+            : {}),
+          ...(state.lastBackupPath !== undefined
+            ? { lastBackupPath: state.lastBackupPath }
+            : {}),
         },
       };
     }
@@ -938,7 +1057,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     if (name === "bridge.session.attach") {
       try {
-        const nextState = await options.bridgeControl.attachSession(this.parseOptionalBrowserUrl(input));
+        const nextState = await options.bridgeControl.attachSession(
+          this.parseOptionalBrowserUrl(input),
+        );
         return {
           ok: true,
           session: nextState,
@@ -981,7 +1102,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     if (name === "bridge.overlay.install") {
       try {
-        const overlay = await options.bridgeControl.installOverlay(this.parseOverlayInstallOptions(input));
+        const overlay = await options.bridgeControl.installOverlay(
+          this.parseOverlayInstallOptions(input),
+        );
         return {
           ok: true,
           overlay,
@@ -993,7 +1116,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     if (name === "bridge.overlay.update") {
       try {
-        const overlay = await options.bridgeControl.updateOverlay(this.parseOverlayUpdateOptions(input));
+        const overlay = await options.bridgeControl.updateOverlay(
+          this.parseOverlayUpdateOptions(input),
+        );
         return {
           ok: true,
           overlay,
@@ -1005,7 +1130,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     if (name === "bridge.overlay.enable") {
       try {
-        const overlay = await options.bridgeControl.enableOverlay(this.parseOverlayId(input));
+        const overlay = await options.bridgeControl.enableOverlay(
+          this.parseOverlayId(input),
+        );
         return {
           ok: true,
           overlay,
@@ -1017,7 +1144,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     if (name === "bridge.overlay.disable") {
       try {
-        const overlay = await options.bridgeControl.disableOverlay(this.parseOverlayId(input));
+        const overlay = await options.bridgeControl.disableOverlay(
+          this.parseOverlayId(input),
+        );
         return {
           ok: true,
           overlay,
@@ -1042,7 +1171,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
     }
     if (name === "bridge.overlay.export") {
       try {
-        const exported = await options.bridgeControl.exportOverlay(this.parseOverlayId(input));
+        const exported = await options.bridgeControl.exportOverlay(
+          this.parseOverlayId(input),
+        );
         return {
           ok: true,
           exported: true,
@@ -1097,7 +1228,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       site: state.site,
       targetUrl: state.targetUrl,
       controlMode: state.controlMode,
-      ...(state.browserUrl !== undefined ? { browserUrl: state.browserUrl } : {}),
+      ...(state.browserUrl !== undefined
+        ? { browserUrl: state.browserUrl }
+        : {}),
       mode: state.mode,
       presentationMode: state.presentationMode,
       preferredPresentationMode: state.preferredPresentationMode,
@@ -1105,19 +1238,29 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       authState: state.authState,
       sessionState: state.sessionState,
       ownership: state.ownership,
-      ...(state.profilePath !== undefined ? { profilePath: state.profilePath } : {}),
-      ...(state.browserPid !== undefined ? { browserPid: state.browserPid } : {}),
-      ...(state.lastBackupPath !== undefined ? { lastBackupPath: state.lastBackupPath } : {}),
+      ...(state.profilePath !== undefined
+        ? { profilePath: state.profilePath }
+        : {}),
+      ...(state.browserPid !== undefined
+        ? { browserPid: state.browserPid }
+        : {}),
+      ...(state.lastBackupPath !== undefined
+        ? { lastBackupPath: state.lastBackupPath }
+        : {}),
       closing: true,
     };
   }
 
-  private computeToolsSignature(tools: ReadonlyArray<WebMcpToolDefinition>): string {
+  private computeToolsSignature(
+    tools: ReadonlyArray<WebMcpToolDefinition>,
+  ): string {
     const normalized = tools
       .map((tool) => ({
         annotations: this.normalizeForSignature(tool.annotations ?? {}),
         description: tool.description ?? "",
-        inputSchema: this.normalizeForSignature(tool.inputSchema ?? { type: "object" }),
+        inputSchema: this.normalizeForSignature(
+          tool.inputSchema ?? { type: "object" },
+        ),
         name: tool.name,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -1129,7 +1272,9 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
       return value.map((item) => this.normalizeForSignature(item));
     }
     if (typeof value === "object" && value !== null) {
-      const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+      const entries = Object.entries(value as Record<string, unknown>).sort(
+        ([a], [b]) => a.localeCompare(b),
+      );
       const output: Record<string, unknown> = {};
       for (const [key, item] of entries) {
         output[key] = this.normalizeForSignature(item);
@@ -1140,6 +1285,8 @@ class LocalMcpStdioServerImpl implements LocalMcpStdioServer {
   }
 }
 
-export function createLocalMcpStdioServer(options: LocalMcpStdioServerOptions): LocalMcpStdioServer {
+export function createLocalMcpStdioServer(
+  options: LocalMcpStdioServerOptions,
+): LocalMcpStdioServer {
   return new LocalMcpStdioServerImpl(options);
 }

@@ -63,15 +63,15 @@ export type McpInitializeResult = {
   instructions?: string;
 };
 
-export type McpCanReapResult = {
-  can_reap: boolean;
-  reason?: string;
+export type McpLifecycleContractResult = {
+  reap_policy: "safe_idle_reap" | "stateful";
+};
+
+export type McpLifecycleSnapshot = {
+  auto_reap_allowed: boolean;
+  retention_reason?: string | null;
   retry_after_secs?: number;
-  state?: {
-    interactive?: boolean;
-    owns_external_resource?: boolean;
-    waiting_for_human?: boolean;
-  };
+  updated_at_unix: number;
 };
 
 export type McpResourceDefinition = {

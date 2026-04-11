@@ -6,14 +6,21 @@
 import { PassThrough } from "node:stream";
 import type { JsonValue } from "@webmcp-bridge/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { McpCanReapResult, McpJsonRpcResponse } from "../src/mcp-types.js";
+import type {
+  McpJsonRpcResponse,
+  McpLifecycleContractResult,
+  McpLifecycleSnapshot,
+} from "../src/mcp-types.js";
 import {
   createLocalMcpStdioServer,
   type LocalMcpGateway,
   type LocalMcpStdioServer,
 } from "../src/server.js";
 
-async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void> {
+async function waitFor(
+  condition: () => boolean,
+  timeoutMs = 1000,
+): Promise<void> {
   const start = Date.now();
   while (!condition()) {
     if (Date.now() - start >= timeoutMs) {
@@ -54,11 +61,15 @@ describe("createLocalMcpStdioServer", () => {
       mimeType: "application/json",
     },
   ]);
-  const readResource = vi.fn<(uri: string) => Promise<GatewayReadResourcePayload>>(async () => ({
+  const readResource = vi.fn<
+    (uri: string) => Promise<GatewayReadResourcePayload>
+  >(async () => ({
     version: 1,
     items: [],
   }));
-  const onResourceUpdated = vi.fn<LocalMcpGateway["onResourceUpdated"]>(() => () => {});
+  const onResourceUpdated = vi.fn<LocalMcpGateway["onResourceUpdated"]>(
+    () => () => {},
+  );
   let toolsetChangedListener: (() => void) | undefined;
 
   const gateway = {
@@ -81,7 +92,9 @@ describe("createLocalMcpStdioServer", () => {
       presentationMode: "headed" as const,
       preferredPresentationMode: "headed" as const,
     })),
-    openWindow: vi.fn<() => Promise<"focused" | "opened">>(async () => "focused" as const),
+    openWindow: vi.fn<() => Promise<"focused" | "opened">>(
+      async () => "focused" as const,
+    ),
     bootstrapSession: vi.fn(async () => ({
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
@@ -165,8 +178,11 @@ describe("createLocalMcpStdioServer", () => {
       },
       format: "adapter-draft" as const,
       outputDir: "/tmp/board-profile/.webmcp-bridge/exports/board_fix",
-      entryFile: "/tmp/board-profile/.webmcp-bridge/exports/board_fix/src/index.ts",
-      files: ["/tmp/board-profile/.webmcp-bridge/exports/board_fix/src/index.ts"],
+      entryFile:
+        "/tmp/board-profile/.webmcp-bridge/exports/board_fix/src/index.ts",
+      files: [
+        "/tmp/board-profile/.webmcp-bridge/exports/board_fix/src/index.ts",
+      ],
     })),
     getPresentationMode: vi.fn(() => "headed" as const),
     setPresentationMode: vi.fn(async () => ({
@@ -263,7 +279,9 @@ describe("createLocalMcpStdioServer", () => {
     output.end();
   });
 
-  async function request(payload: Record<string, unknown>): Promise<McpJsonRpcResponse> {
+  async function request(
+    payload: Record<string, unknown>,
+  ): Promise<McpJsonRpcResponse> {
     const requestId = payload.id;
     const beforeCount = frames.length;
     input.write(`${JSON.stringify(payload)}\n`);
@@ -274,7 +292,9 @@ describe("createLocalMcpStdioServer", () => {
     );
     const response = frames
       .slice(beforeCount)
-      .find((frame) => "id" in frame && frame.id === requestId) as McpJsonRpcResponse | undefined;
+      .find((frame) => "id" in frame && frame.id === requestId) as
+      | McpJsonRpcResponse
+      | undefined;
     if (!response) {
       throw new Error("response frame not found");
     }
@@ -305,7 +325,9 @@ describe("createLocalMcpStdioServer", () => {
       serverInfo: {
         name: "webmcp-bridge-local-mcp",
       },
-      instructions: expect.stringContaining("If help only shows bridge.* tools"),
+      instructions: expect.stringContaining(
+        "If help only shows bridge.* tools",
+      ),
       capabilities: {
         tools: {
           listChanged: true,
@@ -359,7 +381,9 @@ describe("createLocalMcpStdioServer", () => {
     toolsetChangedListener?.();
 
     await waitFor(() =>
-      frames.slice(beforeCount).some((frame) => frame.method === "notifications/tools/list_changed"),
+      frames
+        .slice(beforeCount)
+        .some((frame) => frame.method === "notifications/tools/list_changed"),
     );
 
     expect(frames.slice(beforeCount)).toContainEqual(
@@ -369,68 +393,101 @@ describe("createLocalMcpStdioServer", () => {
     );
   });
 
-  it("reports headed interactive sessions as not reapable", async () => {
+  it("reports a stateful lifecycle contract", async () => {
     const response = await request({
       jsonrpc: "2.0",
-      id: "1-can-reap",
-      method: "uxc/can_reap",
-      params: {
-        idle_for_secs: 650,
-        idle_ttl_secs: 600,
-      },
+      id: "1-lifecycle-contract",
+      method: "uxc/lifecycle_contract",
+      params: {},
     });
 
-    expect("result" in response ? (response.result as McpCanReapResult) : undefined).toEqual({
-      can_reap: false,
-      reason: "interactive_headed_session",
-      retry_after_secs: 30,
-      state: {
-        interactive: true,
-        owns_external_resource: true,
-        waiting_for_human: false,
-      },
+    expect(
+      "result" in response
+        ? (response.result as McpLifecycleContractResult)
+        : undefined,
+    ).toEqual({
+      reap_policy: "stateful",
     });
   });
 
-  it("reports bootstrap sessions as waiting for human input", async () => {
-    bridgeControl.getState.mockReturnValueOnce({
-      site: "google",
-      targetUrl: "https://gemini.google.com/app",
-      controlMode: "bootstrap",
-      authPolicyMode: "bootstrap_then_attach",
-      authState: "auth_required",
-      sessionState: "bootstrap_active",
-      ownership: "external",
-      mode: "control-only",
-      presentationMode: "headed",
-      preferredPresentationMode: "headed",
-      profilePath: "/tmp/google-profile",
-      browserPid: 1234,
-    } as unknown as BridgeState);
-
-    const response = await request({
+  it("emits an initial interactive lifecycle snapshot after initialized", async () => {
+    await request({
       jsonrpc: "2.0",
-      id: "2-can-reap",
-      method: "uxc/can_reap",
+      id: "2-init",
+      method: "initialize",
       params: {
-        idle_for_secs: 650,
-        idle_ttl_secs: 600,
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {
+            listChanged: true,
+          },
+        },
+        clientInfo: {
+          name: "test-client",
+          version: "0.1.0-test",
+        },
       },
     });
 
-    expect("result" in response ? (response.result as McpCanReapResult) : undefined).toEqual({
-      can_reap: false,
-      reason: "waiting_for_human",
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      })}\n`,
+    );
+
+    await waitFor(() =>
+      frames.some(
+        (frame) => frame.method === "notifications/uxc.lifecycle_changed",
+      ),
+    );
+    const notification = frames.find(
+      (frame) => frame.method === "notifications/uxc.lifecycle_changed",
+    );
+    expect(notification?.params).toMatchObject({
+      auto_reap_allowed: false,
+      retention_reason: "interactive",
       retry_after_secs: 30,
-      state: {
-        interactive: true,
-        owns_external_resource: true,
-        waiting_for_human: true,
-      },
-    });
+    } satisfies Partial<McpLifecycleSnapshot>);
+    expect(
+      (notification?.params as McpLifecycleSnapshot | undefined)
+        ?.updated_at_unix,
+    ).toBeTypeOf("number");
   });
 
-  it("allows idle headless sessions to be reaped", async () => {
+  it("emits lifecycle updates when state becomes auto-reapable", async () => {
+    await request({
+      jsonrpc: "2.0",
+      id: "3-init",
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {
+            listChanged: true,
+          },
+        },
+        clientInfo: {
+          name: "test-client",
+          version: "0.1.0-test",
+        },
+      },
+    });
+
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      })}\n`,
+    );
+    await waitFor(() =>
+      frames.some(
+        (frame) => frame.method === "notifications/uxc.lifecycle_changed",
+      ),
+    );
+
     bridgeControl.getState.mockReturnValueOnce({
       site: "board",
       targetUrl: "http://127.0.0.1:4173",
@@ -445,25 +502,30 @@ describe("createLocalMcpStdioServer", () => {
       browserPid: 4321,
     } as unknown as BridgeState);
 
-    const response = await request({
+    const beforeCount = frames.length;
+    await request({
       jsonrpc: "2.0",
-      id: "3-can-reap",
-      method: "uxc/can_reap",
+      id: "3a",
+      method: "tools/call",
       params: {
-        idle_for_secs: 650,
-        idle_ttl_secs: 600,
+        name: "ping",
+        arguments: {},
       },
     });
 
-    expect("result" in response ? (response.result as McpCanReapResult) : undefined).toEqual({
-      can_reap: true,
-      reason: "idle_headless_session",
-      state: {
-        interactive: false,
-        owns_external_resource: true,
-        waiting_for_human: false,
-      },
-    });
+    await waitFor(() =>
+      frames
+        .slice(beforeCount)
+        .some(
+          (frame) => frame.method === "notifications/uxc.lifecycle_changed",
+        ),
+    );
+    const notification = frames
+      .slice(beforeCount)
+      .find((frame) => frame.method === "notifications/uxc.lifecycle_changed");
+    expect(notification?.params).toMatchObject({
+      auto_reap_allowed: true,
+    } satisfies Partial<McpLifecycleSnapshot>);
   });
 
   it("proxies tools/list to gateway", async () => {
@@ -898,8 +960,12 @@ describe("createLocalMcpStdioServer", () => {
         },
       },
     });
-    expect("result" in response ? response.result?.content : undefined).toEqual([]);
-    expect("result" in response ? response.result?.isError : undefined).toBe(true);
+    expect("result" in response ? response.result?.content : undefined).toEqual(
+      [],
+    );
+    expect("result" in response ? response.result?.isError : undefined).toBe(
+      true,
+    );
   });
 
   it("handles bridge.session.attach locally", async () => {
@@ -915,7 +981,9 @@ describe("createLocalMcpStdioServer", () => {
       },
     });
 
-    expect(bridgeControl.attachSession).toHaveBeenCalledWith("http://127.0.0.1:9222");
+    expect(bridgeControl.attachSession).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222",
+    );
     expect(callTool).not.toHaveBeenCalled();
     expect("result" in response ? response.result : undefined).toMatchObject({
       structuredContent: {
@@ -1052,7 +1120,9 @@ describe("createLocalMcpStdioServer", () => {
   });
 
   it("maps non-prefixed bridge control errors to a stable default code", async () => {
-    bridgeControl.setPresentationMode.mockRejectedValueOnce(new Error("plain restart failure"));
+    bridgeControl.setPresentationMode.mockRejectedValueOnce(
+      new Error("plain restart failure"),
+    );
 
     const response = await request({
       jsonrpc: "2.0",
@@ -1224,7 +1294,9 @@ describe("createLocalMcpStdioServer", () => {
 
     expect(listResources).toHaveBeenCalledOnce();
     expect("result" in response ? response.result : undefined).toMatchObject({
-      resources: [{ uri: "board://local/interactions", name: "Board Interactions" }],
+      resources: [
+        { uri: "board://local/interactions", name: "Board Interactions" },
+      ],
     });
   });
 
@@ -1333,7 +1405,9 @@ describe("createLocalMcpStdioServer", () => {
     notifyResourceUpdated?.("board://local/interactions");
 
     await waitFor(() =>
-      frames.some((frame) => frame.method === "notifications/resources/updated"),
+      frames.some(
+        (frame) => frame.method === "notifications/resources/updated",
+      ),
     );
     const notification = frames.find(
       (frame) => frame.method === "notifications/resources/updated",
@@ -1346,7 +1420,9 @@ describe("createLocalMcpStdioServer", () => {
   });
 
   it("emits tools/list_changed after a tool call mutates available tools", async () => {
-    listTools.mockResolvedValueOnce([{ name: "navigate", description: "navigate" }]);
+    listTools.mockResolvedValueOnce([
+      { name: "navigate", description: "navigate" },
+    ]);
     listTools.mockResolvedValueOnce([
       { name: "navigate", description: "navigate" },
       { name: "search_entities", description: "search entities" },
