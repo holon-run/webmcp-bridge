@@ -1,6 +1,6 @@
 {
   "name": "@webmcp-bridge/adapter-x",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "description": "Fallback WebMCP adapter for X/Twitter when native WebMCP is unavailable.",
   "main": "dist/index.js",

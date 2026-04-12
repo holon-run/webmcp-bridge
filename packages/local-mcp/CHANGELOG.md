@@ -1,5 +1,19 @@
 # @webmcp-bridge/local-mcp
 
+## 0.8.2
+
+### Patch Changes
+
+- Improve lifecycle contract notifications for daemon-backed local MCP sessions.
+- Updated dependencies
+  - @webmcp-bridge/agent-browser-core@0.8.2
+  - @webmcp-bridge/core@0.8.2
+  - @webmcp-bridge/playwright@0.8.2
+  - @webmcp-bridge/adapter-google@0.8.2
+  - @webmcp-bridge/adapter-x@0.8.2
+  - @webmcp-bridge/adapter-weibo@0.8.2
+  - @webmcp-bridge/adapter-fixture@0.8.2
+
 ## 0.8.1
 
 ### Patch Changes

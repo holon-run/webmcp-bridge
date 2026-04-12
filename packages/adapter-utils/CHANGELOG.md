@@ -1,5 +1,7 @@
 # @webmcp-bridge/adapter-utils
 
+## 0.8.2
+
 ## 0.8.1
 
 ### Patch Changes

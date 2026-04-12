@@ -1,6 +1,6 @@
 {
   "name": "@webmcp-bridge/adapter-weibo",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "description": "Fallback WebMCP adapter for Weibo when native WebMCP is unavailable.",
   "main": "dist/index.js",

@@ -1,5 +1,12 @@
 # @webmcp-bridge/agent-browser-core
 
+## 0.8.2
+
+### Patch Changes
+
+- Improve lifecycle contract notifications for daemon-backed local MCP sessions.
+  - @webmcp-bridge/playwright@0.8.2
+
 ## 0.8.1
 
 ### Patch Changes

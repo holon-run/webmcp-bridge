@@ -1,6 +1,6 @@
 {
   "name": "@webmcp-bridge/agent-browser-core",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "description": "Browser session and profile control primitives for agent-managed browser workflows.",
   "main": "dist/index.js",
