@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/holon-run-webmcp-bridge-badge.png)](https://mseep.ai/app/holon-run-webmcp-bridge)
+
 # webmcp-bridge
 
 `webmcp-bridge` lets a local MCP client call browser WebMCP tools through a stable local bridge.
